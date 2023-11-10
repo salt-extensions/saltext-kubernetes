@@ -36,7 +36,7 @@ ignore_errors = True
 
 [paths]
 source =
-  saltext/saltext_kubernetes
-  src/saltext/saltext_kubernetes
+  saltext/kubernetes
+  src/saltext/kubernetes
 testsuite =
   tests/

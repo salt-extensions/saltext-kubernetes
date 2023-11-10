@@ -10,6 +10,7 @@ repos:
       - id: mixed-line-ending     # Replaces or checks mixed line ending.
         args: [--fix=lf]
       - id: end-of-file-fixer     # Makes sure files end in a newline and only a newline.
+        exclude: src/saltext/kubernetes/version.py
       - id: check-ast             # Simply check whether files parse as valid python.
 
   # ----- Formatting ---------------------------------------------------------------------------->
@@ -24,7 +25,7 @@ repos:
         name: Check CLI examples on execution modules
         entry: python .pre-commit-hooks/check-cli-examples.py
         language: system
-        files: ^src/saltext/saltext_kubernetes/modules/.*\.py$
+        files: ^src/saltext/kubernetes/modules/.*\.py$
 
   - repo: local
     hooks:
@@ -41,7 +42,7 @@ repos:
       - id: salt-rewrite
         alias: rewrite-docstrings
         name: Salt extensions docstrings auto-fixes
-        files: ^src/saltext/saltext_kubernetes/.*\.py$
+        files: ^src/saltext/kubernetes/.*\.py$
         args: [--silent]
 
   - repo: https://github.com/s0undt3ch/salt-rewrite
@@ -62,7 +63,7 @@ repos:
         args: [
           --py38-plus
         ]
-        exclude: src/saltext/saltext_kubernetes/version.py
+        exclude: src/saltext/kubernetes/version.py
 
   - repo: https://github.com/asottile/reorder_python_imports
     rev: v2.6.0
@@ -71,14 +72,14 @@ repos:
         args: [
           --py3-plus,
         ]
-        exclude: src/saltext/saltext_kubernetes/version.py
+        exclude: src/saltext/kubernetes/version.py
 
   - repo: https://github.com/psf/black
     rev: 22.6.0
     hooks:
       - id: black
         args: [-l 100]
-        exclude: src/saltext/saltext_kubernetes/version.py
+        exclude: src/saltext/kubernetes/version.py
         additional_dependencies:
           - click<8.1.0
 
@@ -87,7 +88,7 @@ repos:
     hooks:
       - id: blacken-docs
         args: [--skip-errors]
-        files: ^(docs/.*\.rst|src/saltext/saltext_kubernetes/.*\.py)$
+        files: ^(docs/.*\.rst|src/saltext/kubernetes/.*\.py)$
         additional_dependencies:
           - black==22.6.0
           - click<8.1.0
@@ -101,7 +102,7 @@ repos:
         alias: bandit-salt
         name: Run bandit against the code base
         args: [--silent, -lll, --skip, B701]
-        exclude: src/saltext/saltext_kubernetes/version.py
+        exclude: src/saltext/kubernetes/version.py
   - repo: https://github.com/PyCQA/bandit
     rev: "1.7.0"
     hooks:

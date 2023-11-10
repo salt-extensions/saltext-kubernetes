@@ -2,7 +2,7 @@ import logging
 import os
 
 import pytest
-from saltext.saltext_kubernetes import PACKAGE_ROOT
+from saltext.kubernetes import PACKAGE_ROOT
 from saltfactories.utils import random_string
 
 

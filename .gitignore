@@ -129,7 +129,7 @@ dmypy.json
 .pyre/
 
 # Ignore the setuptools_scm auto-generated version module
-src/saltext/saltext_kubernetes/version.py
+src/saltext/kubernetes/version.py
 
 # Ignore CI generated artifacts
 artifacts/

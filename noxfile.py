@@ -195,7 +195,7 @@ def tests(session):
             "-o",
             str(COVERAGE_REPORT_PROJECT),
             "--omit=tests/*",
-            "--include=src/saltext/saltext_kubernetes/*",
+            "--include=src/saltext/kubernetes/*",
         )
         # Generate report for tests code coverage
         session.run(
@@ -203,18 +203,18 @@ def tests(session):
             "xml",
             "-o",
             str(COVERAGE_REPORT_TESTS),
-            "--omit=src/saltext/saltext_kubernetes/*",
+            "--omit=src/saltext/kubernetes/*",
             "--include=tests/*",
         )
         try:
             session.run(
-                "coverage", "report", "--show-missing", "--include=src/saltext/saltext_kubernetes/*"
+                "coverage", "report", "--show-missing", "--include=src/saltext/kubernetes/*"
             )
             # If you also want to display the code coverage report on the CLI
             # for the tests, comment the call above and uncomment the line below
             # session.run(
             #    "coverage", "report", "--show-missing",
-            #    "--include=src/saltext/saltext_kubernetes/*,tests/*"
+            #    "--include=src/saltext/kubernetes/*,tests/*"
             # )
         finally:
             # Move the coverage DB to artifacts/coverage in order for it to be archived by CI
@@ -525,5 +525,5 @@ def gen_api_docs(session):
         "-o",
         "docs/ref/",
         "src/saltext",
-        "src/saltext/saltext_kubernetes/config/schemas",
+        "src/saltext/kubernetes/config/schemas",
     )
