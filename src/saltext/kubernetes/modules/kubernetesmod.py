@@ -949,6 +949,12 @@ def delete_configmap(name, namespace="default", **kwargs):
 def create_deployment(name, namespace, metadata, spec, source, template, saltenv, **kwargs):
     """
     Creates the kubernetes deployment as defined by the user.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.create_deployment *args
     """
     body = __create_object_body(
         kind="Deployment",
@@ -985,6 +991,12 @@ def create_deployment(name, namespace, metadata, spec, source, template, saltenv
 def create_pod(name, namespace, metadata, spec, source, template, saltenv, **kwargs):
     """
     Creates the kubernetes deployment as defined by the user.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.create_pod *args
     """
     body = __create_object_body(
         kind="Pod",
@@ -1019,6 +1031,12 @@ def create_pod(name, namespace, metadata, spec, source, template, saltenv, **kwa
 def create_service(name, namespace, metadata, spec, source, template, saltenv, **kwargs):
     """
     Creates the kubernetes service as defined by the user.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.create_service *args
     """
     body = __create_object_body(
         kind="Service",
@@ -1179,6 +1197,12 @@ def replace_deployment(
     """
     Replaces an existing deployment with a new one defined by name and
     namespace, having the specificed metadata and spec.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.replace_deployment *args
     """
     body = __create_object_body(
         kind="Deployment",
@@ -1218,6 +1242,12 @@ def replace_service(
     """
     Replaces an existing service with a new one defined by name and namespace,
     having the specificed metadata and spec.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.replace_service *args
     """
     body = __create_object_body(
         kind="Service",

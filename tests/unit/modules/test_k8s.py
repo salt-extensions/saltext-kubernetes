@@ -37,7 +37,7 @@ def test_get_one_namespace():
 
 
 def test_create_namespace():
-    hsh = hashlib.sha1()
+    hsh = hashlib.sha1()  # nosec
     hsh.update(str(time.time()))
     nsname = hsh.hexdigest()[:16]
     res = k8s.create_namespace(nsname, apiserver_url="http://127.0.0.1:8080")
@@ -61,7 +61,7 @@ def test_get_secrets():
 
 @pytest.fixture()
 def secret_name():
-    hsh = hashlib.sha1()
+    hsh = hashlib.sha1()  # nosec
     hsh.update(str(time.time()))
     return hsh.hexdigest()[:16]
 
@@ -187,7 +187,7 @@ def test_delete_secret(secret_name, secret):
 
 @pytest.fixture()
 def quota_name():
-    hash = hashlib.sha1()
+    hash = hashlib.sha1()  # nosec
     hash.update(str(time.time()))
     return hash.hexdigest()[:16]
 
@@ -367,7 +367,7 @@ spec:
 
 @pytest.fixture()
 def limit_name():
-    hsh = hashlib.sha1()
+    hsh = hashlib.sha1()  # nosec
     hsh.update(str(time.time()))
     return hsh.hexdigest()[:16]
 
