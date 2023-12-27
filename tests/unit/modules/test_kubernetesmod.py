@@ -4,15 +4,14 @@
 # pylint: disable=no-value-for-parameter
 import os
 from contextlib import contextmanager
+from unittest.mock import Mock
+from unittest.mock import patch
 
 import pytest
 import salt.utils.files
 import salt.utils.platform
 from salt.modules import config
 from salt.modules import kubernetesmod as kubernetes
-
-from tests.support.mock import Mock
-from tests.support.mock import patch
 
 
 pytestmark = [
