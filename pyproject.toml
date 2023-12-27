@@ -35,7 +35,7 @@ classifiers = [
 requires-python = ">= 3.8"
 dynamic = ["version"]
 dependencies = [
-    "salt>=3003",
+    "kubernetes==3.0.0",
 ]
 
 [project.readme]
@@ -74,6 +74,7 @@ lint = [
 tests = [
     "pytest>=6.1.0",
     "pytest-salt-factories>=1.0.0rc19",
+    "salt>=3003",
 ]
 
 [project.entry-points."salt.loader"]
