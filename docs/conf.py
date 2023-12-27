@@ -26,14 +26,14 @@ except NameError:
     docs_basepath = os.path.abspath(os.path.dirname("."))
 
 addtl_paths = (
-    os.path.join(os.pardir, "src"),  # saltext.saltext-kubernetes itself (for autodoc)
+    os.path.join(os.pardir, "src"),  # saltext.kubernetes itself (for autodoc)
     "_ext",  # custom Sphinx extensions
 )
 
 for addtl_path in addtl_paths:
     sys.path.insert(0, os.path.abspath(os.path.join(docs_basepath, addtl_path)))
 
-dist = distribution("saltext.saltext-kubernetes")
+dist = distribution("saltext.kubernetes")
 
 
 # -- Project information -----------------------------------------------------

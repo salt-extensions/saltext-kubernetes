@@ -1,4 +1,4 @@
-# saltext-kubernetes
+# kubernetes
 
 Salt Extension for interacting with Kubernetes
 
@@ -7,7 +7,7 @@ Salt Extension for interacting with Kubernetes
 To get started with your new project:
 
     # Create a new venv
-    python3 -m venv env --prompt saltext-kubernetes
+    python3 -m venv env --prompt kubernetes
     source env/bin/activate
 
     # On mac, you may need to upgrade pip
@@ -30,4 +30,4 @@ To get started with your new project:
     python -m nox -e docs && (cd docs/_build/html; python -m webbrowser localhost:8000; python -m http.server; cd -)
 
     # Run the example function
-    salt-call --local saltext-kubernetes.example_function text="Happy Hacking!"
+    salt-call --local kubernetes.example_function text="Happy Hacking!"

@@ -155,7 +155,7 @@ def _setup_conn_old(**kwargs):
         or kubernetes.client.configuration.password != password
     ):
         # Recreates API connection if settings are changed
-        kubernetes.client.configuration.__init__()
+        kubernetes.client.configuration.__init__()  # pylint: disable=unnecessary-dunder-call
 
     kubernetes.client.configuration.host = host
     kubernetes.client.configuration.user = username
@@ -459,9 +459,7 @@ def deployments(namespace="default", **kwargs):
         if isinstance(exc, ApiException) and exc.status == 404:
             return None
         else:
-            log.exception(
-                "Exception when calling " "ExtensionsV1beta1Api->list_namespaced_deployment"
-            )
+            log.exception("Exception when calling ExtensionsV1beta1Api->list_namespaced_deployment")
             raise CommandExecutionError(exc)
     finally:
         _cleanup(**cfg)
@@ -596,9 +594,7 @@ def show_deployment(name, namespace="default", **kwargs):
         if isinstance(exc, ApiException) and exc.status == 404:
             return None
         else:
-            log.exception(
-                "Exception when calling " "ExtensionsV1beta1Api->read_namespaced_deployment"
-            )
+            log.exception("Exception when calling ExtensionsV1beta1Api->read_namespaced_deployment")
             raise CommandExecutionError(exc)
     finally:
         _cleanup(**cfg)
@@ -796,7 +792,7 @@ def delete_deployment(name, namespace="default", **kwargs):
             return None
         else:
             log.exception(
-                "Exception when calling " "ExtensionsV1beta1Api->delete_namespaced_deployment"
+                "Exception when calling ExtensionsV1beta1Api->delete_namespaced_deployment"
             )
             raise CommandExecutionError(exc)
     finally:
@@ -979,7 +975,7 @@ def create_deployment(name, namespace, metadata, spec, source, template, saltenv
             return None
         else:
             log.exception(
-                "Exception when calling " "ExtensionsV1beta1Api->create_namespaced_deployment"
+                "Exception when calling ExtensionsV1beta1Api->create_namespaced_deployment"
             )
             raise CommandExecutionError(exc)
     finally:
@@ -1209,7 +1205,7 @@ def replace_deployment(
             return None
         else:
             log.exception(
-                "Exception when calling " "ExtensionsV1beta1Api->replace_namespaced_deployment"
+                "Exception when calling ExtensionsV1beta1Api->replace_namespaced_deployment"
             )
             raise CommandExecutionError(exc)
     finally:

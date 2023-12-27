@@ -5,7 +5,7 @@ from pathlib import Path
 
 
 repo_path = Path(subprocess.check_output(["git", "rev-parse", "--show-toplevel"]).decode().strip())
-src_dir = repo_path / "src" / " saltext" / "saltext-kubernetes"
+src_dir = repo_path / "src" / " saltext" / "kubernetes"
 doc_dir = repo_path / "docs"
 
 docs_by_kind = {}
@@ -15,7 +15,7 @@ def make_import_path(path):
     return ".".join(path.with_suffix("").parts[-4:])
 
 
-for path in Path(__file__).parent.parent.joinpath("src/saltext/saltext-kubernetes/").glob("*/*.py"):
+for path in Path(__file__).parent.parent.joinpath("src/saltext/kubernetes/").glob("*/*.py"):
     if path.name != "__init__.py":
         kind = path.parent.name
         docs_by_kind.setdefault(kind, set()).add(path)
@@ -47,7 +47,7 @@ for kind in docs_by_kind:
 
     all_rst.write_text(
         f"""
-.. all-saltext.saltext-kubernetes.{kind}:
+.. all-saltext.kubernetes.{kind}:
 
 {header}
 

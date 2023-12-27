@@ -1,5 +1,5 @@
-Welcome to saltext-kubernetes Documentation!
-============================================
+Welcome to kubernetes Documentation!
+====================================
 
 .. toctree::
   :maxdepth: 2
