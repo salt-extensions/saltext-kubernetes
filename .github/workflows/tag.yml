@@ -1,0 +1,26 @@
+name: Tagged Releases
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Extract tag name
+        id: get_version
+        run: echo "VERSION=$(echo ${GITHUB_REF#refs/tags/v})" >> $GITHUB_ENV
+
+      - name: CI
+        uses: salt-extensions/central-artifacts/.github/workflows/ci.yml@main
+        with:
+          release: true
+          version: ${{ env.VERSION }}
+        permissions:
+          contents: write
+          pull-requests: read
