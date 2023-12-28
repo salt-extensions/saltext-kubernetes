@@ -36,6 +36,7 @@ requires-python = ">= 3.8"
 dynamic = ["version"]
 dependencies = [
     "kubernetes==3.0.0",
+    "salt>=3004",
 ]
 
 [project.readme]

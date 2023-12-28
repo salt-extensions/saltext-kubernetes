@@ -188,7 +188,6 @@ jobs:
       max-parallel: 3
       matrix:
         include:
-          - {salt-version: "3003", python-version: "3.8"}
           - {salt-version: "3004", python-version: "3.8"}
           - {salt-version: "3005", python-version: "3.8"}
           - {salt-version: "3006", python-version: "3.8"}
@@ -314,12 +313,9 @@ jobs:
       max-parallel: 3
       matrix:
         include:
-          - {salt-version: "3003", python-version: "3.9"}
-          - {salt-version: "3004", python-version: "3.10"}
-          - {salt-version: "3005", python-version: "3.10"}
-          - {salt-version: "3006", python-version: "3.8"}
+          - {salt-version: "3004", python-version: "3.9"}
+          - {salt-version: "3005", python-version: "3.9"}
           - {salt-version: "3006", python-version: "3.9"}
-          - {salt-version: "3006", python-version: "3.10"}
 
     steps:
     - uses: actions/checkout@v4
