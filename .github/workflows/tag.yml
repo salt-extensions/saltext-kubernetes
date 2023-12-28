@@ -6,21 +6,24 @@ on:
       - "v*"
 
 jobs:
-  ci:
+  get_tag_version:
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.get_version.outputs.version }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
       - name: Extract tag name
         id: get_version
-        run: echo "VERSION=$(echo ${GITHUB_REF#refs/tags/v})" >> $GITHUB_ENV
+        run: echo "::set-output name=version::$(echo ${GITHUB_REF#refs/tags/v})"
 
-      - name: CI
-        uses: salt-extensions/central-artifacts/.github/workflows/ci.yml@main
-        with:
-          release: true
-          version: ${{ env.VERSION }}
-        permissions:
-          contents: write
-          pull-requests: read
+  call_central_workflow:
+    needs: get_tag_version
+    uses: salt-extensions/central-artifacts/.github/workflows/ci.yml@main
+    with:
+      release: true
+      version: ${{ needs.get_tag_version.outputs.version }}
+    permissions:
+      contents: write
+      pull-requests: read
