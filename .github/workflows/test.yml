@@ -64,8 +64,6 @@ jobs:
       max-parallel: 4
       matrix:
         include:
-          - {salt-version: "3003", python-version: "3.8"}
-          - {salt-version: "3003", python-version: "3.9"}
           - {salt-version: "3004", python-version: "3.8"}
           - {salt-version: "3004", python-version: "3.9"}
           - {salt-version: "3004", python-version: "3.10"}

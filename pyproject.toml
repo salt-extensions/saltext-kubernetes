@@ -74,7 +74,7 @@ lint = [
 tests = [
     "pytest>=6.1.0",
     "pytest-salt-factories>=1.0.0rc19",
-    "salt>=3003",
+    "salt>=3004",
 ]
 
 [project.entry-points."salt.loader"]
