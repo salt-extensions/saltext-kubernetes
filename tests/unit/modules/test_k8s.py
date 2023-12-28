@@ -72,7 +72,7 @@ def secret(secret_name):
         "apiVersion": "v1",
         "kind": "Secret",
         "metadata": {"name": secret_name, "namespace": "default"},
-        "data": {"testsecret": base64.encodebytes(b"teststring")},
+        "data": {"testsecret": str(base64.encodebytes(b"teststring"))},
     }
 
 
@@ -181,5 +181,5 @@ def test_delete_secret(secret_name, secret):
     )
     kubectl_out, err = proc.communicate()
     # stdout is empty, stderr is showing something like "not found"
-    assert kubectl_out == ""
+    assert kubectl_out == b""
     assert err == f'Error from server: secrets "{name}" not found\n'

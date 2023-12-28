@@ -72,8 +72,12 @@ lint = [
     "saltpylint",
 ]
 tests = [
-    "pytest>=6.1.0",
-    "pytest-salt-factories>=1.0.0rc19",
+    "pytest>=7.2.0",
+    "pytest-custom-exit-code>=0.3",
+    "pytest-helpers-namespace>=2019.1.8",
+    "pytest-salt-factories>=1.0.0rc27",
+    "pytest-subtests",
+    "pytest-timeout",
     "salt>=3004",
 ]
 
