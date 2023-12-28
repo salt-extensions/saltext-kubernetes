@@ -14,6 +14,7 @@ import salt.utils.json
 
 
 pytestmark = [
+    pytest.mark.requires_salt_modules("kubernetes.example_function"),
     pytest.mark.skip_if_binaries_missing("kubectl"),
 ]
 
