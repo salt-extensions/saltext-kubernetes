@@ -1,9 +1,15 @@
 name: Pull Request or Push
 
-on: [push, pull_request]
+on:
+  push:
+    branches:
+      - '**'  # Run on pushes to any branch
+    tags-ignore:
+      - '*'   # Ignore pushes to tags
+  pull_request:
 
 jobs:
-  ci:
+  call_central_workflow:
     name: CI
     uses: salt-extensions/central-artifacts/.github/workflows/ci.yml@main
     permissions:
