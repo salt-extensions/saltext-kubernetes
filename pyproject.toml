@@ -36,7 +36,6 @@ requires-python = ">= 3.8"
 dynamic = ["version"]
 dependencies = [
     "kubernetes==3.0.0",
-    "salt>=3004",
 ]
 
 [project.readme]
@@ -79,7 +78,6 @@ tests = [
     "pytest-salt-factories>=1.0.0rc27",
     "pytest-subtests",
     "pytest-timeout",
-    "salt>=3004",
 ]
 
 [project.entry-points."salt.loader"]
