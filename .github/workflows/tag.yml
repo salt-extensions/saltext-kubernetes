@@ -26,4 +26,5 @@ jobs:
       version: ${{ needs.get_tag_version.outputs.version }}
     permissions:
       contents: write
+      id-token: write
       pull-requests: read
