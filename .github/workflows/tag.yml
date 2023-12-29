@@ -1,4 +1,4 @@
-name: Tagged Releases
+name: Tagged Release
 
 on:
   push:
