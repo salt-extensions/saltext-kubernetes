@@ -1,12 +1,14 @@
 """
     Test cases for salt.modules.kubeadm
 """
+
 from unittest.mock import MagicMock
 from unittest.mock import patch
 
 import pytest
-import salt.modules.kubeadm as kubeadm
 from salt.exceptions import CommandExecutionError
+
+from saltext.kubernetes.modules import kubeadm
 
 
 @pytest.fixture
@@ -1151,7 +1153,6 @@ def test_init():
         salt_mock["cmd.run_all"].assert_called_with(["kubeadm", "init"])
 
 
-@pytest.mark.requires_salt_modules("kubernetes.example_function")
 def test_init_params():
     """
     Test kuebadm.init with parameters
@@ -1263,7 +1264,6 @@ def test_join():
         salt_mock["cmd.run_all"].assert_called_with(["kubeadm", "join"])
 
 
-@pytest.mark.requires_salt_modules("kubernetes.example_function")
 def test_join_params():
     """
     Test kuebadm.join with parameters

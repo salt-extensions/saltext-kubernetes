@@ -28,6 +28,8 @@ classifiers = [
     "Programming Language :: Python :: 3.8",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: Apache Software License",
@@ -36,6 +38,7 @@ requires-python = ">= 3.8"
 dynamic = ["version"]
 dependencies = [
     "kubernetes==3.0.0",
+    "salt>=3005",
 ]
 
 [project.readme]
@@ -44,6 +47,7 @@ content-type = "text/markdown"
 
 [project.urls]
 Homepage = "https://github.com/salt-extensions/saltext-kubernetes"
+Documentation = "https://salt-extensions.github.io/saltext-kubernetes/"
 Source = "https://github.com/salt-extensions/saltext-kubernetes"
 Tracker = "https://github.com/salt-extensions/saltext-kubernetes/issues"
 
@@ -73,9 +77,9 @@ lint = [
 ]
 tests = [
     "pytest>=7.2.0",
+    "pytest-salt-factories>=1.0.0",
     "pytest-custom-exit-code>=0.3",
     "pytest-helpers-namespace>=2019.1.8",
-    "pytest-salt-factories>=1.0.0rc27",
     "pytest-subtests",
     "pytest-timeout",
 ]
@@ -107,42 +111,48 @@ build_dir = "build/sphinx"
 [tool.black]
 line-length = 100
 
+[tool.isort]
+force_single_line = true
+skip = ["src/saltext/kubernetes/__init__.py"]
+profile = "black"
+line_length = 100
+
 [tool.towncrier]
-    package = "saltext.kubernetes"
-    filename = "CHANGELOG.md"
-    template = "changelog/.template.jinja"
-    directory = "changelog/"
-    start_string = "# Changelog\n"
-    underlines = ["", "", ""]
-    title_format = "## {version} ({project_date})"
-    issue_format = "[#{issue}](https://github.com/salt-extensions/saltext-kubernetes/issues/{issue})"
+package = "saltext.kubernetes"
+filename = "CHANGELOG.md"
+template = "changelog/.template.jinja"
+directory = "changelog/"
+start_string = "# Changelog\n"
+underlines = ["", "", ""]
+title_format = "## {version} ({project_date})"
+issue_format = "[#{issue}](https://github.com/salt-extensions/saltext-kubernetes/issues/{issue})"
 
-    [[tool.towncrier.type]]
-        directory = "removed"
-        name = "Removed"
-        showcontent = true
+[[tool.towncrier.type]]
+directory = "removed"
+name = "Removed"
+showcontent = true
 
-    [[tool.towncrier.type]]
-        directory = "deprecated"
-        name = "Deprecated"
-        showcontent = true
+[[tool.towncrier.type]]
+directory = "deprecated"
+name = "Deprecated"
+showcontent = true
 
-    [[tool.towncrier.type]]
-        directory = "changed"
-        name = "Changed"
-        showcontent = true
+[[tool.towncrier.type]]
+directory = "changed"
+name = "Changed"
+showcontent = true
 
-    [[tool.towncrier.type]]
-        directory = "fixed"
-        name = "Fixed"
-        showcontent = true
+[[tool.towncrier.type]]
+directory = "fixed"
+name = "Fixed"
+showcontent = true
 
-    [[tool.towncrier.type]]
-        directory = "added"
-        name = "Added"
-        showcontent = true
+[[tool.towncrier.type]]
+directory = "added"
+name = "Added"
+showcontent = true
 
-    [[tool.towncrier.type]]
-        directory = "security"
-        name = "Security"
-        showcontent = true
+[[tool.towncrier.type]]
+directory = "security"
+name = "Security"
+showcontent = true
