@@ -1,7 +1,5 @@
 """
     :codeauthor: :email:`Jeff Schroeder <jeffschroeder@computer.org>`
-
-    Test cases for salt.states.kubernetes
 """
 
 import base64
@@ -10,9 +8,10 @@ from unittest.mock import MagicMock
 from unittest.mock import patch
 
 import pytest
-import salt.modules.kubernetesmod as kubernetesmod
-import salt.states.kubernetes as kubernetes
 import salt.utils.stringutils
+
+from saltext.kubernetes.modules import kubernetesmod
+from saltext.kubernetes.states import kubernetesmod as kubernetes
 
 pytestmark = [
     pytest.mark.skipif(

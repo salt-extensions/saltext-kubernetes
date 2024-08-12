@@ -12,7 +12,8 @@ import pytest
 import salt.utils.files
 import salt.utils.platform
 from salt.modules import config
-from salt.modules import kubernetesmod as kubernetes
+
+from saltext.kubernetes.modules import kubernetesmod as kubernetes
 
 pytestmark = [
     pytest.mark.skipif(
@@ -46,7 +47,7 @@ def mock_kubernetes_library():
     it caused kubernetes._cleanup() to get called for virtually every
     test, which blows up. This prevents that specific blow-up once
     """
-    with patch("salt.modules.kubernetesmod.kubernetes") as mock_kubernetes_lib:
+    with patch("saltext.kubernetes.modules.kubernetesmod.kubernetes") as mock_kubernetes_lib:
         yield mock_kubernetes_lib
 
 
@@ -129,7 +130,9 @@ def test_delete_deployments():
     :return:
     """
     with mock_kubernetes_library() as mock_kubernetes_lib:
-        with patch("salt.modules.kubernetesmod.show_deployment", Mock(return_value=None)):
+        with patch(
+            "saltext.kubernetes.modules.kubernetesmod.show_deployment", Mock(return_value=None)
+        ):
             mock_kubernetes_lib.client.V1DeleteOptions = Mock(return_value="")
             mock_kubernetes_lib.client.ExtensionsV1beta1Api.return_value = Mock(
                 **{"delete_namespaced_deployment.return_value.to_dict.return_value": {"code": ""}}
@@ -196,7 +199,7 @@ def test_node_labels():
     Test kubernetes.node_labels
     :return:
     """
-    with patch("salt.modules.kubernetesmod.node") as mock_node:
+    with patch("saltext.kubernetes.modules.kubernetesmod.node") as mock_node:
         mock_node.return_value = {
             "metadata": {
                 "labels": {
@@ -218,7 +221,7 @@ def test_adding_change_cause_annotation():
     :return:
     """
     with patch(
-        "salt.modules.kubernetesmod.sys.argv", ["/usr/bin/salt-call", "state.apply"]
+        "saltext.kubernetes.modules.kubernetesmod.sys.argv", ["/usr/bin/salt-call", "state.apply"]
     ) as mock_sys:
         func = getattr(kubernetes, "__dict_to_object_meta")
         data = func(name="test-pod", namespace="test", metadata={})
