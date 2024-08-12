@@ -1,6 +1,7 @@
 """
     :codeauthor: Jochen Breuer <jbreuer@suse.de>
 """
+
 # pylint: disable=no-value-for-parameter
 import os
 from contextlib import contextmanager
@@ -12,7 +13,6 @@ import salt.utils.files
 import salt.utils.platform
 from salt.modules import config
 from salt.modules import kubernetesmod as kubernetes
-
 
 pytestmark = [
     pytest.mark.skipif(

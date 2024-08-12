@@ -5,6 +5,7 @@ Module for kubeadm
 :depends:       None
 :platform:      Linux
 """
+
 import json
 import logging
 import re

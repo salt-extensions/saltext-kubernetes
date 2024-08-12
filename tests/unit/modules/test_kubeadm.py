@@ -1,6 +1,7 @@
 """
     Test cases for salt.modules.kubeadm
 """
+
 from unittest.mock import MagicMock
 from unittest.mock import patch
 

@@ -1,5 +1,6 @@
 import pytest
 import salt.modules.test as testmod
+
 import saltext.kubernetes.modules.kubernetesmod as kubernetes_module
 
 

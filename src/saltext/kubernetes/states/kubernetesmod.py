@@ -79,6 +79,7 @@ The kubernetes module is used to manage different kubernetes resources.
 
 .. versionadded:: 2017.7.0
 """
+
 import copy
 import logging
 

@@ -3,6 +3,7 @@
 
     Test cases for salt.states.kubernetes
 """
+
 import base64
 from contextlib import contextmanager
 from unittest.mock import MagicMock

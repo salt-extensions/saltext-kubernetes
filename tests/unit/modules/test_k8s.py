@@ -1,6 +1,7 @@
 """
 Unit Tests for the k8s execution module.
 """
+
 import base64
 import hashlib
 import time
@@ -11,7 +12,6 @@ import pytest
 import salt.modules.k8s as k8s
 import salt.utils.files
 import salt.utils.json
-
 
 pytestmark = [
     pytest.mark.requires_salt_modules("kubernetes.example_function"),
