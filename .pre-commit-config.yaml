@@ -10,14 +10,8 @@ repos:
         args: [--markdown-linebreak-ext=md]
       - id: mixed-line-ending      # Ensure files use UNIX-style newlines only.
         args: [--fix=lf]
-<<<<<<< before updating
-      - id: end-of-file-fixer     # Makes sure files end in a newline and only a newline.
-        exclude: src/saltext/kubernetes/version.py
-      - id: check-ast             # Simply check whether files parse as valid python.
-=======
       - id: end-of-file-fixer      # Ensure files end with a newline.
       - id: check-ast              # Check whether files parse as valid Python.
->>>>>>> after updating
 
   # ----- Formatting ---------------------------------------------------------------------------->
   - repo: https://github.com/saltstack/pre-commit-remove-import-headers

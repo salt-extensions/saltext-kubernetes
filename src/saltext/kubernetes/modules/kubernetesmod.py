@@ -65,10 +65,11 @@ from salt.exceptions import TimeoutError
 
 # pylint: disable=import-error,no-name-in-module
 try:
+    from urllib3.exceptions import HTTPError
+
     import kubernetes  # pylint: disable=import-self
     import kubernetes.client
     from kubernetes.client.rest import ApiException
-    from urllib3.exceptions import HTTPError
 
     # pylint: disable=no-name-in-module
     try:
