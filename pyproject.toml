@@ -37,7 +37,7 @@ classifiers = [
 requires-python = ">= 3.8"
 dynamic = ["version"]
 dependencies = [
-    "kubernetes==3.0.0",
+    "kubernetes==3.0.0; platform_system == 'Linux'",
     "salt>=3005",
 ]
 
