@@ -7,6 +7,7 @@ import hashlib
 import time
 from subprocess import PIPE
 from subprocess import Popen
+from subprocess import run
 
 import pytest
 import salt.utils.files
@@ -24,8 +25,8 @@ pytest.skip(reason="Broken tests. Overhaul required.", allow_module_level=True)
 def test_get_namespaces():
     res = k8s.get_namespaces(apiserver_url="http://127.0.0.1:8080")
     a = len(res.get("items", []))
-    proc = Popen(["kubectl", "get", "namespaces", "-o", "json"], stdout=PIPE)
-    kubectl_out = salt.utils.json.loads(proc.communicate()[0])
+    with Popen(["kubectl", "get", "namespaces", "-o", "json"], stdout=PIPE) as proc:
+        kubectl_out = salt.utils.json.loads(proc.communicate()[0])
     b = len(kubectl_out.get("items", []))
     assert a == b
 
@@ -33,8 +34,8 @@ def test_get_namespaces():
 def test_get_one_namespace():
     res = k8s.get_namespaces("default", apiserver_url="http://127.0.0.1:8080")
     a = res.get("metadata", {}).get("name", "a")
-    proc = Popen(["kubectl", "get", "namespaces", "default", "-o", "json"], stdout=PIPE)
-    kubectl_out = salt.utils.json.loads(proc.communicate()[0])
+    with Popen(["kubectl", "get", "namespaces", "default", "-o", "json"], stdout=PIPE) as proc:
+        kubectl_out = salt.utils.json.loads(proc.communicate()[0])
     b = kubectl_out.get("metadata", {}).get("name", "b")
     assert a == b
 
@@ -43,9 +44,9 @@ def test_create_namespace():
     hsh = hashlib.sha1()  # nosec
     hsh.update(str(time.time()).encode())
     nsname = hsh.hexdigest()[:16]
-    res = k8s.create_namespace(nsname, apiserver_url="http://127.0.0.1:8080")
-    proc = Popen(["kubectl", "get", "namespaces", nsname, "-o", "json"], stdout=PIPE)
-    kubectl_out = salt.utils.json.loads(proc.communicate()[0])
+    k8s.create_namespace(nsname, apiserver_url="http://127.0.0.1:8080")
+    with Popen(["kubectl", "get", "namespaces", nsname, "-o", "json"], stdout=PIPE) as proc:
+        kubectl_out = salt.utils.json.loads(proc.communicate()[0])
     # if creation is failed, kubernetes return non json error message
     assert isinstance(kubectl_out, dict)
 
@@ -53,11 +54,11 @@ def test_create_namespace():
 def test_get_secrets():
     res = k8s.get_secrets("default", apiserver_url="http://127.0.0.1:8080")
     a = len(res.get("items", []))
-    proc = Popen(
+    with Popen(
         ["kubectl", "--namespace=default", "get", "secrets", "-o", "json"],
         stdout=PIPE,
-    )
-    kubectl_out = salt.utils.json.loads(proc.communicate()[0])
+    ) as proc:
+        kubectl_out = salt.utils.json.loads(proc.communicate()[0])
     b = len(kubectl_out.get("items", []))
     assert a == b
 
@@ -85,16 +86,16 @@ def test_get_one_secret(secret_name, secret):
     with salt.utils.files.fopen(filename, "w") as f:
         salt.utils.json.dump(secret, f)
 
-    create = Popen(["kubectl", "--namespace=default", "create", "-f", filename], stdout=PIPE)
+    run(["kubectl", "--namespace=default", "create", "-f", filename], check=True)
     # we need to give kubernetes time save data in etcd
     time.sleep(0.1)
     res = k8s.get_secrets("default", name, apiserver_url="http://127.0.0.1:8080")
     a = res.get("metadata", {}).get("name", "a")
-    proc = Popen(
+    with Popen(
         ["kubectl", "--namespace=default", "get", "secrets", name, "-o", "json"],
         stdout=PIPE,
-    )
-    kubectl_out = salt.utils.json.loads(proc.communicate()[0])
+    ) as proc:
+        kubectl_out = salt.utils.json.loads(proc.communicate()[0])
     b = kubectl_out.get("metadata", {}).get("name", "b")
     assert a == b
 
@@ -105,7 +106,7 @@ def test_get_decoded_secret(secret_name, secret):
     with salt.utils.files.fopen(filename, "w") as f:
         salt.utils.json.dump(secret, f)
 
-    create = Popen(["kubectl", "--namespace=default", "create", "-f", filename], stdout=PIPE)
+    run(["kubectl", "--namespace=default", "create", "-f", filename], check=True)
     # we need to give etcd to populate data on all nodes
     time.sleep(0.1)
     res = k8s.get_secrets("default", name, apiserver_url="http://127.0.0.1:8080", decode=True)
@@ -124,12 +125,12 @@ def test_create_secret(secret_name):
         with salt.utils.files.fopen(f"/tmp/{name}-{i}", "w") as f:
             expected_data[f"{name}-{i}"] = base64.b64encode(f"{name}{i}")
             f.write(salt.utils.stringutils.to_str(f"{name}{i}"))
-    res = k8s.create_secret("default", name, names, apiserver_url="http://127.0.0.1:8080")
-    proc = Popen(
+    k8s.create_secret("default", name, names, apiserver_url="http://127.0.0.1:8080")
+    with Popen(
         ["kubectl", "--namespace=default", "get", "secrets", name, "-o", "json"],
         stdout=PIPE,
-    )
-    kubectl_out = salt.utils.json.loads(proc.communicate()[0])
+    ) as proc:
+        kubectl_out = salt.utils.json.loads(proc.communicate()[0])
     # if creation is failed, kubernetes return non json error message
     b = kubectl_out.get("data", {})
     assert isinstance(kubectl_out, dict)
@@ -142,7 +143,7 @@ def test_update_secret(secret_name, secret):
     with salt.utils.files.fopen(filename, "w") as f:
         salt.utils.json.dump(secret, f)
 
-    create = Popen(["kubectl", "--namespace=default", "create", "-f", filename], stdout=PIPE)
+    run(["kubectl", "--namespace=default", "create", "-f", filename], check=True)
     # wee need to give kubernetes time save data in etcd
     time.sleep(0.1)
     expected_data = {}
@@ -153,13 +154,13 @@ def test_update_secret(secret_name, secret):
             expected_data[f"{name}-{i}-updated"] = base64.b64encode(f"{name}{i}-updated")
             f.write(f"{name}{i}-updated")
 
-    res = k8s.update_secret("default", name, names, apiserver_url="http://127.0.0.1:8080")
+    k8s.update_secret("default", name, names, apiserver_url="http://127.0.0.1:8080")
     # if creation is failed, kubernetes return non json error message
-    proc = Popen(
+    with Popen(
         ["kubectl", "--namespace=default", "get", "secrets", name, "-o", "json"],
         stdout=PIPE,
-    )
-    kubectl_out = salt.utils.json.loads(proc.communicate()[0])
+    ) as proc:
+        kubectl_out = salt.utils.json.loads(proc.communicate()[0])
     # if creation is failed, kubernetes return non json error message
     b = kubectl_out.get("data", {})
     assert isinstance(kubectl_out, dict)
@@ -172,17 +173,17 @@ def test_delete_secret(secret_name, secret):
     with salt.utils.files.fopen(filename, "w") as f:
         salt.utils.json.dump(secret, f)
 
-    create = Popen(["kubectl", "--namespace=default", "create", "-f", filename], stdout=PIPE)
+    run(["kubectl", "--namespace=default", "create", "-f", filename], check=True)
     # wee need to give kubernetes time save data in etcd
     time.sleep(0.1)
-    res = k8s.delete_secret("default", name, apiserver_url="http://127.0.0.1:8080")
+    k8s.delete_secret("default", name, apiserver_url="http://127.0.0.1:8080")
     time.sleep(0.1)
-    proc = Popen(
+    with Popen(
         ["kubectl", "--namespace=default", "get", "secrets", name, "-o", "json"],
         stdout=PIPE,
         stderr=PIPE,
-    )
-    kubectl_out, err = proc.communicate()
+    ) as proc:
+        kubectl_out, err = proc.communicate()
     # stdout is empty, stderr is showing something like "not found"
     assert kubectl_out == b""
     assert err == f'Error from server: secrets "{name}" not found\n'

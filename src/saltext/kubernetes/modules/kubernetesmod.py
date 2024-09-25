@@ -227,7 +227,7 @@ def _setup_conn(**kwargs):
     return {"kubeconfig": kubeconfig, "context": context}
 
 
-def _cleanup_old(**kwargs):
+def _cleanup_old():
     try:
         ca = kubernetes.client.configuration.ssl_ca_cert
         cert = kubernetes.client.configuration.cert_file
@@ -244,7 +244,7 @@ def _cleanup_old(**kwargs):
 
 def _cleanup(**kwargs):
     if not kwargs:
-        return _cleanup_old(**kwargs)
+        return _cleanup_old()
 
     if "kubeconfig" in kwargs:
         kubeconfig = kwargs.get("kubeconfig")
@@ -775,12 +775,11 @@ def delete_deployment(name, namespace="default", **kwargs):
         else:
             # Windows has not signal.alarm implementation, so we are just falling
             # back to loop-counting.
-            for i in range(60):
+            for _ in range(60):
                 if show_deployment(name, namespace) is None:
                     mutable_api_response["code"] = 200
                     break
-                else:
-                    time.sleep(1)
+                time.sleep(1)
         if mutable_api_response["code"] != 200:
             log.warning(
                 "Reached polling time limit. Deployment is not yet "
