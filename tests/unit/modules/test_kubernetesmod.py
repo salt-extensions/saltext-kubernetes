@@ -222,7 +222,7 @@ def test_adding_change_cause_annotation():
     """
     with patch(
         "saltext.kubernetes.modules.kubernetesmod.sys.argv", ["/usr/bin/salt-call", "state.apply"]
-    ) as mock_sys:
+    ):
         func = getattr(kubernetes, "__dict_to_object_meta")
         data = func(name="test-pod", namespace="test", metadata={})
 

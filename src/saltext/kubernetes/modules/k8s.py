@@ -20,8 +20,8 @@ import re
 import urllib.parse
 
 import salt.utils.files
-import salt.utils.http as http
 import salt.utils.json
+from salt.utils import http
 
 __virtualname__ = "k8s"
 
@@ -137,10 +137,7 @@ def _is_port_name(name):
     character, it must contain at least a (a-z) character"""
 
     port_name = re.compile("""^[a-z0-9]{1,15}$""")
-    if port_name.match(name):
-        return True
-    else:
-        return False
+    return bool(port_name.match(name))
 
 
 def _is_dns_label(name):
@@ -150,10 +147,7 @@ def _is_dns_label(name):
     or segment in a domain name"""
 
     dns_label = re.compile(r"""^[a-z0-9][a-z0-9\.-]{1,62}$""")
-    if dns_label.match(name):
-        return True
-    else:
-        return False
+    return bool(dns_label.match(name))
 
 
 def _guess_node_id(node):
@@ -540,6 +534,7 @@ def _decode_secrets(secrets):
         return secrets
 
 
+# pylint: disable=unused-argument
 def get_secrets(namespace, name="", apiserver_url=None, decode=False, brief=False):
     """
     Get k8s namespaces
@@ -742,8 +737,7 @@ def create_secret(
                     ret["comment"] += f"Source file {v} is missing or name is incorrect\n"
                     if force:
                         continue
-                    else:
-                        return ret
+                    return ret
                 data[k] = encoded
         elif isinstance(source, str):
             # expected format is array of filenames
@@ -752,8 +746,7 @@ def create_secret(
                 if force:
                     ret["comment"] += f"Source file {source} is missing or name is incorrect\n"
                     continue
-                else:
-                    return ret
+                return ret
             data[sname] = encoded
 
     log.trace("secret data is: %s", data)
@@ -763,17 +756,18 @@ def create_secret(
             ret["comment"] += "Could not find source files or your sources are empty"
             ret["result"] = False
         elif secret.get("data") and data != secret.get("data"):
-            res = _update_secret(namespace, name, data, apiserver_url)
+            _update_secret(namespace, name, data, apiserver_url)
             ret["comment"] = "Updated secret"
             ret["changes"] = "Updated secret"
         else:
             log.debug("Secret has not been changed on cluster, skipping it")
             ret["comment"] = "Has not been changed on cluster, skipping it"
     else:
-        res = _create_secret(namespace, name, data, apiserver_url)
+        _create_secret(namespace, name, data, apiserver_url)
     return ret
 
 
+# pylint: disable=unused-argument
 def delete_secret(namespace, name, apiserver_url=None, force=True):
     """
     .. versionadded:: 2016.3.0
