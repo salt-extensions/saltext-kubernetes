@@ -1465,7 +1465,10 @@ def __dict_to_deployment_spec(spec):
     """
     Converts a dictionary into kubernetes V1DeploymentSpec instance.
     """
-    spec_obj = V1DeploymentSpec(template=spec.get("template", ""))
+    spec_obj = V1DeploymentSpec(
+        template=spec.get("template", ""),
+        selector=spec.get("selector", {"matchLabels": {"app": "default"}}),
+    )
     for key, value in spec.items():
         if hasattr(spec_obj, key):
             setattr(spec_obj, key, value)
