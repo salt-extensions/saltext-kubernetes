@@ -444,7 +444,7 @@ def deployments(namespace="default", **kwargs):
     """
     cfg = _setup_conn(**kwargs)
     try:
-        api_instance = kubernetes.client.ExtensionsV1Api()
+        api_instance = kubernetes.client.AppsV1Api()
         api_response = api_instance.list_namespaced_deployment(namespace)
 
         return [dep["metadata"]["name"] for dep in api_response.to_dict().get("items")]
@@ -452,7 +452,7 @@ def deployments(namespace="default", **kwargs):
         if isinstance(exc, ApiException) and exc.status == 404:
             return None
         else:
-            log.exception("Exception when calling ExtensionsV1Api->list_namespaced_deployment")
+            log.exception("Exception when calling AppsV1Api->list_namespaced_deployment")
             raise CommandExecutionError(exc)
     finally:
         _cleanup(**cfg)
@@ -579,7 +579,7 @@ def show_deployment(name, namespace="default", **kwargs):
     """
     cfg = _setup_conn(**kwargs)
     try:
-        api_instance = kubernetes.client.ExtensionsV1Api()
+        api_instance = kubernetes.client.AppsV1Api()
         api_response = api_instance.read_namespaced_deployment(name, namespace)
 
         return api_response.to_dict()
@@ -587,7 +587,7 @@ def show_deployment(name, namespace="default", **kwargs):
         if isinstance(exc, ApiException) and exc.status == 404:
             return None
         else:
-            log.exception("Exception when calling ExtensionsV1Api->read_namespaced_deployment")
+            log.exception("Exception when calling AppsV1Api->read_namespaced_deployment")
             raise CommandExecutionError(exc)
     finally:
         _cleanup(**cfg)
@@ -750,7 +750,7 @@ def delete_deployment(name, namespace="default", **kwargs):
     body = kubernetes.client.V1DeleteOptions(orphan_dependents=True)
 
     try:
-        api_instance = kubernetes.client.ExtensionsV1Api()
+        api_instance = kubernetes.client.AppsV1Api()
         api_response = api_instance.delete_namespaced_deployment(
             name=name, namespace=namespace, body=body
         )
@@ -783,7 +783,7 @@ def delete_deployment(name, namespace="default", **kwargs):
         if isinstance(exc, ApiException) and exc.status == 404:
             return None
         else:
-            log.exception("Exception when calling ExtensionsV1Api->delete_namespaced_deployment")
+            log.exception("Exception when calling AppsV1Api->delete_namespaced_deployment")
             raise CommandExecutionError(exc)
     finally:
         _cleanup(**cfg)
@@ -962,7 +962,7 @@ def create_deployment(name, namespace, metadata, spec, source, template, saltenv
     cfg = _setup_conn(**kwargs)
 
     try:
-        api_instance = kubernetes.client.ExtensionsV1Api()
+        api_instance = kubernetes.client.AppsV1Api()
         api_response = api_instance.create_namespaced_deployment(namespace, body)
 
         return api_response.to_dict()
@@ -970,7 +970,7 @@ def create_deployment(name, namespace, metadata, spec, source, template, saltenv
         if isinstance(exc, ApiException) and exc.status == 404:
             return None
         else:
-            log.exception("Exception when calling ExtensionsV1Api->create_namespaced_deployment")
+            log.exception("Exception when calling AppsV1Api->create_namespaced_deployment")
             raise CommandExecutionError(exc)
     finally:
         _cleanup(**cfg)
@@ -1208,7 +1208,7 @@ def replace_deployment(
     cfg = _setup_conn(**kwargs)
 
     try:
-        api_instance = kubernetes.client.ExtensionsV1Api()
+        api_instance = kubernetes.client.AppsV1Api()
         api_response = api_instance.replace_namespaced_deployment(name, namespace, body)
 
         return api_response.to_dict()
@@ -1216,7 +1216,7 @@ def replace_deployment(
         if isinstance(exc, ApiException) and exc.status == 404:
             return None
         else:
-            log.exception("Exception when calling ExtensionsV1Api->replace_namespaced_deployment")
+            log.exception("Exception when calling AppsV1Api->replace_namespaced_deployment")
             raise CommandExecutionError(exc)
     finally:
         _cleanup(**cfg)
