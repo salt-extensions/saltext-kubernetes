@@ -74,7 +74,7 @@ def test_deployments():
     :return:
     """
     with mock_kubernetes_library() as mock_kubernetes_lib:
-        mock_kubernetes_lib.client.ExtensionsV1beta1Api.return_value = Mock(
+        mock_kubernetes_lib.client.ExtensionsV1Api.return_value = Mock(
             **{
                 "list_namespaced_deployment.return_value.to_dict.return_value": {
                     "items": [{"metadata": {"name": "mock_deployment_name"}}]
@@ -84,7 +84,7 @@ def test_deployments():
         assert kubernetes.deployments() == ["mock_deployment_name"]
         # py#int: disable=E1120
         assert (
-            kubernetes.kubernetes.client.ExtensionsV1beta1Api()
+            kubernetes.kubernetes.client.ExtensionsV1Api()
             .list_namespaced_deployment()
             .to_dict.called
         )
@@ -134,12 +134,12 @@ def test_delete_deployments():
             "saltext.kubernetes.modules.kubernetesmod.show_deployment", Mock(return_value=None)
         ):
             mock_kubernetes_lib.client.V1DeleteOptions = Mock(return_value="")
-            mock_kubernetes_lib.client.ExtensionsV1beta1Api.return_value = Mock(
+            mock_kubernetes_lib.client.ExtensionsV1Api.return_value = Mock(
                 **{"delete_namespaced_deployment.return_value.to_dict.return_value": {"code": ""}}
             )
             assert kubernetes.delete_deployment("test") == {"code": 200}
             assert (
-                kubernetes.kubernetes.client.ExtensionsV1beta1Api()
+                kubernetes.kubernetes.client.ExtensionsV1Api()
                 .delete_namespaced_deployment()
                 .to_dict.called
             )
@@ -151,12 +151,12 @@ def test_create_deployments():
     :return:
     """
     with mock_kubernetes_library() as mock_kubernetes_lib:
-        mock_kubernetes_lib.client.ExtensionsV1beta1Api.return_value = Mock(
+        mock_kubernetes_lib.client.ExtensionsV1Api.return_value = Mock(
             **{"create_namespaced_deployment.return_value.to_dict.return_value": {}}
         )
         assert kubernetes.create_deployment("test", "default", {}, {}, None, None, None) == {}
         assert (
-            kubernetes.kubernetes.client.ExtensionsV1beta1Api()
+            kubernetes.kubernetes.client.ExtensionsV1Api()
             .create_namespaced_deployment()
             .to_dict.called
         )
