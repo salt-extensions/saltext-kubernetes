@@ -67,6 +67,30 @@ The kubernetes module is used to manage different kubernetes resources.
       require:
         - pip: kubernetes-python-module
 
+    # kubernetes deployment using a template with custom context variables
+    nginx-template-with-context:
+      kubernetes.deployment_present:
+        - name: nginx-template
+        - source: salt://k8s/nginx-template.yml.jinja
+        - template: jinja
+        - context:
+            replicas: 3
+            nginx_version: 1.19
+            environment: production
+            app_label: frontend
+
+    # kubernetes secret with context variables
+    cert-secret-with-context:
+      kubernetes.secret_present:
+        - name: tls-cert
+        - source: salt://k8s/tls-cert.yml.jinja
+        - template: jinja
+        - context:
+            cert_name: myapp.example.com
+            cert_data: |
+                -----BEGIN CERTIFICATE-----
+                ...
+                -----END CERTIFICATE-----
 
     # Kubernetes secret
     k8s-secret:
@@ -321,7 +345,7 @@ def service_present(
             template=template,
             old_service=service,
             saltenv=__env__,
-            context=context,  # Pass context parameter
+            context=context,
             **kwargs,
         )
 
