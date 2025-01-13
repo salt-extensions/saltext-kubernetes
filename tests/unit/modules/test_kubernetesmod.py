@@ -2,10 +2,15 @@
     :codeauthor: Jochen Breuer <jbreuer@suse.de>
 """
 
+import logging
+import logging.handlers
+
 # pylint: disable=no-value-for-parameter
 import os
 from contextlib import contextmanager
+from unittest.mock import MagicMock
 from unittest.mock import Mock
+from unittest.mock import mock_open
 from unittest.mock import patch
 
 import pytest
@@ -15,12 +20,37 @@ from salt.modules import config
 
 from saltext.kubernetes.modules import kubernetesmod as kubernetes
 
-pytestmark = [
-    pytest.mark.skipif(
-        not kubernetes.HAS_LIBS,
-        reason="Kubernetes client lib is not installed. Skipping test_kubernetes.py",
-    ),
-]
+# Configure logging
+log = logging.getLogger(__name__)
+log.setLevel(logging.DEBUG)
+
+# Disable logging for tests
+logging.disable(logging.CRITICAL)
+
+
+@pytest.fixture(autouse=True)
+def setup_test_environment():
+    """Configure test environment setup and cleanup"""
+    # Store existing handlers
+    root_logger = logging.getLogger()
+    existing_handlers = root_logger.handlers[:]
+
+    # Remove all handlers
+    for handler in root_logger.handlers[:]:
+        root_logger.removeHandler(handler)
+
+    # Add a null handler during tests
+    null_handler = logging.NullHandler()
+    root_logger.addHandler(null_handler)
+
+    yield
+
+    # Cleanup
+    root_logger.removeHandler(null_handler)
+
+    # Restore original handlers
+    for handler in existing_handlers:
+        root_logger.addHandler(handler)
 
 
 @pytest.fixture()
@@ -30,12 +60,24 @@ def configure_loader_modules():
             "__opts__": {
                 "kubernetes.kubeconfig": "/home/testuser/.minikube/kubeconfig.cfg",
                 "kubernetes.context": "minikube",
+                "cachedir": "/tmp/salt-test-cache",
+                "extension_modules": "",
+                "file_client": "local",
             }
         },
         kubernetes: {
             "__salt__": {
                 "config.option": config.option,
-            }
+                "cp.cache_file": MagicMock(return_value="/tmp/mock_file"),
+            },
+            "__grains__": {},
+            "__pillar__": {},
+            "__opts__": {
+                "cachedir": "/tmp/salt-test-cache",
+                "extension_modules": "",
+                "file_client": "local",
+            },
+            "__context__": {},
         },
     }
 
@@ -238,3 +280,121 @@ def test_enforce_only_strings_dict():
         2: 2,
     }
     assert func(data) == {"unicode": "1", "2": "2"}
+
+
+def test_create_deployment_with_context():
+    """
+    Test deployment creation with template context using actual YAML file
+    """
+    mock_template_data = {
+        "result": True,
+        "data": """apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: test-deploy
+spec:
+  replicas: 3
+  template:
+    spec:
+      containers:
+      - name: test-deploy
+        image: nginx:latest""",
+    }
+
+    mock_file_contents = MagicMock(return_value=mock_template_data["data"])
+
+    with mock_kubernetes_library() as mock_kubernetes_lib:
+        with (
+            patch("salt.utils.files.fopen", mock_open(read_data=mock_file_contents())),
+            patch(
+                "salt.utils.templates.TEMPLATE_REGISTRY",
+                {"jinja": MagicMock(return_value=mock_template_data)},
+            ),
+        ):
+
+            context = {"name": "test-deploy", "replicas": 3, "image": "nginx:latest", "port": 80}
+            mock_kubernetes_lib.client.AppsV1Api.return_value = Mock(
+                **{"create_namespaced_deployment.return_value.to_dict.return_value": {}}
+            )
+            ret = kubernetes.create_deployment(
+                "test-deploy",
+                "default",
+                {},
+                {},
+                "/mock/deployment.yaml",  # Use a mock path instead
+                "jinja",
+                "base",
+                context=context,
+            )
+            assert ret == {}
+
+
+def test_create_service_with_context():
+    """
+    Test service creation with template context using actual YAML file
+    """
+    template_content = """
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ context.name }}
+spec:
+  ports:
+  - port: {{ context.port }}
+    targetPort: {{ context.target_port }}
+  type: {{ context.type }}
+"""
+    rendered_content = """
+apiVersion: v1
+kind: Service
+metadata:
+  name: test-svc
+spec:
+  ports:
+  - port: 80
+    targetPort: 8080
+  type: LoadBalancer
+"""
+    mock_template_data = {"result": True, "data": rendered_content}
+
+    mock_jinja = MagicMock(return_value=mock_template_data)
+    template_registry = {"jinja": mock_jinja}
+
+    with mock_kubernetes_library() as mock_kubernetes_lib:
+        with (
+            patch("salt.utils.files.fopen", mock_open(read_data=template_content)),
+            patch("salt.utils.templates.TEMPLATE_REGISTRY", template_registry),
+            patch(
+                "salt.utils.yaml.safe_load",
+                return_value={
+                    "apiVersion": "v1",
+                    "kind": "Service",
+                    "metadata": {"name": "test-svc"},
+                    "spec": {"ports": [{"port": 80, "targetPort": 8080}], "type": "LoadBalancer"},
+                },
+            ),
+        ):
+
+            context = {"name": "test-svc", "port": 80, "target_port": 8080, "type": "LoadBalancer"}
+            mock_kubernetes_lib.client.CoreV1Api.return_value = Mock(
+                **{"create_namespaced_service.return_value.to_dict.return_value": {}}
+            )
+            ret = kubernetes.create_service(
+                "test-svc",
+                "default",
+                {},
+                {},
+                "/mock/service.yaml",
+                "jinja",
+                "base",
+                context=context,
+            )
+            assert ret == {}
+
+            mock_jinja.assert_called_once()
+            call_kwargs = mock_jinja.call_args[1]
+            assert call_kwargs.get("context") == context
+
+            assert "port: 80" in rendered_content
+            assert "targetPort: 8080" in rendered_content
+            assert "type: LoadBalancer" in rendered_content
