@@ -3,3 +3,7 @@ The changelog format is based on [Keep a Changelog](https://keepachangelog.com/e
 This project uses [Semantic Versioning](https://semver.org/) - MAJOR.MINOR.PATCH
 
 # Changelog
+
+## 1.0.1 (2023-12-29)
+
+Initial release of `saltext-kubernetes`. This release tracks the functionality in the core Salt code base at this point.
