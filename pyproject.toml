@@ -35,7 +35,7 @@ requires-python = ">= 3.9"
 dynamic = ["version"]
 dependencies = [
     "salt>=3006",
-    "kubernetes==3.0.0; platform_system == 'Linux'",
+    "kubernetes>=19.15.0; platform_system == 'Linux'",
 ]
 
 [project.readme]
