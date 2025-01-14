@@ -264,7 +264,6 @@ def ping(**kwargs):
         nodes(**kwargs)
     except CommandExecutionError:
         status = False
-
     return status
 
 
@@ -936,7 +935,9 @@ def delete_configmap(name, namespace="default", **kwargs):
         _cleanup(**cfg)
 
 
-def create_deployment(name, namespace, metadata, spec, source, template, saltenv, **kwargs):
+def create_deployment(
+    name, namespace, metadata, spec, source, template, saltenv, context=None, **kwargs
+):
     """
     Creates the kubernetes deployment as defined by the user.
 
@@ -957,6 +958,7 @@ def create_deployment(name, namespace, metadata, spec, source, template, saltenv
         source=source,
         template=template,
         saltenv=saltenv,
+        context=context,
     )
 
     cfg = _setup_conn(**kwargs)
@@ -976,7 +978,7 @@ def create_deployment(name, namespace, metadata, spec, source, template, saltenv
         _cleanup(**cfg)
 
 
-def create_pod(name, namespace, metadata, spec, source, template, saltenv, **kwargs):
+def create_pod(name, namespace, metadata, spec, source, template, saltenv, context=None, **kwargs):
     """
     Creates the kubernetes deployment as defined by the user.
 
@@ -997,6 +999,7 @@ def create_pod(name, namespace, metadata, spec, source, template, saltenv, **kwa
         source=source,
         template=template,
         saltenv=saltenv,
+        context=context,
     )
 
     cfg = _setup_conn(**kwargs)
@@ -1016,7 +1019,9 @@ def create_pod(name, namespace, metadata, spec, source, template, saltenv, **kwa
         _cleanup(**cfg)
 
 
-def create_service(name, namespace, metadata, spec, source, template, saltenv, **kwargs):
+def create_service(
+    name, namespace, metadata, spec, source, template, saltenv, context=None, **kwargs
+):
     """
     Creates the kubernetes service as defined by the user.
 
@@ -1037,6 +1042,7 @@ def create_service(name, namespace, metadata, spec, source, template, saltenv, *
         source=source,
         template=template,
         saltenv=saltenv,
+        context=context,
     )
 
     cfg = _setup_conn(**kwargs)
@@ -1057,7 +1063,14 @@ def create_service(name, namespace, metadata, spec, source, template, saltenv, *
 
 
 def create_secret(
-    name, namespace="default", data=None, source=None, template=None, saltenv="base", **kwargs
+    name,
+    namespace="default",
+    data=None,
+    source=None,
+    template=None,
+    saltenv="base",
+    context=None,
+    **kwargs,
 ):
     """
     Creates the kubernetes secret as defined by the user.
@@ -1073,18 +1086,21 @@ def create_secret(
             name=passwords namespace=default data='{"db": "letmein"}'
     """
     if source:
-        data = __read_and_render_yaml_file(source, template, saltenv)
+        data = __read_and_render_yaml_file(source, template, saltenv, context)
     elif data is None:
         data = {}
 
     data = __enforce_only_strings_dict(data)
 
     # encode the secrets using base64 as required by kubernetes
-    for key in data:
-        data[key] = base64.b64encode(data[key])
+    encoded_data = {}
+    for key, value in data.items():
+        if not isinstance(value, bytes):
+            value = value.encode("utf-8")
+        encoded_data[key] = base64.b64encode(value).decode("utf-8")
 
     body = kubernetes.client.V1Secret(
-        metadata=__dict_to_object_meta(name, namespace, {}), data=data
+        metadata=__dict_to_object_meta(name, namespace, {}), data=encoded_data
     )
 
     cfg = _setup_conn(**kwargs)
@@ -1104,7 +1120,9 @@ def create_secret(
         _cleanup(**cfg)
 
 
-def create_configmap(name, namespace, data, source=None, template=None, saltenv="base", **kwargs):
+def create_configmap(
+    name, namespace, data, source=None, template=None, saltenv="base", context=None, **kwargs
+):
     """
     Creates the kubernetes configmap as defined by the user.
 
@@ -1119,7 +1137,7 @@ def create_configmap(name, namespace, data, source=None, template=None, saltenv=
             name=settings namespace=default data='{"example.conf": "# example file"}'
     """
     if source:
-        data = __read_and_render_yaml_file(source, template, saltenv)
+        data = __read_and_render_yaml_file(source, template, saltenv, context)
     elif data is None:
         data = {}
 
@@ -1180,7 +1198,7 @@ def create_namespace(name, **kwargs):
 
 
 def replace_deployment(
-    name, metadata, spec, source, template, saltenv, namespace="default", **kwargs
+    name, metadata, spec, source, template, saltenv, namespace="default", context=None, **kwargs
 ):
     """
     Replaces an existing deployment with a new one defined by name and
@@ -1203,6 +1221,7 @@ def replace_deployment(
         source=source,
         template=template,
         saltenv=saltenv,
+        context=context,
     )
 
     cfg = _setup_conn(**kwargs)
@@ -1223,7 +1242,16 @@ def replace_deployment(
 
 
 def replace_service(
-    name, metadata, spec, source, template, old_service, saltenv, namespace="default", **kwargs
+    name,
+    metadata,
+    spec,
+    source,
+    template,
+    old_service,
+    saltenv,
+    namespace="default",
+    context=None,
+    **kwargs,
 ):
     """
     Replaces an existing service with a new one defined by name and namespace,
@@ -1246,6 +1274,7 @@ def replace_service(
         source=source,
         template=template,
         saltenv=saltenv,
+        context=context,
     )
 
     # Some attributes have to be preserved
@@ -1271,7 +1300,14 @@ def replace_service(
 
 
 def replace_secret(
-    name, data, source=None, template=None, saltenv="base", namespace="default", **kwargs
+    name,
+    data,
+    source=None,
+    template=None,
+    saltenv="base",
+    namespace="default",
+    context=None,
+    **kwargs,
 ):
     """
     Replaces an existing secret with a new one defined by name and namespace,
@@ -1288,7 +1324,7 @@ def replace_secret(
             name=passwords namespace=saltstack data='{"db": "passw0rd"}'
     """
     if source:
-        data = __read_and_render_yaml_file(source, template, saltenv)
+        data = __read_and_render_yaml_file(source, template, saltenv, context)
     elif data is None:
         data = {}
 
@@ -1320,7 +1356,14 @@ def replace_secret(
 
 
 def replace_configmap(
-    name, data, source=None, template=None, saltenv="base", namespace="default", **kwargs
+    name,
+    data,
+    source=None,
+    template=None,
+    saltenv="base",
+    namespace="default",
+    context=None,
+    **kwargs,
 ):
     """
     Replaces an existing configmap with a new one defined by name and
@@ -1337,7 +1380,7 @@ def replace_configmap(
             name=settings namespace=default data='{"example.conf": "# example file"}'
     """
     if source:
-        data = __read_and_render_yaml_file(source, template, saltenv)
+        data = __read_and_render_yaml_file(source, template, saltenv, context)
 
     data = __enforce_only_strings_dict(data)
 
@@ -1373,12 +1416,13 @@ def __create_object_body(
     source,
     template,
     saltenv,
+    context=None,
 ):
     """
     Create a Kubernetes Object body instance.
     """
     if source:
-        src_obj = __read_and_render_yaml_file(source, template, saltenv)
+        src_obj = __read_and_render_yaml_file(source, template, saltenv, context)
         if not isinstance(src_obj, dict) or "kind" not in src_obj or src_obj["kind"] != kind:
             raise CommandExecutionError(f"The source file should define only a {kind} object")
 
@@ -1393,9 +1437,9 @@ def __create_object_body(
     )
 
 
-def __read_and_render_yaml_file(source, template, saltenv):
+def __read_and_render_yaml_file(source, template, saltenv, context=None):
     """
-    Read a yaml file and, if needed, renders that using the specifieds
+    Read a yaml file and, if needed, renders that using the specified
     templating. Returns the python objects defined inside of the file.
     """
     sfn = __salt__["cp.cache_file"](source, saltenv)
@@ -1407,9 +1451,10 @@ def __read_and_render_yaml_file(source, template, saltenv):
 
         if template:
             if template in salt.utils.templates.TEMPLATE_REGISTRY:
-                # TODO: should we allow user to set also `context` like  # pylint: disable=fixme
-                # `file.managed` does?
-                # Apply templating
+                # Apply templating with context
+                if context is None:
+                    context = {}
+
                 data = salt.utils.templates.TEMPLATE_REGISTRY[template](
                     contents,
                     from_str=True,
@@ -1419,6 +1464,7 @@ def __read_and_render_yaml_file(source, template, saltenv):
                     pillar=__pillar__,
                     salt=__salt__,
                     opts=__opts__,
+                    context=context,
                 )
 
                 if not data["result"]:

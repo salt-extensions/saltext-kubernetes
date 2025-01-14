@@ -67,6 +67,30 @@ The kubernetes module is used to manage different kubernetes resources.
       require:
         - pip: kubernetes-python-module
 
+    # kubernetes deployment using a template with custom context variables
+    nginx-template-with-context:
+      kubernetes.deployment_present:
+        - name: nginx-template
+        - source: salt://k8s/nginx-template.yml.jinja
+        - template: jinja
+        - context:
+            replicas: 3
+            nginx_version: 1.19
+            environment: production
+            app_label: frontend
+
+    # kubernetes secret with context variables
+    cert-secret-with-context:
+      kubernetes.secret_present:
+        - name: tls-cert
+        - source: salt://k8s/tls-cert.yml.jinja
+        - template: jinja
+        - context:
+            cert_name: myapp.example.com
+            cert_data: |
+                -----BEGIN CERTIFICATE-----
+                ...
+                -----END CERTIFICATE-----
 
     # Kubernetes secret
     k8s-secret:
@@ -144,7 +168,14 @@ def deployment_absent(name, namespace="default", **kwargs):
 
 
 def deployment_present(
-    name, namespace="default", metadata=None, spec=None, source="", template="", **kwargs
+    name,
+    namespace="default",
+    metadata=None,
+    spec=None,
+    source="",
+    template="",
+    context=None,
+    **kwargs,
 ):
     """
     Ensures that the named deployment is present inside of the specified
@@ -170,6 +201,9 @@ def deployment_present(
 
     template
         Template engine to be used to render the source file.
+
+    context
+        Variables to be passed into the template.
     """
     ret = {"name": name, "changes": {}, "result": False, "comment": ""}
 
@@ -197,6 +231,7 @@ def deployment_present(
             source=source,
             template=template,
             saltenv=__env__,
+            context=context,
             **kwargs,
         )
         ret["changes"][f"{namespace}.{name}"] = {"old": {}, "new": res}
@@ -216,6 +251,7 @@ def deployment_present(
             source=source,
             template=template,
             saltenv=__env__,
+            context=context,
             **kwargs,
         )
 
@@ -225,7 +261,14 @@ def deployment_present(
 
 
 def service_present(
-    name, namespace="default", metadata=None, spec=None, source="", template="", **kwargs
+    name,
+    namespace="default",
+    metadata=None,
+    spec=None,
+    source="",
+    template="",
+    context=None,
+    **kwargs,
 ):
     """
     Ensures that the named service is present inside of the specified namespace
@@ -251,6 +294,9 @@ def service_present(
 
     template
         Template engine to be used to render the source file.
+
+    context
+        Variables to be passed into the template.
     """
     ret = {"name": name, "changes": {}, "result": False, "comment": ""}
 
@@ -278,6 +324,7 @@ def service_present(
             source=source,
             template=template,
             saltenv=__env__,
+            context=context,
             **kwargs,
         )
         ret["changes"][f"{namespace}.{name}"] = {"old": {}, "new": res}
@@ -298,6 +345,7 @@ def service_present(
             template=template,
             old_service=service,
             saltenv=__env__,
+            context=context,
             **kwargs,
         )
 
@@ -446,7 +494,9 @@ def secret_absent(name, namespace="default", **kwargs):
     return ret
 
 
-def secret_present(name, namespace="default", data=None, source=None, template=None, **kwargs):
+def secret_present(
+    name, namespace="default", data=None, source=None, template=None, context=None, **kwargs
+):
     """
     Ensures that the named secret is present inside of the specified namespace
     with the given data.
@@ -467,6 +517,9 @@ def secret_present(name, namespace="default", data=None, source=None, template=N
 
     template
         Template engine to be used to render the source file.
+
+    context
+        Variables to be passed into the template.
     """
     ret = {"name": name, "changes": {}, "result": False, "comment": ""}
 
@@ -490,6 +543,7 @@ def secret_present(name, namespace="default", data=None, source=None, template=N
             source=source,
             template=template,
             saltenv=__env__,
+            context=context,
             **kwargs,
         )
         ret["changes"][f"{namespace}.{name}"] = {"old": {}, "new": res}
@@ -509,6 +563,7 @@ def secret_present(name, namespace="default", data=None, source=None, template=N
             source=source,
             template=template,
             saltenv=__env__,
+            context=context,
             **kwargs,
         )
 
@@ -559,7 +614,9 @@ def configmap_absent(name, namespace="default", **kwargs):
     return ret
 
 
-def configmap_present(name, namespace="default", data=None, source=None, template=None, **kwargs):
+def configmap_present(
+    name, namespace="default", data=None, source=None, template=None, context=None, **kwargs
+):
     """
     Ensures that the named configmap is present inside of the specified namespace
     with the given data.
@@ -580,6 +637,9 @@ def configmap_present(name, namespace="default", data=None, source=None, templat
 
     template
         Template engine to be used to render the source file.
+
+    context
+        Variables to be passed into the template.
     """
     ret = {"name": name, "changes": {}, "result": False, "comment": ""}
 
@@ -602,6 +662,7 @@ def configmap_present(name, namespace="default", data=None, source=None, templat
             source=source,
             template=template,
             saltenv=__env__,
+            context=context,
             **kwargs,
         )
         ret["changes"][f"{namespace}.{name}"] = {"old": {}, "new": res}
@@ -611,7 +672,6 @@ def configmap_present(name, namespace="default", data=None, source=None, templat
             ret["comment"] = "The configmap is going to be replaced"
             return ret
 
-        # TODO: improve checks  # pylint: disable=fixme
         log.info("Forcing the recreation of the service")
         ret["comment"] = "The configmap is already present. Forcing recreation"
         res = __salt__["kubernetes.replace_configmap"](
@@ -621,6 +681,7 @@ def configmap_present(name, namespace="default", data=None, source=None, templat
             source=source,
             template=template,
             saltenv=__env__,
+            context=context,
             **kwargs,
         )
 
@@ -669,7 +730,14 @@ def pod_absent(name, namespace="default", **kwargs):
 
 
 def pod_present(
-    name, namespace="default", metadata=None, spec=None, source="", template="", **kwargs
+    name,
+    namespace="default",
+    metadata=None,
+    spec=None,
+    source="",
+    template="",
+    context=None,
+    **kwargs,
 ):
     """
     Ensures that the named pod is present inside of the specified
@@ -695,6 +763,9 @@ def pod_present(
 
     template
         Template engine to be used to render the source file.
+
+    context
+        Variables to be passed into the template.
     """
     ret = {"name": name, "changes": {}, "result": False, "comment": ""}
 
@@ -722,6 +793,7 @@ def pod_present(
             source=source,
             template=template,
             saltenv=__env__,
+            context=context,
             **kwargs,
         )
         ret["changes"][f"{namespace}.{name}"] = {"old": {}, "new": res}

@@ -788,3 +788,177 @@ def test_namespace_absent__delete_error():
                 "name": "salt",
                 "comment": f"Something went wrong, response: {deleted}",
             }
+
+
+def test_deployment_present_with_context():
+    """
+    Test deployment_present with template context
+    """
+    context = {"name": "test-deploy", "replicas": 3, "image": "nginx:latest"}
+    expected = {
+        "apiVersion": "apps/v1",
+        "kind": "Deployment",
+        "metadata": {"name": "test-deploy"},
+        "spec": {"replicas": 3, "template": {"spec": {"containers": [{"image": "nginx:latest"}]}}},
+    }
+
+    with mock_func("show_deployment", return_value=None):
+        with mock_func("create_deployment", return_value=expected):
+            ret = kubernetes.deployment_present(
+                name="test-deploy",
+                source="salt://k8s/deployment.yaml",
+                template="jinja",
+                context=context,
+            )
+            assert ret["result"] is True
+            kubernetes.__salt__["kubernetes.create_deployment"].assert_called_with(
+                name="test-deploy",
+                namespace="default",
+                metadata={},
+                spec={},
+                source="salt://k8s/deployment.yaml",
+                template="jinja",
+                saltenv="base",
+                context=context,
+            )
+
+
+def test_deployment_present_with_metadata_validation():
+    """
+    Test deployment_present metadata validation
+    """
+    metadata = {"labels": {"app": "nginx"}, "annotations": {"description": "test deployment"}}
+    spec = {"replicas": 3}
+
+    with mock_func("show_deployment", return_value=None):
+        with mock_func("create_deployment", return_value={}):
+            ret = kubernetes.deployment_present(name="test-deploy", metadata=metadata, spec=spec)
+            assert ret["result"] is True
+            kubernetes.__salt__["kubernetes.create_deployment"].assert_called_with(
+                name="test-deploy",
+                namespace="default",
+                metadata=metadata,
+                spec=spec,
+                source="",
+                template="",
+                saltenv="base",
+                context=None,
+            )
+
+
+def test_service_present_with_context():
+    """
+    Test service_present with template context
+    """
+    context = {"name": "test-svc", "port": 80, "target_port": 8080}
+    expected = {
+        "apiVersion": "v1",
+        "kind": "Service",
+        "metadata": {"name": "test-svc"},
+        "spec": {"ports": [{"port": 80, "targetPort": 8080}]},
+    }
+
+    with mock_func("show_service", return_value=None):
+        with mock_func("create_service", return_value=expected):
+            ret = kubernetes.service_present(
+                name="test-svc", source="salt://k8s/service.yaml", template="jinja", context=context
+            )
+            assert ret["result"] is True
+            kubernetes.__salt__["kubernetes.create_service"].assert_called_with(
+                name="test-svc",
+                namespace="default",
+                metadata={},
+                spec={},
+                source="salt://k8s/service.yaml",
+                template="jinja",
+                saltenv="base",
+                context=context,
+            )
+
+
+def test_service_present_with_spec_validation():
+    """
+    Test service_present spec validation
+    """
+    spec = {
+        "ports": [{"port": 80, "targetPort": 8080}],
+        "selector": {"app": "nginx"},
+        "type": "ClusterIP",
+    }
+
+    with mock_func("show_service", return_value=None):
+        with mock_func("create_service", return_value={}):
+            ret = kubernetes.service_present(name="test-svc", spec=spec)
+            assert ret["result"] is True
+            kubernetes.__salt__["kubernetes.create_service"].assert_called_with(
+                name="test-svc",
+                namespace="default",
+                metadata={},
+                spec=spec,
+                source="",
+                template="",
+                saltenv="base",
+                context=None,
+            )
+
+
+def test_configmap_present_with_context():
+    """
+    Test configmap_present with template context
+    """
+    context = {"config_value": "some configuration"}
+    expected = {
+        "apiVersion": "v1",
+        "kind": "ConfigMap",
+        "data": {"config.txt": "some configuration"},
+    }
+
+    with mock_func("show_configmap", return_value=None):
+        with mock_func("create_configmap", return_value=expected):
+            ret = kubernetes.configmap_present(
+                name="test-cm",
+                source="salt://k8s/configmap.yaml",
+                template="jinja",
+                context=context,
+            )
+            assert ret["result"] is True
+            kubernetes.__salt__["kubernetes.create_configmap"].assert_called_with(
+                name="test-cm",
+                namespace="default",
+                data={},
+                source="salt://k8s/configmap.yaml",
+                template="jinja",
+                saltenv="base",
+                context=context,
+            )
+
+
+def test_secret_present_with_context():
+    """
+    Test secret_present with template context
+    """
+    context = {"password": "supersecret"}
+    expected = {
+        "apiVersion": "v1",
+        "kind": "Secret",
+        "data": {"password": "c3VwZXJzZWNyZXQ="},  # base64 encoded
+    }
+
+    with mock_func("show_secret", return_value=None):
+        with mock_func("create_secret", return_value=expected):
+            ret = kubernetes.secret_present(
+                name="test-secret",
+                source="salt://k8s/secret.yaml",
+                template="jinja",
+                context=context,
+            )
+            assert ret["result"] is True
+            kubernetes.__salt__["kubernetes.create_secret"].assert_called_with(
+                name="test-secret",
+                namespace="default",
+                data={},
+                source="salt://k8s/secret.yaml",
+                template="jinja",
+                saltenv="base",
+                context=context,
+            )
