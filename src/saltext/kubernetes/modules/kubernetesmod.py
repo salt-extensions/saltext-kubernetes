@@ -2,7 +2,7 @@
 """
 Module for handling kubernetes calls.
 
-:optdepends:    - kubernetes Python client >= v22.0
+:optdepends:    - kubernetes Python client >= v19.15.0
                 - PyYAML >= 5.3.1
 :configuration: The k8s API settings are provided either in a pillar, in
     the minion's config file, or in master's config file::
