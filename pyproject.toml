@@ -35,7 +35,7 @@ requires-python = ">= 3.9"
 dynamic = ["version"]
 dependencies = [
     "salt>=3006",
-    "kubernetes>=22.0; platform_system == 'Linux'",
+    "kubernetes>=19.15.0; platform_system == 'Linux'",
     "PyYAML>=5.3.1",
 ]
 
@@ -76,7 +76,7 @@ tests = [
     "pytest-helpers-namespace>=2019.1.8",
     "pytest-subtests",
     "pytest-timeout",
-    "kubernetes>=22.0",
+    "kubernetes>=19.15.0",
     "PyYAML>=5.3.1",
     "mock>=4.0.3",
     "pytest-custom-exit-code>=0.3",
