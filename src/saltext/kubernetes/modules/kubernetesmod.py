@@ -11,9 +11,6 @@ Module for handling kubernetes calls.
         kubernetes.kubeconfig-data: '<base64 encoded kubeconfig content'
         kubernetes.context: 'context'
 
-These settings can be overridden by adding `context and `kubeconfig` or
-`kubeconfig_data` parameters when calling a function.
-
 The data format for `kubernetes.kubeconfig-data` value is the content of
 `kubeconfig` base64 encoded in one line.
 
@@ -24,7 +21,7 @@ CLI Example:
 
 .. code-block:: bash
 
-    salt '*' kubernetes.nodes kubeconfig=/etc/salt/k8s/kubeconfig context=minikube
+    salt '*' kubernetes.nodes
 
 .. versionadded:: 2017.7.0
 .. versionchanged:: 2019.2.0
@@ -188,11 +185,9 @@ def _setup_conn(**kwargs):
     """
     Setup kubernetes API connection singleton
     """
-    kubeconfig = kwargs.get("kubeconfig") or __salt__["config.option"]("kubernetes.kubeconfig")
-    kubeconfig_data = kwargs.get("kubeconfig_data") or __salt__["config.option"](
-        "kubernetes.kubeconfig-data"
-    )
-    context = kwargs.get("context") or __salt__["config.option"]("kubernetes.context")
+    kubeconfig = __salt__["config.option"]("kubernetes.kubeconfig")
+    kubeconfig_data = __salt__["config.option"]("kubernetes.kubeconfig-data")
+    context = __salt__["config.option"]("kubernetes.context")
 
     if (kubeconfig_data and not kubeconfig) or (kubeconfig_data and kwargs.get("kubeconfig_data")):
         with tempfile.NamedTemporaryFile(prefix="salt-kubeconfig-", delete=False) as kcfg:
@@ -276,7 +271,6 @@ def nodes(**kwargs):
     .. code-block:: bash
 
         salt '*' kubernetes.nodes
-        salt '*' kubernetes.nodes kubeconfig=/etc/salt/k8s/kubeconfig context=minikube
     """
     cfg = _setup_conn(**kwargs)
     try:
@@ -412,7 +406,6 @@ def namespaces(**kwargs):
     .. code-block:: bash
 
         salt '*' kubernetes.namespaces
-        salt '*' kubernetes.namespaces kubeconfig=/etc/salt/k8s/kubeconfig context=minikube
     """
     cfg = _setup_conn(**kwargs)
     try:
@@ -1074,30 +1067,40 @@ def create_secret(
 ):
     """
     Creates the kubernetes secret as defined by the user.
+    Values that are already base64 encoded will not be re-encoded.
 
     CLI Example:
 
     .. code-block:: bash
 
+        # For regular secrets with plain text values
         salt 'minion1' kubernetes.create_secret \
             passwords default '{"db": "letmein"}'
 
+        # For secrets with pre-encoded values
         salt 'minion2' kubernetes.create_secret \
-            name=passwords namespace=default data='{"db": "letmein"}'
+            name=passwords namespace=default data='{"db": "bGV0bWVpbg=="}'
     """
     if source:
-        data = __read_and_render_yaml_file(source, template, saltenv, context)
+        src_obj = __read_and_render_yaml_file(source, template, saltenv, context)
+        if isinstance(src_obj, dict) and "data" in src_obj:
+            data = src_obj["data"]
     elif data is None:
         data = {}
 
     data = __enforce_only_strings_dict(data)
 
-    # encode the secrets using base64 as required by kubernetes
+    # Encode the secrets using base64 if not already encoded
     encoded_data = {}
     for key, value in data.items():
-        if not isinstance(value, bytes):
-            value = value.encode("utf-8")
-        encoded_data[key] = base64.b64encode(value).decode("utf-8")
+        if isinstance(value, bytes):
+            encoded_data[key] = base64.b64encode(value).decode("utf-8")
+        else:
+            str_value = str(value)
+            if __is_base64(str_value):
+                encoded_data[key] = str_value
+            else:
+                encoded_data[key] = base64.b64encode(str_value.encode("utf-8")).decode("utf-8")
 
     body = kubernetes.client.V1Secret(
         metadata=__dict_to_object_meta(name, namespace, {}), data=encoded_data
@@ -1310,32 +1313,70 @@ def replace_secret(
     **kwargs,
 ):
     """
-    Replaces an existing secret with a new one defined by name and namespace,
-    having the specificed data.
+    Replaces an existing secret with a new one defined by name and namespace.
+    Values that are already base64 encoded will not be re-encoded.
+    If a source file is specified, the secret type will be read from the template.
 
     CLI Example:
 
     .. code-block:: bash
 
+        # For regular secrets with plain text values
         salt 'minion1' kubernetes.replace_secret \
             name=passwords data='{"db": "letmein"}'
 
+        # For secrets with pre-encoded values
         salt 'minion2' kubernetes.replace_secret \
-            name=passwords namespace=saltstack data='{"db": "passw0rd"}'
+            name=passwords data='{"db": "bGV0bWVpbg=="}'
+
+        # For docker registry secrets using a template
+        salt 'minion3' kubernetes.replace_secret \
+            name=docker-registry \
+            source=/path/to/secret.yaml
     """
     if source:
-        data = __read_and_render_yaml_file(source, template, saltenv, context)
+        src_obj = __read_and_render_yaml_file(source, template, saltenv, context)
+        secret_type = src_obj.get("type", "Opaque")
+        if isinstance(src_obj, dict) and "data" in src_obj:
+            data = src_obj["data"]
     elif data is None:
         data = {}
 
     data = __enforce_only_strings_dict(data)
 
-    # encode the secrets using base64 as required by kubernetes
-    for key in data:
-        data[key] = base64.b64encode(data[key])
+    # Get existing secret to preserve its type if not specified in the source
+    try:
+        api_instance = kubernetes.client.CoreV1Api()
+        existing_secret = api_instance.read_namespaced_secret(name, namespace)
+        existing_secret_type = existing_secret.type
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            existing_secret_type = "Opaque"  # Default type if secret doesn't exist
+        else:
+            log.exception("Exception when calling CoreV1Api->read_namespaced_secret")
+            raise CommandExecutionError(exc)
+
+    # Use type from source/template if available, otherwise use existing/default
+    secret_type = secret_type if source else existing_secret_type
+
+    # Validate docker registry secrets
+    if secret_type == "kubernetes.io/dockerconfigjson" and ".dockerconfigjson" not in data:
+        raise CommandExecutionError("Docker registry secret must contain '.dockerconfigjson' key")
+
+    # Encode the secrets using base64 if not already encoded
+    encoded_data = {}
+    for key, value in data.items():
+        if isinstance(value, bytes):
+            encoded_data[key] = base64.b64encode(value).decode("utf-8")
+        else:
+            str_value = str(value)
+            if __is_base64(str_value):
+                encoded_data[key] = str_value
+            else:
+                encoded_data[key] = base64.b64encode(str_value.encode("utf-8")).decode("utf-8")
 
     body = kubernetes.client.V1Secret(
-        metadata=__dict_to_object_meta(name, namespace, {}), data=data
+        metadata=__dict_to_object_meta(name, namespace, {}), data=encoded_data, type=secret_type
     )
 
     cfg = _setup_conn(**kwargs)
@@ -1343,7 +1384,6 @@ def replace_secret(
     try:
         api_instance = kubernetes.client.CoreV1Api()
         api_response = api_instance.replace_namespaced_secret(name, namespace, body)
-
         return api_response.to_dict()
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
@@ -1403,6 +1443,18 @@ def replace_configmap(
             raise CommandExecutionError(exc)
     finally:
         _cleanup(**cfg)
+
+
+def __is_base64(value):
+    """
+    Check if a string is base64 encoded.
+    """
+    try:
+        # Attempt to decode - if successful and result can be encoded back to same value, it's base64
+        decoded = base64.b64decode(value)
+        return base64.b64encode(decoded).decode("utf-8") == value
+    except Exception:  # pylint: disable=broad-except
+        return False
 
 
 def __create_object_body(
@@ -1543,13 +1595,16 @@ def __dict_to_service_spec(spec):
         if key == "ports":
             spec_obj.ports = []
             for port in value:
-                kube_port = kubernetes.client.V1ServicePort()
                 if isinstance(port, dict):
+                    if "port" not in port:
+                        raise CommandExecutionError("Service port must specify 'port' value")
+
+                    kube_port = kubernetes.client.V1ServicePort(port=port["port"])
                     for port_key, port_value in port.items():
-                        if hasattr(kube_port, port_key):
+                        if port_key != "port" and hasattr(kube_port, port_key):
                             setattr(kube_port, port_key, port_value)
                 else:
-                    kube_port.port = port
+                    kube_port = kubernetes.client.V1ServicePort(port=int(port))
                 spec_obj.ports.append(kube_port)
         elif hasattr(spec_obj, key):
             setattr(spec_obj, key, value)
