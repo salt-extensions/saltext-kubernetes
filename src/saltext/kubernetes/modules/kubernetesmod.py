@@ -189,13 +189,13 @@ def _setup_conn(**kwargs):
     kubeconfig_data = __salt__["config.option"]("kubernetes.kubeconfig-data")
     context = __salt__["config.option"]("kubernetes.context")
 
-    if (kubeconfig_data and not kubeconfig) or (kubeconfig_data and kwargs.get("kubeconfig_data")):
+    if kubeconfig_data and not kubeconfig:
         with tempfile.NamedTemporaryFile(prefix="salt-kubeconfig-", delete=False) as kcfg:
             kcfg.write(base64.b64decode(kubeconfig_data))
             kubeconfig = kcfg.name
 
     if not (kubeconfig and context):
-        if kwargs.get("api_url") or __salt__["config.option"]("kubernetes.api_url"):
+        if __salt__["config.option"]("kubernetes.api_url"):
             try:
                 return _setup_conn_old(**kwargs)
             except Exception:  # pylint: disable=broad-except

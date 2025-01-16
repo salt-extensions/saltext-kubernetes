@@ -6,7 +6,6 @@ import logging
 import logging.handlers
 
 # pylint: disable=no-value-for-parameter
-import os
 from contextlib import contextmanager
 from unittest.mock import MagicMock
 from unittest.mock import Mock
@@ -14,8 +13,6 @@ from unittest.mock import mock_open
 from unittest.mock import patch
 
 import pytest
-import salt.utils.files
-import salt.utils.platform
 from salt.modules import config
 
 from saltext.kubernetes.modules import kubernetesmod as kubernetes
@@ -55,6 +52,9 @@ def setup_test_environment():
 
 @pytest.fixture()
 def configure_loader_modules():
+    """
+    Configure loader modules for tests.
+    """
     return {
         config: {
             "__opts__": {
@@ -209,27 +209,6 @@ def test_setup_kubeconfig_file():
         assert config.option("kubernetes.kubeconfig") == cfg["kubeconfig"]
 
 
-def test_setup_kubeconfig_data_overwrite():
-    """
-    Test that provided `kubernetes.kubeconfig` configuration is overwritten
-    by provided kubeconfig_data in the command
-    :return:
-    """
-    with mock_kubernetes_library() as mock_kubernetes_lib:
-        mock_kubernetes_lib.config.load_kube_config = Mock()
-        cfg = kubernetes._setup_conn(kubeconfig_data="MTIzNDU2Nzg5MAo=", context="newcontext")
-        check_path = os.path.join("/tmp", "salt-kubeconfig-")
-        if salt.utils.platform.is_windows():
-            check_path = os.path.join(os.environ.get("TMP"), "salt-kubeconfig-")
-        elif salt.utils.platform.is_darwin():
-            check_path = os.path.join(os.environ.get("TMPDIR", "/tmp"), "salt-kubeconfig-")
-        assert cfg["kubeconfig"].lower().startswith(check_path.lower())
-        assert os.path.exists(cfg["kubeconfig"])
-        with salt.utils.files.fopen(cfg["kubeconfig"], "r") as kcfg:
-            assert kcfg.read() == "1234567890\n"
-        kubernetes._cleanup(**cfg)
-
-
 def test_node_labels():
     """
     Test kubernetes.node_labels
@@ -274,6 +253,9 @@ def test_adding_change_cause_annotation():
 
 
 def test_enforce_only_strings_dict():
+    """
+    Test conversion of dictionary values to strings.
+    """
     func = getattr(kubernetes, "__enforce_only_strings_dict")
     data = {
         "unicode": 1,
