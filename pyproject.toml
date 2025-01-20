@@ -80,6 +80,8 @@ tests = [
     "PyYAML>=5.3.1",
     "mock>=4.0.3",
     "pytest-custom-exit-code>=0.3",
+    "pytest-kind>=0.5.0",
+    "docker>=6.0.0",  # Add this for kind cluster support
 ]
 
 [project.entry-points."salt.loader"]
@@ -159,3 +161,11 @@ showcontent = true
 directory = "security"
 name = "Security"
 showcontent = true
+
+[tool.pytest.ini_options]
+markers = [
+    "slow_test: marks tests as slow (deselect with '-m \"not slow_test\"')",
+]
+testpaths = ["tests"]  # Add this to explicitly define test paths
+log_cli = true  # Add this to show logs during test execution
+log_cli_level = "INFO"  # Add this to set default log level

@@ -146,6 +146,8 @@ def tests(session):
         "COVERAGE_FILE": str(COVERAGE_REPORT_DB),
         # Instruct sub processes to also run under coverage
         "COVERAGE_PROCESS_START": str(REPO_ROOT / ".coveragerc"),
+        # Add this to prevent kind cluster name conflicts in parallel tests
+        "PYTEST_ADDOPTS": "--no-cov-on-fail --dist=no",
     }
 
     session.run("coverage", "erase")
@@ -290,7 +292,7 @@ def _lint(session, rcfile, flags, paths, tee_output=True):
             stdout.seek(0)
             contents = stdout.read()
             if contents:
-                contents = contents.decode("utf-8")
+                contents.decode("utf-8")
                 sys.stdout.write(contents)
                 sys.stdout.flush()
                 if pylint_report_path:

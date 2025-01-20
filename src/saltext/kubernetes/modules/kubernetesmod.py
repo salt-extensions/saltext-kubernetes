@@ -245,8 +245,8 @@ def _cleanup(**kwargs):
 
 def ping(**kwargs):
     """
-    Checks connections with the kubernetes API server.
-    Returns True if the connection can be established, False otherwise.
+    Checks connection with the kubernetes API server.
+    Returns True if the API is available.
 
     CLI Example:
 
@@ -254,12 +254,16 @@ def ping(**kwargs):
 
         salt '*' kubernetes.ping
     """
-    status = True
+    cfg = _setup_conn(**kwargs)
     try:
-        nodes(**kwargs)
-    except CommandExecutionError:
-        status = False
-    return status
+        api_instance = kubernetes.client.CoreV1Api()
+        api_response = api_instance.get_api_resources()
+        return bool(api_response and hasattr(api_response, "resources") and api_response.resources)
+    except (ApiException, HTTPError):
+        log.exception("Exception when calling CoreV1Api->get_api_resources")
+        return False
+    finally:
+        _cleanup(**cfg)
 
 
 def nodes(**kwargs):
