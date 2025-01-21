@@ -1,20 +1,8 @@
 import logging
 
 import pytest
-from pytest_kind import KindCluster
 
 log = logging.getLogger(__name__)
-
-
-@pytest.fixture(scope="module")
-def kind_cluster():
-    """Create Kind cluster for testing"""
-    cluster = KindCluster(name="salt-test")
-    try:
-        cluster.create()
-        yield cluster
-    finally:
-        cluster.delete()
 
 
 @pytest.fixture(scope="module")
