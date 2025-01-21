@@ -1,8 +1,11 @@
 import logging
+import sys
 
 import pytest
 
 log = logging.getLogger(__name__)
+
+pytestmark = pytest.mark.skipif(sys.platform != "linux", reason="Only run on Linux platforms")
 
 
 @pytest.fixture(scope="module")

@@ -71,7 +71,7 @@ def minion(master, minion_config):  # pragma: no cover
 
 
 @pytest.fixture(scope="module", params=K8S_VERSIONS)
-@pytest.mark.skipif(sys.platform != "linux", reason="KinD tests only run on Linux platform")
+@pytest.mark.skipif(sys.platform != "linux", reason="Only run on Linux platforms")
 def kind_cluster(request):  # pylint: disable=too-many-statements
     """Create Kind cluster for testing with specified Kubernetes version"""
     cluster = KindCluster(name="salt-test", image=f"kindest/node:{request.param}")
