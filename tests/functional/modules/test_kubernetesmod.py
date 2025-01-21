@@ -32,17 +32,10 @@ def minion_config_overrides(kind_cluster):
 
 
 @pytest.fixture
-def kubernetes(modules, minion_config_overrides):
+def kubernetes(modules):
     """
-    Configure and return the kubernetes execution module
+    Return the kubernetes execution module
     """
-    # Configure kubernetes module options
-    modules.opts.update(
-        {
-            "kubernetes.kubeconfig": minion_config_overrides["kubernetes.kubeconfig"],
-            "kubernetes.context": minion_config_overrides["kubernetes.context"],
-        }
-    )
     return modules.kubernetes
 
 
