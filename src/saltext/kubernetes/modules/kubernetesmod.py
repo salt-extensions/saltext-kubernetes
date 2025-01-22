@@ -969,8 +969,10 @@ def create_service(
         **kwargs: Extra arguments to pass to the API call
 
     Service spec must follow kubernetes API conventions. Port specifications can be:
-    - Simple integer for basic port definition: [80, 443]
-    - Dictionary for advanced configuration:
+
+    Simple integer for basic port definition: [80, 443]
+
+    Dictionary for advanced configuration:
         ports:
           - port: 80
             targetPort: 8080
