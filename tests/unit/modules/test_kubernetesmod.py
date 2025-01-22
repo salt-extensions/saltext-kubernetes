@@ -13,6 +13,10 @@ from unittest.mock import mock_open
 from unittest.mock import patch
 
 import pytest
+from kubernetes.client import V1Container
+from kubernetes.client import V1DeploymentSpec
+from kubernetes.client import V1PodSpec
+from kubernetes.client import V1PodTemplateSpec
 from salt.modules import config
 
 from saltext.kubernetes.modules import kubernetesmod as kubernetes
@@ -189,10 +193,21 @@ def test_create_deployments():
     :return:
     """
     with mock_kubernetes_library() as mock_kubernetes_lib:
+        mock_kubernetes_lib.client.V1DeploymentSpec = V1DeploymentSpec
+        mock_kubernetes_lib.client.V1PodTemplateSpec = V1PodTemplateSpec
+        mock_kubernetes_lib.client.V1PodSpec = V1PodSpec
+        mock_kubernetes_lib.client.V1Container = V1Container
         mock_kubernetes_lib.client.AppsV1Api.return_value = Mock(
             **{"create_namespaced_deployment.return_value.to_dict.return_value": {}}
         )
-        assert kubernetes.create_deployment("test", "default", {}, {}, None, None, None) == {}
+        spec = {
+            "template": {
+                "metadata": {"labels": {"app": "test"}},
+                "spec": {"containers": [{"name": "test-container", "image": "nginx"}]},
+            },
+            "selector": {"matchLabels": {"app": "test"}},
+        }
+        assert kubernetes.create_deployment("test", "default", {}, spec, None, None, None) == {}
         assert (
             kubernetes.kubernetes.client.AppsV1Api().create_namespaced_deployment().to_dict.called
         )
@@ -276,7 +291,13 @@ metadata:
   name: test-deploy
 spec:
   replicas: 3
+  selector:
+    matchLabels:
+      app: test-deploy
   template:
+    metadata:
+      labels:
+        app: test-deploy
     spec:
       containers:
       - name: test-deploy
@@ -286,6 +307,10 @@ spec:
     mock_file_contents = MagicMock(return_value=mock_template_data["data"])
 
     with mock_kubernetes_library() as mock_kubernetes_lib:
+        mock_kubernetes_lib.client.V1DeploymentSpec = V1DeploymentSpec
+        mock_kubernetes_lib.client.V1PodTemplateSpec = V1PodTemplateSpec
+        mock_kubernetes_lib.client.V1PodSpec = V1PodSpec
+        mock_kubernetes_lib.client.V1Container = V1Container
         with (
             patch("salt.utils.files.fopen", mock_open(read_data=mock_file_contents())),
             patch(
@@ -293,7 +318,6 @@ spec:
                 {"jinja": MagicMock(return_value=mock_template_data)},
             ),
         ):
-
             context = {"name": "test-deploy", "replicas": 3, "image": "nginx:latest", "port": 80}
             mock_kubernetes_lib.client.AppsV1Api.return_value = Mock(
                 **{"create_namespaced_deployment.return_value.to_dict.return_value": {}}
@@ -303,7 +327,7 @@ spec:
                 "default",
                 {},
                 {},
-                "/mock/deployment.yaml",  # Use a mock path instead
+                "/mock/deployment.yaml",
                 "jinja",
                 "base",
                 context=context,
