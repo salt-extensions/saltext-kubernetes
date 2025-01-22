@@ -106,82 +106,7 @@ if not salt.utils.platform.is_windows():
     POLLING_TIME_LIMIT = 30
 
 
-def _setup_conn_old(**kwargs):
-    """
-    Setup kubernetes API connection singleton the old way
-    """
-    host = __salt__["config.option"]("kubernetes.api_url", "http://localhost:8080")
-    username = __salt__["config.option"]("kubernetes.user")
-    password = __salt__["config.option"]("kubernetes.password")
-    ca_cert = __salt__["config.option"]("kubernetes.certificate-authority-data")
-    client_cert = __salt__["config.option"]("kubernetes.client-certificate-data")
-    client_key = __salt__["config.option"]("kubernetes.client-key-data")
-    ca_cert_file = __salt__["config.option"]("kubernetes.certificate-authority-file")
-    client_cert_file = __salt__["config.option"]("kubernetes.client-certificate-file")
-    client_key_file = __salt__["config.option"]("kubernetes.client-key-file")
-
-    # Override default API settings when settings are provided
-    if "api_url" in kwargs:
-        host = kwargs.get("api_url")
-
-    if "api_user" in kwargs:
-        username = kwargs.get("api_user")
-
-    if "api_password" in kwargs:
-        password = kwargs.get("api_password")
-
-    if "api_certificate_authority_file" in kwargs:
-        ca_cert_file = kwargs.get("api_certificate_authority_file")
-
-    if "api_client_certificate_file" in kwargs:
-        client_cert_file = kwargs.get("api_client_certificate_file")
-
-    if "api_client_key_file" in kwargs:
-        client_key_file = kwargs.get("api_client_key_file")
-
-    if (
-        kubernetes.client.configuration.host != host
-        or kubernetes.client.configuration.user != username
-        or kubernetes.client.configuration.password != password
-    ):
-        # Recreates API connection if settings are changed
-        kubernetes.client.configuration.__init__()  # pylint: disable=unnecessary-dunder-call
-
-    kubernetes.client.configuration.host = host
-    kubernetes.client.configuration.user = username
-    kubernetes.client.configuration.passwd = password
-
-    if ca_cert_file:
-        kubernetes.client.configuration.ssl_ca_cert = ca_cert_file
-    elif ca_cert:
-        with tempfile.NamedTemporaryFile(prefix="salt-kube-", delete=False) as ca:
-            ca.write(base64.b64decode(ca_cert))
-            kubernetes.client.configuration.ssl_ca_cert = ca.name
-    else:
-        kubernetes.client.configuration.ssl_ca_cert = None
-
-    if client_cert_file:
-        kubernetes.client.configuration.cert_file = client_cert_file
-    elif client_cert:
-        with tempfile.NamedTemporaryFile(prefix="salt-kube-", delete=False) as c:
-            c.write(base64.b64decode(client_cert))
-            kubernetes.client.configuration.cert_file = c.name
-    else:
-        kubernetes.client.configuration.cert_file = None
-
-    if client_key_file:
-        kubernetes.client.configuration.key_file = client_key_file
-    elif client_key:
-        with tempfile.NamedTemporaryFile(prefix="salt-kube-", delete=False) as k:
-            k.write(base64.b64decode(client_key))
-            kubernetes.client.configuration.key_file = k.name
-    else:
-        kubernetes.client.configuration.key_file = None
-    return {}
-
-
-# pylint: disable=no-member
-def _setup_conn(**kwargs):
+def _setup_conn(**_kwargs):
     """
     Setup kubernetes API connection singleton
     """
@@ -195,44 +120,18 @@ def _setup_conn(**kwargs):
             kubeconfig = kcfg.name
 
     if not (kubeconfig and context):
-        if __salt__["config.option"]("kubernetes.api_url"):
-            try:
-                return _setup_conn_old(**kwargs)
-            except Exception:  # pylint: disable=broad-except
-                raise CommandExecutionError(
-                    "Old style kubernetes configuration is only supported up to"
-                    " python-kubernetes 2.0.0"
-                )
-        else:
-            raise CommandExecutionError(
-                "Invalid kubernetes configuration. Parameter 'kubeconfig' and 'context'"
-                " are required."
-            )
+        raise CommandExecutionError(
+            "Invalid kubernetes configuration. Parameter 'kubeconfig' and 'context'"
+            " are required."
+        )
+
     kubernetes.config.load_kube_config(config_file=kubeconfig, context=context)
 
     # The return makes unit testing easier
     return {"kubeconfig": kubeconfig, "context": context}
 
 
-def _cleanup_old():
-    try:
-        ca = kubernetes.client.configuration.ssl_ca_cert
-        cert = kubernetes.client.configuration.cert_file
-        key = kubernetes.client.configuration.key_file
-        if cert and os.path.exists(cert) and os.path.basename(cert).startswith("salt-kube-"):
-            salt.utils.files.safe_rm(cert)
-        if key and os.path.exists(key) and os.path.basename(key).startswith("salt-kube-"):
-            salt.utils.files.safe_rm(key)
-        if ca and os.path.exists(ca) and os.path.basename(ca).startswith("salt-kube-"):
-            salt.utils.files.safe_rm(ca)
-    except Exception:  # pylint: disable=broad-except
-        pass
-
-
 def _cleanup(**kwargs):
-    if not kwargs:
-        return _cleanup_old()
-
     if "kubeconfig" in kwargs:
         kubeconfig = kwargs.get("kubeconfig")
         if kubeconfig and os.path.basename(kubeconfig).startswith("salt-kubeconfig-"):
@@ -356,19 +255,22 @@ def node_add_label(node_name, label_name, label_value, **kwargs):
     cfg = _setup_conn(**kwargs)
     try:
         api_instance = kubernetes.client.CoreV1Api()
+        # First verify the node exists
+        try:
+            api_instance.read_node(node_name)
+        except ApiException as exc:
+            if exc.status == 404:
+                raise CommandExecutionError(f"Node {node_name} not found") from exc
+            raise
+
         body = {"metadata": {"labels": {label_name: label_value}}}
         api_response = api_instance.patch_node(node_name, body)
         return api_response
     except (ApiException, HTTPError) as exc:
-        if isinstance(exc, ApiException) and exc.status == 404:
-            return None
-        else:
-            log.exception("Exception when calling CoreV1Api->patch_node")
-            raise CommandExecutionError(exc)
+        log.exception("Exception when calling CoreV1Api->patch_node")
+        raise CommandExecutionError(str(exc))
     finally:
         _cleanup(**cfg)
-
-    return None
 
 
 def node_remove_label(node_name, label_name, **kwargs):
@@ -496,11 +398,10 @@ def pods(namespace="default", **kwargs):
     try:
         api_instance = kubernetes.client.CoreV1Api()
         api_response = api_instance.list_namespaced_pod(namespace)
-
-        return [pod["metadata"]["name"] for pod in api_response.to_dict().get("items")]
+        return [pod["metadata"]["name"] for pod in api_response.to_dict().get("items", [])]
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
-            return None
+            return []  # Return empty list for nonexistent namespace
         else:
             log.exception("Exception when calling CoreV1Api->list_namespaced_pod")
             raise CommandExecutionError(exc)
@@ -551,10 +452,12 @@ def configmaps(namespace="default", **kwargs):
         api_instance = kubernetes.client.CoreV1Api()
         api_response = api_instance.list_namespaced_config_map(namespace)
 
-        return [secret["metadata"]["name"] for secret in api_response.to_dict().get("items")]
+        return [
+            configmap["metadata"]["name"] for configmap in api_response.to_dict().get("items", [])
+        ]
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
-            return None
+            return []  # Return empty list for nonexistent namespace
         else:
             log.exception("Exception when calling CoreV1Api->list_namespaced_config_map")
             raise CommandExecutionError(exc)
@@ -652,19 +555,25 @@ def show_namespace(name, **kwargs):
     .. code-block:: bash
 
         salt '*' kubernetes.show_namespace kube-system
+
+    Raises:
+        CommandExecutionError: If there is an error retrieving the namespace information
     """
     cfg = _setup_conn(**kwargs)
+
     try:
         api_instance = kubernetes.client.CoreV1Api()
         api_response = api_instance.read_namespace(name)
-
         return api_response.to_dict()
-    except (ApiException, HTTPError) as exc:
-        if isinstance(exc, ApiException) and exc.status == 404:
+    except ApiException as exc:
+        if exc.status == 404:
             return None
         else:
             log.exception("Exception when calling CoreV1Api->read_namespace")
-            raise CommandExecutionError(exc)
+            raise CommandExecutionError(exc) from exc
+    except HTTPError as exc:
+        log.exception("HTTP error occurred")
+        raise CommandExecutionError(exc) from exc
     finally:
         _cleanup(**cfg)
 
@@ -687,13 +596,18 @@ def show_secret(name, namespace="default", decode=False, **kwargs):
     try:
         api_instance = kubernetes.client.CoreV1Api()
         api_response = api_instance.read_namespaced_secret(name, namespace)
+        response_dict = api_response.to_dict()
 
-        if api_response.data and (decode or decode == "True"):
-            for key in api_response.data:
-                value = api_response.data[key]
-                api_response.data[key] = base64.b64decode(value)
+        if response_dict.get("data") and (decode or decode == "True"):
+            decoded_data = {}
+            for key, value in response_dict["data"].items():
+                try:
+                    decoded_data[key] = base64.b64decode(value).decode("utf-8")
+                except UnicodeDecodeError:
+                    decoded_data[key] = base64.b64decode(value)
+            response_dict["data"] = decoded_data
 
-        return api_response.to_dict()
+        return response_dict
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
             return None
@@ -852,6 +766,9 @@ def delete_namespace(name, **kwargs):
 
         salt '*' kubernetes.delete_namespace salt
         salt '*' kubernetes.delete_namespace name=salt
+
+    Raises:
+        CommandExecutionError: If the namespace deletion fails or is forbidden
     """
     cfg = _setup_conn(**kwargs)
     body = kubernetes.client.V1DeleteOptions(orphan_dependents=True)
@@ -860,12 +777,16 @@ def delete_namespace(name, **kwargs):
         api_instance = kubernetes.client.CoreV1Api()
         api_response = api_instance.delete_namespace(name=name, body=body)
         return api_response.to_dict()
-    except (ApiException, HTTPError) as exc:
-        if isinstance(exc, ApiException) and exc.status == 404:
+    except ApiException as exc:
+        if exc.status == 404:
             return None
-        else:
-            log.exception("Exception when calling CoreV1Api->delete_namespace")
-            raise CommandExecutionError(exc)
+        if exc.status == 403:
+            raise CommandExecutionError(f"Cannot delete namespace {name}: {exc.reason}") from exc
+        log.exception("Exception when calling CoreV1Api->delete_namespace")
+        raise CommandExecutionError(exc) from exc
+    except HTTPError as exc:
+        log.exception("HTTP error occurred")
+        raise CommandExecutionError(exc) from exc
     finally:
         _cleanup(**cfg)
 
@@ -977,13 +898,27 @@ def create_deployment(
 
 def create_pod(name, namespace, metadata, spec, source, template, saltenv, context=None, **kwargs):
     """
-    Creates the kubernetes deployment as defined by the user.
+    Creates a kubernetes pod as defined by the user.
 
-    CLI Example:
+    Args:
+        name: The name of the pod
+        namespace: The namespace to create the pod in
+        metadata: Pod metadata dict
+        spec: Pod spec dict following kubernetes API conventions
+        source: File path to pod definition
+        template: Template engine to use to render the source file
+        saltenv: Salt environment to pull the source file from
+        context: Variables to make available in templated files
+        **kwargs: Extra arguments to pass to the API call
 
-    .. code-block:: bash
+    Pod spec must follow kubernetes API conventions:
+        ports:
+          - containerPort: 8080
+            name: http
+            protocol: TCP
 
-        salt '*' kubernetes.create_pod *args
+    CLI Examples:
+
     """
     body = __create_object_body(
         kind="Pod",
@@ -1022,11 +957,40 @@ def create_service(
     """
     Creates the kubernetes service as defined by the user.
 
-    CLI Example:
+    Args:
+        name: The name of the service
+        namespace: The namespace to create the service in
+        metadata: Service metadata dict
+        spec: Service spec dict that follows kubernetes API conventions
+        source: File path to service definition
+        template: Template engine to use to render the source file
+        saltenv: Salt environment to pull the source file from
+        context: Variables to make available in templated files
+        **kwargs: Extra arguments to pass to the API call
+
+    Service spec must follow kubernetes API conventions. Port specifications can be:
+    - Simple integer for basic port definition: [80, 443]
+    - Dictionary for advanced configuration:
+        ports:
+          - port: 80
+            targetPort: 8080
+            name: http    # Required if multiple ports are specified
+          - port: 443
+            targetPort: web-https  # targetPort can reference container port names
+            name: https
+            nodePort: 30443       # nodePort must be between 30000-32767
+
+    CLI Examples:
 
     .. code-block:: bash
 
-        salt '*' kubernetes.create_service *args
+        salt '*' kubernetes.create_service name=nginx namespace=default spec='{"ports": [80]}'
+
+        salt '*' kubernetes.create_service name=nginx namespace=default spec='{
+            "ports": [{"port": 80, "targetPort": 8000, "name": "http"}],
+            "selector": {"app": "nginx"},
+            "type": "LoadBalancer"
+        }'
     """
     body = __create_object_body(
         kind="Service",
@@ -1067,6 +1031,7 @@ def create_secret(
     template=None,
     saltenv="base",
     context=None,
+    type=None,
     **kwargs,
 ):
     """
@@ -1084,30 +1049,72 @@ def create_secret(
         # For secrets with pre-encoded values
         salt 'minion2' kubernetes.create_secret \
             name=passwords namespace=default data='{"db": "bGV0bWVpbg=="}'
+
+        # For docker registry secrets
+        salt 'minion3' kubernetes.create_secret \
+            name=docker-registry \
+            type=kubernetes.io/dockerconfigjson \
+            data='{".dockerconfigjson": "{\"auths\":{...}}"}'
+
+        # For TLS secrets
+        salt 'minion4' kubernetes.create_secret \
+            name=tls-secret \
+            type=kubernetes.io/tls \
+            data='{"tls.crt": "...", "tls.key": "..."}'
     """
     if source:
         src_obj = __read_and_render_yaml_file(source, template, saltenv, context)
-        if isinstance(src_obj, dict) and "data" in src_obj:
-            data = src_obj["data"]
+        if isinstance(src_obj, dict):
+            if "data" in src_obj:
+                data = src_obj["data"]
+            secret_type = src_obj.get("type", "Opaque")
     elif data is None:
         data = {}
 
+    # Use passed type parameter if provided, otherwise default to Opaque
+    secret_type = (
+        type if type is not None else secret_type if "secret_type" in locals() else "Opaque"
+    )
+
+    # Validate required fields for specific secret types
+    if secret_type == "kubernetes.io/dockerconfigjson":
+        if not data or ".dockerconfigjson" not in data:
+            raise CommandExecutionError(
+                'Docker registry secret must contain ".dockerconfigjson" key'
+            )
+    elif secret_type == "kubernetes.io/tls":
+        if not data or "tls.crt" not in data or "tls.key" not in data:
+            raise CommandExecutionError('TLS secret must contain both "tls.crt" and "tls.key"')
+
     data = __enforce_only_strings_dict(data)
+
+    # Check if secret already exists
+    try:
+        api_instance = kubernetes.client.CoreV1Api()
+        existing_secret = api_instance.read_namespaced_secret(name, namespace)
+        if existing_secret:
+            raise CommandExecutionError(
+                f"Secret {name} already exists in namespace {namespace}. Use replace_secret to update it."
+            )
+    except ApiException as exc:
+        if exc.status != 404:  # Only 404 (not found) is expected
+            raise CommandExecutionError(f"Error checking for existing secret: {exc}")
 
     # Encode the secrets using base64 if not already encoded
     encoded_data = {}
     for key, value in data.items():
-        if isinstance(value, bytes):
-            encoded_data[key] = base64.b64encode(value).decode("utf-8")
-        else:
-            str_value = str(value)
-            if __is_base64(str_value):
-                encoded_data[key] = str_value
+        if isinstance(value, str):
+            if __is_base64(value):
+                encoded_data[key] = value
             else:
-                encoded_data[key] = base64.b64encode(str_value.encode("utf-8")).decode("utf-8")
+                encoded_data[key] = base64.b64encode(value.encode("utf-8")).decode("utf-8")
+        else:
+            # Convert to string first, then encode
+            str_value = str(value)
+            encoded_data[key] = base64.b64encode(str_value.encode("utf-8")).decode("utf-8")
 
     body = kubernetes.client.V1Secret(
-        metadata=__dict_to_object_meta(name, namespace, {}), data=encoded_data
+        metadata=__dict_to_object_meta(name, namespace, {}), data=encoded_data, type=secret_type
     )
 
     cfg = _setup_conn(**kwargs)
@@ -1115,14 +1122,17 @@ def create_secret(
     try:
         api_instance = kubernetes.client.CoreV1Api()
         api_response = api_instance.create_namespaced_secret(namespace, body)
-
         return api_response.to_dict()
     except (ApiException, HTTPError) as exc:
-        if isinstance(exc, ApiException) and exc.status == 404:
-            return None
-        else:
-            log.exception("Exception when calling CoreV1Api->create_namespaced_secret")
-            raise CommandExecutionError(exc)
+        if isinstance(exc, ApiException):
+            if exc.status == 409:  # Conflict - secret already exists
+                raise CommandExecutionError(
+                    f"Secret {name} already exists in namespace {namespace}. Use replace_secret to update it."
+                )
+            if exc.status == 404:
+                return None
+        log.exception("Exception when calling CoreV1Api->create_namespaced_secret")
+        raise CommandExecutionError(str(exc))
     finally:
         _cleanup(**cfg)
 
@@ -1147,6 +1157,9 @@ def create_configmap(
         data = __read_and_render_yaml_file(source, template, saltenv, context)
     elif data is None:
         data = {}
+
+    if not isinstance(data, dict):
+        raise CommandExecutionError("Data must be a dictionary")
 
     data = __enforce_only_strings_dict(data)
 
@@ -1181,8 +1194,10 @@ def create_namespace(name, **kwargs):
 
         salt '*' kubernetes.create_namespace salt
         salt '*' kubernetes.create_namespace name=salt
-    """
 
+    Raises:
+        CommandExecutionError: If the namespace creation fails, already exists, or has invalid name
+    """
     meta_obj = kubernetes.client.V1ObjectMeta(name=name)
     body = kubernetes.client.V1Namespace(metadata=meta_obj)
     body.metadata.name = name
@@ -1192,14 +1207,17 @@ def create_namespace(name, **kwargs):
     try:
         api_instance = kubernetes.client.CoreV1Api()
         api_response = api_instance.create_namespace(body)
-
         return api_response.to_dict()
-    except (ApiException, HTTPError) as exc:
-        if isinstance(exc, ApiException) and exc.status == 404:
-            return None
-        else:
-            log.exception("Exception when calling CoreV1Api->create_namespace")
-            raise CommandExecutionError(exc)
+    except ApiException as exc:
+        if exc.status == 409:
+            raise CommandExecutionError(f"Namespace {name} already exists: {exc.reason}") from exc
+        if exc.status == 422:
+            raise CommandExecutionError(f"Invalid namespace name {name}: {exc.reason}") from exc
+        log.exception("Exception when calling CoreV1Api->create_namespace")
+        raise CommandExecutionError(exc) from exc
+    except HTTPError as exc:
+        log.exception("HTTP error occurred")
+        raise CommandExecutionError(exc) from exc
     finally:
         _cleanup(**cfg)
 
@@ -1333,10 +1351,15 @@ def replace_secret(
         salt 'minion2' kubernetes.replace_secret \
             name=passwords data='{"db": "bGV0bWVpbg=="}'
 
-        # For docker registry secrets using a template
+        # For docker registry secrets
         salt 'minion3' kubernetes.replace_secret \
             name=docker-registry \
-            source=/path/to/secret.yaml
+            source=/path/to/docker-secret.yaml
+
+        # For TLS secrets
+        salt 'minion4' kubernetes.replace_secret \
+            name=tls-secret \
+            source=/path/to/tls-secret.yaml
     """
     if source:
         src_obj = __read_and_render_yaml_file(source, template, saltenv, context)
@@ -1363,9 +1386,15 @@ def replace_secret(
     # Use type from source/template if available, otherwise use existing/default
     secret_type = secret_type if source else existing_secret_type
 
-    # Validate docker registry secrets
-    if secret_type == "kubernetes.io/dockerconfigjson" and ".dockerconfigjson" not in data:
-        raise CommandExecutionError("Docker registry secret must contain '.dockerconfigjson' key")
+    # Validate required fields for specific secret types
+    if secret_type == "kubernetes.io/dockerconfigjson":
+        if not data or ".dockerconfigjson" not in data:
+            raise CommandExecutionError(
+                'Docker registry secret must contain ".dockerconfigjson" key'
+            )
+    elif secret_type == "kubernetes.io/tls":
+        if not data or "tls.crt" not in data or "tls.key" not in data:
+            raise CommandExecutionError('TLS secret must contain both "tls.crt" and "tls.key"')
 
     # Encode the secrets using base64 if not already encoded
     encoded_data = {}
@@ -1394,7 +1423,7 @@ def replace_secret(
             return None
         else:
             log.exception("Exception when calling CoreV1Api->replace_namespaced_secret")
-            raise CommandExecutionError(exc)
+            raise CommandExecutionError(str(exc))
     finally:
         _cleanup(**cfg)
 
@@ -1451,11 +1480,13 @@ def replace_configmap(
 
 def __is_base64(value):
     """
-    Check if a string is base64 encoded.
+    Check if a string is base64 encoded by attempting to decode it.
     """
     try:
-        # Attempt to decode - if successful and result can be encoded back to same value, it's base64
+        if not isinstance(value, str):
+            return False
         decoded = base64.b64decode(value)
+        # Try encoding back to verify it's legitimate base64
         return base64.b64encode(decoded).decode("utf-8") == value
     except Exception:  # pylint: disable=broad-except
         return False
@@ -1487,9 +1518,19 @@ def __create_object_body(
         if "spec" in src_obj:
             spec = src_obj["spec"]
 
+    if metadata is None:
+        metadata = {}
+    if spec is None:
+        spec = {}
+
+    try:
+        created_spec = spec_creator(spec)
+    except (ValueError, TypeError) as exc:
+        raise CommandExecutionError(f"Invalid {kind} spec: {exc}")
+
     return obj_class(
         metadata=__dict_to_object_meta(name, namespace, metadata),
-        spec=spec_creator(spec),
+        spec=created_spec,
     )
 
 
@@ -1567,49 +1608,259 @@ def __dict_to_deployment_spec(spec):
     """
     Converts a dictionary into kubernetes V1DeploymentSpec instance.
     """
-    spec_obj = V1DeploymentSpec(
-        template=spec.get("template", ""),
-        selector=spec.get("selector", {"matchLabels": {"app": "default"}}),
-    )
-    for key, value in spec.items():
-        if hasattr(spec_obj, key):
-            setattr(spec_obj, key, value)
+    if not isinstance(spec, dict):
+        raise CommandExecutionError(
+            f"Deployment spec must be a dictionary, not {type(spec).__name__}"
+        )
 
-    return spec_obj
+    processed_spec = spec.copy()
+
+    # Validate required template field
+    if "template" not in processed_spec:
+        raise CommandExecutionError("Deployment spec must include template with pod specification")
+
+    template = processed_spec["template"]
+    template_metadata = template.get("metadata", {})
+    template_labels = template_metadata.get("labels", {})
+
+    # Handle selector
+    if "selector" not in processed_spec:
+        if not template_labels:
+            raise CommandExecutionError(
+                "Template must include labels when selector is not specified"
+            )
+        processed_spec["selector"] = {"match_labels": template_labels}
+    else:
+        selector = processed_spec["selector"]
+        if not selector or not selector.get("matchLabels"):
+            raise CommandExecutionError("Deployment selector must include matchLabels")
+        if not all(template_labels.get(k) == v for k, v in selector["matchLabels"].items()):
+            raise CommandExecutionError("selector.matchLabels must match template metadata.labels")
+
+    # Convert selector format
+    if "matchLabels" in processed_spec["selector"]:
+        processed_spec["selector"] = {"match_labels": processed_spec["selector"]["matchLabels"]}
+
+    # Create pod spec
+    try:
+        pod_spec = __dict_to_pod_spec(template["spec"])
+    except (CommandExecutionError, ValueError) as exc:
+        raise CommandExecutionError(f"Invalid pod spec in deployment template: {exc}")
+
+    # Create pod template
+    pod_template = kubernetes.client.V1PodTemplateSpec(
+        metadata=kubernetes.client.V1ObjectMeta(**template_metadata), spec=pod_spec
+    )
+    processed_spec["template"] = pod_template
+
+    # Create selector object
+    processed_spec["selector"] = kubernetes.client.V1LabelSelector(**processed_spec["selector"])
+
+    # Handle replicas conversion
+    if "replicas" in processed_spec:
+        try:
+            processed_spec["replicas"] = int(processed_spec["replicas"])
+        except (TypeError, ValueError) as exc:
+            raise CommandExecutionError(f"replicas must be an integer: {exc}")
+
+    # Create final spec
+    try:
+        return V1DeploymentSpec(**processed_spec)
+    except (TypeError, ValueError) as exc:
+        raise CommandExecutionError(f"Invalid deployment spec: {exc}")
 
 
 def __dict_to_pod_spec(spec):
     """
     Converts a dictionary into kubernetes V1PodSpec instance.
     """
-    spec_obj = kubernetes.client.V1PodSpec()
-    for key, value in spec.items():
-        if hasattr(spec_obj, key):
-            setattr(spec_obj, key, value)
+    if spec is None:
+        raise CommandExecutionError("Pod spec cannot be None")
 
-    return spec_obj
+    # Directly return if already a V1PodSpec
+    if isinstance(spec, kubernetes.client.V1PodSpec):
+        return spec
+    if not isinstance(spec, dict):
+        raise CommandExecutionError(f"Pod spec must be a dictionary, not {type(spec).__name__}")
+
+    processed_spec = spec.copy()
+
+    # Validate containers
+    if not processed_spec.get("containers"):
+        raise CommandExecutionError("Pod spec must include at least one container")
+
+    if not isinstance(processed_spec["containers"], list):
+        raise CommandExecutionError(
+            f"containers must be a list, not {type(processed_spec['containers']).__name__}"
+        )
+
+    # Convert container specs
+    containers = []
+    for i, container in enumerate(processed_spec["containers"]):
+        if not isinstance(container, dict):
+            raise CommandExecutionError(
+                f"Container {i} must be a dictionary, not {type(container).__name__}"
+            )
+
+        container_copy = container.copy()
+        if not container_copy.get("name"):
+            raise CommandExecutionError(f"Container {i} must specify 'name'")
+        if not container_copy.get("image"):
+            raise CommandExecutionError(f"Container {i} must specify 'image'")
+
+        # Handle ports
+        if "ports" in container_copy:
+            ports = container_copy["ports"]
+            if not isinstance(ports, list):
+                raise CommandExecutionError(
+                    f"Container {container_copy['name']} ports must be a list"
+                )
+
+            processed_ports = []
+            for port in ports:
+                if isinstance(port, dict):
+                    port_copy = port.copy()
+                    # Handle containerPort conversion
+                    if "containerPort" in port_copy:
+                        try:
+                            port_copy["container_port"] = int(port_copy.pop("containerPort"))
+                        except (TypeError, ValueError) as exc:
+                            raise CommandExecutionError(
+                                f"containerPort in container {container_copy['name']} must be an integer: {exc}"
+                            )
+                    processed_ports.append(kubernetes.client.V1ContainerPort(**port_copy))
+                else:
+                    raise CommandExecutionError(
+                        f"Port in container {container_copy['name']} must be a dictionary"
+                    )
+            container_copy["ports"] = processed_ports
+
+        containers.append(kubernetes.client.V1Container(**container_copy))
+
+    processed_spec["containers"] = containers
+
+    # Handle imagePullSecrets field
+    if "imagePullSecrets" in processed_spec:
+        image_pull_secrets = processed_spec.pop("imagePullSecrets")
+        if not isinstance(image_pull_secrets, list):
+            raise CommandExecutionError("imagePullSecrets must be a list")
+
+        processed_secrets = []
+        for secret in image_pull_secrets:
+            if isinstance(secret, dict):
+                processed_secrets.append(kubernetes.client.V1LocalObjectReference(**secret))
+            else:
+                raise CommandExecutionError(
+                    f"Each imagePullSecret must be a dictionary, not {type(secret).__name__}"
+                )
+        processed_spec["image_pull_secrets"] = processed_secrets
+
+    try:
+        return kubernetes.client.V1PodSpec(**processed_spec)
+    except (TypeError, ValueError) as exc:
+        raise CommandExecutionError(f"Invalid pod spec: {exc}")
 
 
 def __dict_to_service_spec(spec):
     """
     Converts a dictionary into kubernetes V1ServiceSpec instance.
+
+    Args:
+        spec: Service specification dictionary following kubernetes API conventions
+
+    Returns:
+        kubernetes.client.V1ServiceSpec: The converted service spec
+
+    Raises:
+        CommandExecutionError: If the spec is invalid or missing required fields
     """
+    if not isinstance(spec, dict):
+        raise CommandExecutionError(f"Service spec must be a dictionary, got {type(spec)}")
+
+    # Validate required fields
+    if "ports" not in spec:
+        raise CommandExecutionError("Service spec must include 'ports'")
+
+    if not isinstance(spec["ports"], list):
+        raise CommandExecutionError("Service ports must be a list")
+
+    # Validate service type if specified
+    valid_service_types = {"ClusterIP", "ExternalName", "LoadBalancer", "NodePort"}
+    if "type" in spec and spec["type"] not in valid_service_types:
+        raise CommandExecutionError(
+            f"Invalid service type: {spec['type']}. Must be one of: {', '.join(sorted(valid_service_types))}"
+        )
+
     spec_obj = kubernetes.client.V1ServiceSpec()
-    for key, value in spec.items():  # pylint: disable=too-many-nested-blocks
+    for key, value in spec.items():
         if key == "ports":
             spec_obj.ports = []
-            for port in value:
-                if isinstance(port, dict):
-                    if "port" not in port:
-                        raise CommandExecutionError("Service port must specify 'port' value")
+            # Validate port specifications
+            has_multiple_ports = len(value) > 1
 
-                    kube_port = kubernetes.client.V1ServicePort(port=port["port"])
-                    for port_key, port_value in port.items():
-                        if port_key != "port" and hasattr(kube_port, port_key):
-                            setattr(kube_port, port_key, port_value)
+            for i, port in enumerate(value):
+                if not isinstance(port, dict):
+                    try:
+                        # Allow simple integer port definitions
+                        kube_port = kubernetes.client.V1ServicePort(port=int(port))
+                    except (TypeError, ValueError) as exc:
+                        raise CommandExecutionError(
+                            f"Invalid port specification at index {i}: {exc}"
+                        )
                 else:
-                    kube_port = kubernetes.client.V1ServicePort(port=int(port))
+                    # Verify required fields for port
+                    if "port" not in port:
+                        raise CommandExecutionError(
+                            f"Service port at index {i} must specify 'port' value"
+                        )
+
+                    try:
+                        port_num = int(port["port"])
+                    except (TypeError, ValueError) as exc:
+                        raise CommandExecutionError(f"Invalid port number at index {i}: {exc}")
+
+                    # Create port object
+                    kube_port = kubernetes.client.V1ServicePort(port=port_num)
+
+                    # Validate name requirement for multi-port services
+                    if has_multiple_ports and "name" not in port:
+                        raise CommandExecutionError(
+                            f"Port at index {i} must specify 'name' in multi-port service"
+                        )
+
+                    # Validate nodePort range if specified
+                    if "nodePort" in port:
+                        try:
+                            node_port = int(port["nodePort"])
+                            if not 30000 <= node_port <= 32767:
+                                raise CommandExecutionError(
+                                    f"NodePort {node_port} at index {i} must be between 30000-32767"
+                                )
+                        except (TypeError, ValueError) as exc:
+                            raise CommandExecutionError(
+                                f"Invalid nodePort value at index {i}: {exc}"
+                            )
+
+                    # Copy remaining port attributes
+                    for port_key, port_value in port.items():
+                        if port_key != "port":
+                            if port_key in ["nodePort", "targetPort"]:
+                                try:
+                                    if isinstance(port_value, str) and not port_value.isdigit():
+                                        # Allow string targetPort for named ports
+                                        if port_key != "targetPort":
+                                            port_value = int(port_value)
+                                    elif isinstance(port_value, (int, str)):
+                                        port_value = int(port_value)
+                                except (TypeError, ValueError) as exc:
+                                    raise CommandExecutionError(
+                                        f"Invalid {port_key} value at index {i}: {exc}"
+                                    )
+                            if hasattr(kube_port, port_key):
+                                setattr(kube_port, port_key, port_value)
+
                 spec_obj.ports.append(kube_port)
+
         elif hasattr(spec_obj, key):
             setattr(spec_obj, key, value)
 
@@ -1619,10 +1870,13 @@ def __dict_to_service_spec(spec):
 def __enforce_only_strings_dict(dictionary):
     """
     Returns a dictionary that has string keys and values.
+    Only converts non-string values to strings.
     """
     ret = {}
 
     for key, value in dictionary.items():
-        ret[str(key)] = str(value)
+        ret[str(key) if not isinstance(key, str) else key] = (
+            str(value) if not isinstance(value, str) else value
+        )
 
     return ret

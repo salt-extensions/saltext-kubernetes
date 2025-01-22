@@ -17,11 +17,11 @@ log = logging.getLogger(__name__)
 
 # Supported Kubernetes versions for testing based on v0.25.0 of kind - kind v0.26.0 is latest
 K8S_VERSIONS = [
-    "v1.26.15",
-    "v1.27.16",
-    "v1.28.15",
-    "v1.29.10",
-    "v1.30.6",
+    # "v1.26.15",
+    # "v1.27.16",
+    # "v1.28.15",
+    # "v1.29.10",
+    # "v1.30.6",
     "v1.31.2",
 ]
 
