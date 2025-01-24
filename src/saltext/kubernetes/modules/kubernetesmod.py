@@ -1064,6 +1064,7 @@ def create_secret(
             type=kubernetes.io/tls \
             data='{"tls.crt": "...", "tls.key": "..."}'
     """
+    cfg = _setup_conn(**kwargs)
     if source:
         src_obj = __read_and_render_yaml_file(source, template, saltenv, context)
         if isinstance(src_obj, dict):

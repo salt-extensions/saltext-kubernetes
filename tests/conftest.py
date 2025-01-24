@@ -1,5 +1,4 @@
 import logging
-import os
 import subprocess
 import time
 
@@ -31,24 +30,40 @@ for handler in logging.root.handlers[:]:  # pragma: no cover
     handler.close()
 
 
-@pytest.fixture(scope="session")
-def salt_factories_config():  # pragma: no cover
+@pytest.fixture(scope="package")
+def pillar_tree(tmp_path_factory):
     """
-    Return a dictionary with the keyword arguments for FactoriesManager
+    Create a pillar tree in a temporary directory.
     """
-    return {
-        "code_dir": str(PACKAGE_ROOT),
-        "inject_sitecustomize": "COVERAGE_PROCESS_START" in os.environ,
-        "start_timeout": 120 if os.environ.get("CI") else 60,
-    }
+    pillar_tree = tmp_path_factory.mktemp("pillar")
+    top_file = pillar_tree / "top.sls"
+    kubernetes_file = pillar_tree / "kubernetes.sls"
+
+    # Create default top file
+    top_file.write_text(
+        """
+base:
+  '*':
+    - kubernetes
+"""
+    )
+
+    # Create empty kubernetes pillar file
+    kubernetes_file.write_text("")
+
+    return pillar_tree
 
 
 @pytest.fixture(scope="package")
-def master_config():  # pragma: no cover
-    """
-    Salt master configuration overrides for integration tests.
-    """
-    return {}
+def master_config(pillar_tree):
+    """Salt master configuration overrides for integration tests."""
+    return {
+        "pillar_roots": {
+            "base": [str(pillar_tree)],
+        },
+        "open_mode": True,
+        "timeout": 120,
+    }
 
 
 @pytest.fixture(scope="package")
@@ -57,11 +72,18 @@ def master(salt_factories, master_config):  # pragma: no cover
 
 
 @pytest.fixture(scope="package")
-def minion_config():  # pragma: no cover
-    """
-    Salt minion configuration overrides for integration tests.
-    """
-    return {}
+def minion_config(kind_cluster):
+    """Salt minion configuration overrides for integration tests."""
+    return {
+        "kubernetes.kubeconfig": str(kind_cluster.kubeconfig_path),
+        "kubernetes.context": "kind-salt-test",
+        "file_roots": {
+            "base": [str(PACKAGE_ROOT)],
+        },
+        "providers": {
+            "pkg": "kubernetes",
+        },
+    }
 
 
 @pytest.fixture(scope="package")
@@ -77,10 +99,10 @@ def kind_cluster(request):  # pylint: disable=too-many-statements
         cluster.create()
 
         # Initial wait for cluster to start
-        time.sleep(5)
+        time.sleep(10)  # Increased initial wait
 
         # Wait for and validate cluster readiness using kubectl
-        retries = 6
+        retries = 12  # Increased retries
         context = "kind-salt-test"
         while retries > 0:
             try:
@@ -100,23 +122,16 @@ def kind_cluster(request):  # pylint: disable=too-many-statements
                     text=True,
                 )
 
-                # Check node readiness
-                nodes_output = subprocess.run(
+                # Wait longer for node readiness
+                subprocess.run(
                     kubectl_cmd
-                    + [
-                        "get",
-                        "nodes",
-                        "-o=jsonpath='{.items[*].status.conditions[?(@.type==\"Ready\")].status}'",
-                    ],
+                    + ["wait", "--for=condition=ready", "nodes", "--all", "--timeout=120s"],
                     check=True,
                     capture_output=True,
                     text=True,
                 )
 
-                if "True" not in nodes_output.stdout:
-                    raise subprocess.CalledProcessError(1, "kubectl", "Nodes not ready")
-
-                # Verify core services are running
+                # Verify core services are running with longer timeout
                 subprocess.run(
                     kubectl_cmd
                     + [
@@ -126,7 +141,7 @@ def kind_cluster(request):  # pylint: disable=too-many-statements
                         "--all",
                         "-n",
                         "kube-system",
-                        "--timeout=60s",
+                        "--timeout=120s",
                     ],
                     check=True,
                     capture_output=True,
@@ -140,7 +155,7 @@ def kind_cluster(request):  # pylint: disable=too-many-statements
                     log.error("stdout: %s", exc.stdout)
                     log.error("stderr: %s", exc.stderr)
                     raise
-                time.sleep(5)
+                time.sleep(10)  # Increased sleep between retries
 
         yield cluster
     finally:
