@@ -372,7 +372,6 @@ def service_absent(name, namespace="default", **kwargs):
     namespace
         The name of the namespace
     """
-
     ret = {"name": name, "changes": {}, "result": False, "comment": ""}
 
     service = __salt__["kubernetes.show_service"](name, namespace, **kwargs)
@@ -387,17 +386,12 @@ def service_absent(name, namespace="default", **kwargs):
         ret["result"] = None
         return ret
 
-    res = __salt__["kubernetes.delete_service"](name, namespace, **kwargs)
-
     # The kubernetes module will raise an exception if there's an error
-    # If we get here, the delete was accepted
+    __salt__["kubernetes.delete_service"](name, namespace, **kwargs)
+
     ret["result"] = True
     ret["changes"] = {"kubernetes.service": {"new": "absent", "old": "present"}}
-    if res.get("code") is None:
-        ret["comment"] = "In progress"
-    else:
-        ret["comment"] = res.get("message", "Service deleted")
-
+    ret["comment"] = "Service deleted"
     return ret
 
 
@@ -731,7 +725,6 @@ def pod_absent(name, namespace="default", **kwargs):
     namespace
         The name of the namespace
     """
-
     ret = {"name": name, "changes": {}, "result": False, "comment": ""}
 
     pod = __salt__["kubernetes.show_pod"](name, namespace, **kwargs)
@@ -746,17 +739,12 @@ def pod_absent(name, namespace="default", **kwargs):
         ret["result"] = None
         return ret
 
-    res = __salt__["kubernetes.delete_pod"](name, namespace, **kwargs)
-    if res.get("code") == 200 or res.get("code") is None:
-        ret["result"] = True
-        ret["changes"] = {"kubernetes.pod": {"new": "absent", "old": "present"}}
-        if res.get("code") is None:
-            ret["comment"] = "In progress"
-        else:
-            ret["comment"] = res["message"]
-    else:
-        ret["comment"] = f"Something went wrong, response: {res}"
+    # The kubernetes module will raise an exception if there's an error
+    __salt__["kubernetes.delete_pod"](name, namespace, **kwargs)
 
+    ret["result"] = True
+    ret["changes"] = {"kubernetes.pod": {"new": "absent", "old": "present"}}
+    ret["comment"] = "Pod deleted"
     return ret
 
 

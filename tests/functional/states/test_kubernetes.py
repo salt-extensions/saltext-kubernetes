@@ -388,35 +388,40 @@ def test_pod_present_with_context(kubernetes, caplog, pod_template):
         "labels": {"app": "test"},
     }
 
-    # Create pod using context
-    result = kubernetes.pod_present(
-        name=test_pod,
-        namespace=namespace,
-        source=pod_template,
-        template="jinja",
-        context=context,
-    )
-    assert result["result"] is True
+    try:
+        # Create pod using context
+        result = kubernetes.pod_present(
+            name=test_pod,
+            namespace=namespace,
+            source=pod_template,
+            template="jinja",
+            context=context,
+        )
 
-    # TODO: This needs fixed to handle proper present functionality,
-    # but for now we will just assert False and the comment until
-    #  it is fixed in the state module.
-    # Run pod_present again to ensure it works if the pod already exists
-    result = kubernetes.pod_present(
-        name=test_pod,
-        namespace=namespace,
-        source=pod_template,
-        template="jinja",
-        context=context,
-    )
-    assert result["result"] is False
-    assert (
-        result["comment"]
-        == "salt is currently unable to replace a pod without deleting it. Please perform the removal of the pod requiring the 'pod_absent' state if this is the desired behaviour."
-    )
+        # The first creation should work
+        assert result["result"] is True
+        assert result["changes"], "Expected changes when creating pod"
 
-    # Cleanup
-    kubernetes.pod_absent(name=test_pod, namespace=namespace)
+        # TODO: This needs fixed to handle proper present functionality,
+        # but for now we will just assert False and the comment until
+        #  it is fixed in the state module.
+        # Run pod_present again to ensure it works if the pod already exists
+        result = kubernetes.pod_present(
+            name=test_pod,
+            namespace=namespace,
+            source=pod_template,
+            template="jinja",
+            context=context,
+        )
+        # This should return False with the expected message
+        assert result["result"] is False
+        assert "salt is currently unable to replace a pod" in result["comment"]
+
+    finally:
+        # Cleanup
+        kubernetes.pod_absent(name=test_pod, namespace=namespace)
+        # Add delay to ensure cleanup completes
+        time.sleep(5)
 
 
 def test_deployment_present(kubernetes, caplog):
