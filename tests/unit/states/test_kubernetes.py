@@ -11,7 +11,7 @@ import pytest
 import salt.utils.stringutils
 
 from saltext.kubernetes.modules import kubernetesmod
-from saltext.kubernetes.states import kubernetesmod as kubernetes
+from saltext.kubernetes.states import kubernetes
 
 pytestmark = [
     pytest.mark.skipif(

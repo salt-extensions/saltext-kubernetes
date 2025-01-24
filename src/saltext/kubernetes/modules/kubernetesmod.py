@@ -1597,7 +1597,7 @@ def __dict_to_object_meta(name, namespace, metadata):
             setattr(meta_obj, key, value)
 
     if meta_obj.name != name:
-        log.warning(
+        log.info(
             "The object already has a name attribute, overwriting it with "
             "the one defined inside of salt"
         )
