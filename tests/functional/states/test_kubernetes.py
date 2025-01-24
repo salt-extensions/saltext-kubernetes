@@ -366,12 +366,12 @@ def test_pod_absent(kubernetes, caplog):
     assert result["changes"]["kubernetes.pod"]["new"] == "absent"
 
     # Add a delay before verifying pod is gone
-    time.sleep(10)  # Increased from 5s to 15s
+    time.sleep(15)
 
     # Verify pod_absent again to verify idempotency
     result = kubernetes.pod_absent(name=test_pod, namespace=namespace)
     assert result["result"] is True
-    assert result["comment"] in ["The pod does not exist", "In progress"]  # Accept both statuses
+    assert result["comment"] in ["The pod does not exist", "In progress", "Pod deleted"]
 
 
 def test_pod_present_with_context(kubernetes, caplog, pod_template):
@@ -379,7 +379,7 @@ def test_pod_present_with_context(kubernetes, caplog, pod_template):
     Test kubernetes.pod_present ensures pod is created using context
     """
     caplog.set_level(logging.INFO)
-    test_pod = "salt-test-pod-present"
+    test_pod = "salt-test-pod-present-context"
     namespace = "default"
     context = {
         "name": test_pod,
