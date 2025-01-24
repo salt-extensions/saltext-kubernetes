@@ -175,6 +175,7 @@ def deployment_present(
     source="",
     template="",
     context=None,
+    saltenv="base",
     **kwargs,
 ):
     """
@@ -204,6 +205,9 @@ def deployment_present(
 
     context
         Variables to be passed into the template.
+
+    saltenv
+        The salt environment to use. Defaults to 'base'.
     """
     ret = {"name": name, "changes": {}, "result": False, "comment": ""}
 
@@ -230,7 +234,7 @@ def deployment_present(
             spec=spec,
             source=source,
             template=template,
-            saltenv=__env__,
+            saltenv=saltenv,
             context=context,
             **kwargs,
         )
@@ -250,7 +254,7 @@ def deployment_present(
             spec=spec,
             source=source,
             template=template,
-            saltenv=__env__,
+            saltenv=saltenv,
             context=context,
             **kwargs,
         )
@@ -268,6 +272,7 @@ def service_present(
     source="",
     template="",
     context=None,
+    saltenv="base",
     **kwargs,
 ):
     """
@@ -297,6 +302,9 @@ def service_present(
 
     context
         Variables to be passed into the template.
+
+    saltenv
+        The salt environment to use. Defaults to 'base'.
     """
     ret = {"name": name, "changes": {}, "result": False, "comment": ""}
 
@@ -323,7 +331,7 @@ def service_present(
             spec=spec,
             source=source,
             template=template,
-            saltenv=__env__,
+            saltenv=saltenv,
             context=context,
             **kwargs,
         )
@@ -344,7 +352,7 @@ def service_present(
             source=source,
             template=template,
             old_service=service,
-            saltenv=__env__,
+            saltenv=saltenv,
             context=context,
             **kwargs,
         )
@@ -380,12 +388,15 @@ def service_absent(name, namespace="default", **kwargs):
         return ret
 
     res = __salt__["kubernetes.delete_service"](name, namespace, **kwargs)
-    if res["code"] == 200:
-        ret["result"] = True
-        ret["changes"] = {"kubernetes.service": {"new": "absent", "old": "present"}}
-        ret["comment"] = res["message"]
+
+    # The kubernetes module will raise an exception if there's an error
+    # If we get here, the delete was accepted
+    ret["result"] = True
+    ret["changes"] = {"kubernetes.service": {"new": "absent", "old": "present"}}
+    if res.get("code") is None:
+        ret["comment"] = "In progress"
     else:
-        ret["comment"] = f"Something went wrong, response: {res}"
+        ret["comment"] = res.get("message", "Service deleted")
 
     return ret
 
@@ -495,7 +506,14 @@ def secret_absent(name, namespace="default", **kwargs):
 
 
 def secret_present(
-    name, namespace="default", data=None, source=None, template=None, context=None, **kwargs
+    name,
+    namespace="default",
+    data=None,
+    source=None,
+    template=None,
+    context=None,
+    saltenv="base",
+    **kwargs,
 ):
     """
     Ensures that the named secret is present inside of the specified namespace
@@ -520,6 +538,9 @@ def secret_present(
 
     context
         Variables to be passed into the template.
+
+    saltenv
+        The salt environment to use. Defaults to 'base'.
     """
     ret = {"name": name, "changes": {}, "result": False, "comment": ""}
 
@@ -542,7 +563,7 @@ def secret_present(
             data=data,
             source=source,
             template=template,
-            saltenv=__env__,
+            saltenv=saltenv,
             context=context,
             **kwargs,
         )
@@ -562,7 +583,7 @@ def secret_present(
             data=data,
             source=source,
             template=template,
-            saltenv=__env__,
+            saltenv=saltenv,
             context=context,
             **kwargs,
         )
@@ -615,7 +636,14 @@ def configmap_absent(name, namespace="default", **kwargs):
 
 
 def configmap_present(
-    name, namespace="default", data=None, source=None, template=None, context=None, **kwargs
+    name,
+    namespace="default",
+    data=None,
+    source=None,
+    template=None,
+    context=None,
+    saltenv="base",
+    **kwargs,
 ):
     """
     Ensures that the named configmap is present inside of the specified namespace
@@ -640,6 +668,9 @@ def configmap_present(
 
     context
         Variables to be passed into the template.
+
+    saltenv
+        The salt environment to use. Defaults to 'base'.
     """
     ret = {"name": name, "changes": {}, "result": False, "comment": ""}
 
@@ -661,7 +692,7 @@ def configmap_present(
             data=data,
             source=source,
             template=template,
-            saltenv=__env__,
+            saltenv=saltenv,
             context=context,
             **kwargs,
         )
@@ -680,7 +711,7 @@ def configmap_present(
             data=data,
             source=source,
             template=template,
-            saltenv=__env__,
+            saltenv=saltenv,
             context=context,
             **kwargs,
         )
@@ -716,10 +747,10 @@ def pod_absent(name, namespace="default", **kwargs):
         return ret
 
     res = __salt__["kubernetes.delete_pod"](name, namespace, **kwargs)
-    if res["code"] == 200 or res["code"] is None:
+    if res.get("code") == 200 or res.get("code") is None:
         ret["result"] = True
         ret["changes"] = {"kubernetes.pod": {"new": "absent", "old": "present"}}
-        if res["code"] is None:
+        if res.get("code") is None:
             ret["comment"] = "In progress"
         else:
             ret["comment"] = res["message"]
@@ -737,6 +768,7 @@ def pod_present(
     source="",
     template="",
     context=None,
+    saltenv="base",
     **kwargs,
 ):
     """
@@ -766,6 +798,9 @@ def pod_present(
 
     context
         Variables to be passed into the template.
+
+    saltenv
+        The salt environment to use. Defaults to 'base'.
     """
     ret = {"name": name, "changes": {}, "result": False, "comment": ""}
 
@@ -792,7 +827,7 @@ def pod_present(
             spec=spec,
             source=source,
             template=template,
-            saltenv=__env__,
+            saltenv=saltenv,
             context=context,
             **kwargs,
         )

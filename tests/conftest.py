@@ -1,7 +1,6 @@
 import logging
 import os
 import subprocess
-import sys
 import time
 
 import pytest
@@ -17,11 +16,11 @@ log = logging.getLogger(__name__)
 
 # Supported Kubernetes versions for testing based on v0.25.0 of kind - kind v0.26.0 is latest
 K8S_VERSIONS = [
-    # "v1.26.15",
-    # "v1.27.16",
-    # "v1.28.15",
-    # "v1.29.10",
-    # "v1.30.6",
+    "v1.26.15",
+    "v1.27.16",
+    "v1.28.15",
+    "v1.29.10",
+    "v1.30.6",
     "v1.31.2",
 ]
 
@@ -70,8 +69,7 @@ def minion(master, minion_config):  # pragma: no cover
     return master.salt_minion_daemon(random_string("minion-"), overrides=minion_config)
 
 
-@pytest.fixture(scope="module", params=K8S_VERSIONS)
-@pytest.mark.skipif(sys.platform != "linux", reason="Only run on Linux platforms")
+@pytest.fixture(scope="session", params=K8S_VERSIONS)
 def kind_cluster(request):  # pylint: disable=too-many-statements
     """Create Kind cluster for testing with specified Kubernetes version"""
     cluster = KindCluster(name="salt-test", image=f"kindest/node:{request.param}")
