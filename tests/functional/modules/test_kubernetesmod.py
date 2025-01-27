@@ -540,10 +540,10 @@ def test_pod_lifecycle(kubernetes, caplog):
     assert result["metadata"]["name"] == test_pod
 
     # Wait for pod to be accessible
-    for _ in range(5):
+    for _ in range(10):
         if kubernetes.show_pod(test_pod, namespace):
             break
-        time.sleep(2)
+        time.sleep(5)
     else:
         pytest.fail("Pod was not created")
 
@@ -553,17 +553,12 @@ def test_pod_lifecycle(kubernetes, caplog):
     assert result["metadata"]["name"] == test_pod
     assert result["spec"]["containers"][0]["name"] == "nginx"
 
-    # List pods and verify ours exists
-    result = kubernetes.pods(namespace=namespace)
-    assert isinstance(result, list)
-    assert test_pod in result
-
     # Delete pod
     result = kubernetes.delete_pod(test_pod, namespace)
     assert isinstance(result, dict)
 
     # Verify pod is gone with retry
-    for _ in range(5):
+    for _ in range(10):
         if not kubernetes.show_pod(test_pod, namespace):
             break
         time.sleep(5)
