@@ -184,3 +184,12 @@ def kind_cluster(request):  # pylint: disable=too-many-statements
             cluster.delete()
         except Exception:  # pylint: disable=broad-except
             log.error("Failed to delete cluster", exc_info=True)
+
+
+@pytest.fixture(scope="module")
+def base_env_state_tree_root_dir(tmp_path_factory):
+    """
+    Return the base environment state tree root directory
+    """
+    state_tree = tmp_path_factory.mktemp("base_state_tree")
+    return state_tree
