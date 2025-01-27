@@ -1,4 +1,5 @@
 import logging
+import os
 import subprocess
 import time
 
@@ -54,41 +55,61 @@ base:
     return pillar_tree
 
 
-@pytest.fixture(scope="package")
-def master_config(pillar_tree):
-    """Salt master configuration overrides for integration tests."""
+@pytest.fixture(scope="session")
+def salt_factories_config():
+    """Return a dictionary with the keyword arguments for FactoriesManager"""
     return {
-        "pillar_roots": {
-            "base": [str(pillar_tree)],
-        },
+        "code_dir": str(PACKAGE_ROOT),
+        "start_timeout": 120 if os.environ.get("CI") else 60,
+    }
+
+
+@pytest.fixture(scope="module")
+def master_config_defaults(kind_cluster):
+    """Default master configuration for kubernetes tests"""
+    return {
+        "pillar_roots": {"base": []},
         "open_mode": True,
         "timeout": 120,
     }
 
 
-@pytest.fixture(scope="package")
-def master(salt_factories, master_config):  # pragma: no cover
-    return salt_factories.salt_master_daemon(random_string("master-"), overrides=master_config)
+@pytest.fixture(scope="module")
+def master_config_overrides():
+    """Override the default configuration per package"""
+    return {}
 
 
-@pytest.fixture(scope="package")
-def minion_config(kind_cluster):
-    """Salt minion configuration overrides for integration tests."""
+@pytest.fixture(scope="module")
+def master(salt_factories, master_config_defaults, master_config_overrides):
+    return salt_factories.salt_master_daemon(
+        random_string("master-"), defaults=master_config_defaults, overrides=master_config_overrides
+    )
+
+
+@pytest.fixture(scope="module")
+def minion_config_defaults(kind_cluster):
+    """Default minion configuration for kubernetes tests"""
     return {
         "kubernetes.kubeconfig": str(kind_cluster.kubeconfig_path),
         "kubernetes.context": "kind-salt-test",
-        "file_roots": {
-            "base": [str(PACKAGE_ROOT)],
-        },
-        "providers": {
-            "pkg": "kubernetes",
-        },
+        "file_roots": {"base": [str(PACKAGE_ROOT)]},
+        "providers": {"pkg": "kubernetes"},
+        "open_mode": True,
     }
 
 
-@pytest.fixture(scope="package")
-def minion(master, minion_config):  # pragma: no cover
-    return master.salt_minion_daemon(random_string("minion-"), overrides=minion_config)
+@pytest.fixture(scope="module")
+def minion_config_overrides():
+    """Override the default configuration per package"""
+    return {}
+
+
+@pytest.fixture(scope="module")
+def minion(master, minion_config_defaults, minion_config_overrides):
+    return master.salt_minion_daemon(
+        random_string("minion-"), defaults=minion_config_defaults, overrides=minion_config_overrides
+    )
 
 
 @pytest.fixture(scope="session", params=K8S_VERSIONS)
@@ -99,10 +120,10 @@ def kind_cluster(request):  # pylint: disable=too-many-statements
         cluster.create()
 
         # Initial wait for cluster to start
-        time.sleep(10)  # Increased initial wait
+        time.sleep(10)
 
         # Wait for and validate cluster readiness using kubectl
-        retries = 12  # Increased retries
+        retries = 5
         context = "kind-salt-test"
         while retries > 0:
             try:
@@ -155,7 +176,7 @@ def kind_cluster(request):  # pylint: disable=too-many-statements
                     log.error("stdout: %s", exc.stdout)
                     log.error("stderr: %s", exc.stderr)
                     raise
-                time.sleep(10)  # Increased sleep between retries
+                time.sleep(10)
 
         yield cluster
     finally:

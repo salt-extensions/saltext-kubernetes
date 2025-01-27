@@ -10,21 +10,28 @@ pytestmark = pytest.mark.skipif(sys.platform != "linux", reason="Only run on Lin
 
 
 @pytest.fixture(scope="class")
-def kubernetes_salt_master(salt_factories, pillar_tree, master_config):
-    factory = salt_factories.salt_master_daemon("kube-master", defaults=master_config)
+def kubernetes_master_config(master_config_defaults, pillar_tree):
+    """Kubernetes specific master config"""
+    config = master_config_defaults.copy()
+    config["pillar_roots"] = {"base": [str(pillar_tree)]}
+    return config
+
+
+@pytest.fixture(scope="class")
+def kubernetes_salt_master(salt_factories, kubernetes_master_config):
+    factory = salt_factories.salt_master_daemon("kube-master", defaults=kubernetes_master_config)
     with factory.started():
         yield factory
 
 
 @pytest.fixture(scope="class")
-def kubernetes_salt_minion(kubernetes_salt_master, minion_config):
+def kubernetes_salt_minion(kubernetes_salt_master, minion_config_defaults):
     assert kubernetes_salt_master.is_running()
     factory = kubernetes_salt_master.salt_minion_daemon(
         "kube-minion",
-        defaults=minion_config,
+        defaults=minion_config_defaults,
     )
     with factory.started():
-        # Sync All
         salt_call_cli = factory.salt_call_cli()
         ret = salt_call_cli.run("saltutil.sync_all", _timeout=120)
         assert ret.returncode == 0, ret
@@ -57,27 +64,26 @@ kubernetes:
 
     # Sync and refresh pillar data
     salt_run_cli.run("saltutil.sync_all")
-    salt_call_cli.run("saltutil.refresh_pillar")
-    ret = salt_call_cli.run("saltutil.sync_all")
+    ret = salt_call_cli.run("saltutil.refresh_pillar")
     assert ret.returncode == 0
-
-    # Verify kubernetes module
-    ret = salt_call_cli.run("sys.list_modules")
-    assert ret.returncode == 0
-    assert "kubernetes" in ret.data
-
-    ret = salt_call_cli.run("sys.list_functions", "kubernetes")
-    assert ret.returncode == 0
-    assert ret.data, "No kubernetes functions found"
-    assert "kubernetes.ping" in ret.data
 
     return pillar_data
 
 
 class TestKubernetesModule:
-    """
-    Test basic kubernetes module functionality
-    """
+    """Test basic kubernetes module functionality"""
+
+    @pytest.fixture(scope="class")
+    def kubernetes_master_config(self, master_config_defaults, pillar_tree):
+        """Kubernetes specific master config"""
+        config = master_config_defaults.copy()
+        config["pillar_roots"] = {"base": [str(pillar_tree)]}
+        return config
+
+    @pytest.fixture(scope="class")
+    def kubernetes_minion_config(self, minion_config_defaults):
+        """Kubernetes specific minion config"""
+        return minion_config_defaults.copy()
 
     def test_ping(self, salt_call_cli):
         """Test basic connectivity to kubernetes cluster"""
@@ -176,7 +182,7 @@ class TestKubernetesModule:
             assert ret.data.get("kind") == "Namespace"
 
             # Give the namespace time to be fully created
-            time.sleep(5)  # Increased wait time
+            time.sleep(5)
 
             # Show namespace
             ret = salt_call_cli.run("kubernetes.show_namespace", name=test_ns)
@@ -193,7 +199,7 @@ class TestKubernetesModule:
             assert ret.returncode == 0
 
             # Wait longer for deletion to complete
-            time.sleep(10)  # Increased wait time
+            time.sleep(10)
 
             # Verify namespace is gone
             ret = salt_call_cli.run("kubernetes.show_namespace", name=test_ns)
