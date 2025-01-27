@@ -82,6 +82,7 @@ tests = [
     "mock>=4.0.3",
     "pytest-custom-exit-code>=0.3",
     "pytest-kind>=22.8.0",
+    "cryptography>=42.0.0",
 ]
 
 [project.entry-points."salt.loader"]

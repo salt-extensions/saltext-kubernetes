@@ -566,7 +566,7 @@ def test_pod_lifecycle(kubernetes, caplog):
     for _ in range(5):
         if not kubernetes.show_pod(test_pod, namespace):
             break
-        time.sleep(2)
+        time.sleep(5)
     else:
         pytest.fail("Pod still exists after deletion")
 
