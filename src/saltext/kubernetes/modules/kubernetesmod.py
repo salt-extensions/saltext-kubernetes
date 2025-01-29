@@ -1034,6 +1034,7 @@ def create_secret(
     saltenv="base",
     context=None,
     type=None,
+    metadata=None,
     **kwargs,
 ):
     """
@@ -1070,57 +1071,25 @@ def create_secret(
         if isinstance(src_obj, dict):
             if "data" in src_obj:
                 data = src_obj["data"]
-            secret_type = src_obj.get("type", "Opaque")
+            type = src_obj.get("type", "Opaque")
     elif data is None:
         data = {}
 
-    # Use passed type parameter if provided, otherwise default to Opaque
-    secret_type = (
-        type if type is not None else secret_type if "secret_type" in locals() else "Opaque"
-    )
-
-    # Validate required fields for specific secret types
-    if secret_type == "kubernetes.io/dockerconfigjson":
-        if not data or ".dockerconfigjson" not in data:
-            raise CommandExecutionError(
-                'Docker registry secret must contain ".dockerconfigjson" key'
-            )
-    elif secret_type == "kubernetes.io/tls":
-        if not data or "tls.crt" not in data or "tls.key" not in data:
-            raise CommandExecutionError('TLS secret must contain both "tls.crt" and "tls.key"')
-
     data = __enforce_only_strings_dict(data)
-
-    # Check if secret already exists
-    try:
-        api_instance = kubernetes.client.CoreV1Api()
-        existing_secret = api_instance.read_namespaced_secret(name, namespace)
-        if existing_secret:
-            raise CommandExecutionError(
-                f"Secret {name} already exists in namespace {namespace}. Use replace_secret to update it."
-            )
-    except ApiException as exc:
-        if exc.status != 404:  # Only 404 (not found) is expected
-            raise CommandExecutionError(f"Error checking for existing secret: {exc}")
 
     # Encode the secrets using base64 if not already encoded
     encoded_data = {}
     for key, value in data.items():
-        if isinstance(value, str):
-            if __is_base64(value):
-                encoded_data[key] = value
-            else:
-                encoded_data[key] = base64.b64encode(value.encode("utf-8")).decode("utf-8")
+        if __is_base64(value):
+            encoded_data[key] = value
         else:
-            # Convert to string first, then encode
-            str_value = str(value)
-            encoded_data[key] = base64.b64encode(str_value.encode("utf-8")).decode("utf-8")
+            encoded_data[key] = base64.b64encode(str(value).encode("utf-8")).decode("utf-8")
 
     body = kubernetes.client.V1Secret(
-        metadata=__dict_to_object_meta(name, namespace, {}), data=encoded_data, type=secret_type
+        metadata=__dict_to_object_meta(name, namespace, metadata),
+        data=encoded_data,
+        type=type if type else "Opaque",
     )
-
-    cfg = _setup_conn(**kwargs)
 
     try:
         api_instance = kubernetes.client.CoreV1Api()
@@ -1128,13 +1097,12 @@ def create_secret(
         return api_response.to_dict()
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException):
-            if exc.status == 409:  # Conflict - secret already exists
+            if exc.status == 409:
                 raise CommandExecutionError(
                     f"Secret {name} already exists in namespace {namespace}. Use replace_secret to update it."
                 )
             if exc.status == 404:
                 return None
-        log.exception("Exception when calling CoreV1Api->create_namespaced_secret")
         raise CommandExecutionError(str(exc))
     finally:
         _cleanup(**cfg)
@@ -1335,6 +1303,8 @@ def replace_secret(
     saltenv="base",
     namespace="default",
     context=None,
+    type=None,
+    metadata=None,
     **kwargs,
 ):
     """
@@ -1366,53 +1336,33 @@ def replace_secret(
     """
     if source:
         src_obj = __read_and_render_yaml_file(source, template, saltenv, context)
-        secret_type = src_obj.get("type", "Opaque")
-        if isinstance(src_obj, dict) and "data" in src_obj:
-            data = src_obj["data"]
+        if isinstance(src_obj, dict):
+            if "data" in src_obj:
+                data = src_obj["data"]
+            type = src_obj.get("type")
     elif data is None:
         data = {}
 
     data = __enforce_only_strings_dict(data)
 
-    # Get existing secret to preserve its type if not specified in the source
-    try:
-        api_instance = kubernetes.client.CoreV1Api()
-        existing_secret = api_instance.read_namespaced_secret(name, namespace)
-        existing_secret_type = existing_secret.type
-    except (ApiException, HTTPError) as exc:
-        if isinstance(exc, ApiException) and exc.status == 404:
-            existing_secret_type = "Opaque"  # Default type if secret doesn't exist
-        else:
-            log.exception("Exception when calling CoreV1Api->read_namespaced_secret")
-            raise CommandExecutionError(exc)
-
-    # Use type from source/template if available, otherwise use existing/default
-    secret_type = secret_type if source else existing_secret_type
-
-    # Validate required fields for specific secret types
-    if secret_type == "kubernetes.io/dockerconfigjson":
-        if not data or ".dockerconfigjson" not in data:
-            raise CommandExecutionError(
-                'Docker registry secret must contain ".dockerconfigjson" key'
-            )
-    elif secret_type == "kubernetes.io/tls":
-        if not data or "tls.crt" not in data or "tls.key" not in data:
-            raise CommandExecutionError('TLS secret must contain both "tls.crt" and "tls.key"')
-
     # Encode the secrets using base64 if not already encoded
     encoded_data = {}
     for key, value in data.items():
-        if isinstance(value, bytes):
-            encoded_data[key] = base64.b64encode(value).decode("utf-8")
+        if __is_base64(value):
+            encoded_data[key] = value
         else:
-            str_value = str(value)
-            if __is_base64(str_value):
-                encoded_data[key] = str_value
-            else:
-                encoded_data[key] = base64.b64encode(str_value.encode("utf-8")).decode("utf-8")
+            encoded_data[key] = base64.b64encode(str(value).encode("utf-8")).decode("utf-8")
+
+    # Get existing secret type if not specified
+    if not type:
+        try:
+            existing_secret = kubernetes.client.CoreV1Api().read_namespaced_secret(name, namespace)
+            type = existing_secret.type
+        except ApiException:
+            type = "Opaque"
 
     body = kubernetes.client.V1Secret(
-        metadata=__dict_to_object_meta(name, namespace, {}), data=encoded_data, type=secret_type
+        metadata=__dict_to_object_meta(name, namespace, metadata), data=encoded_data, type=type
     )
 
     cfg = _setup_conn(**kwargs)
@@ -1424,9 +1374,7 @@ def replace_secret(
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
             return None
-        else:
-            log.exception("Exception when calling CoreV1Api->replace_namespaced_secret")
-            raise CommandExecutionError(str(exc))
+        raise CommandExecutionError(str(exc))
     finally:
         _cleanup(**cfg)
 
@@ -1587,13 +1535,26 @@ def __dict_to_object_meta(name, namespace, metadata):
     meta_obj = kubernetes.client.V1ObjectMeta()
     meta_obj.namespace = namespace
 
-    # Replicate `kubectl [create|replace|apply] --record`
-    if "annotations" not in metadata:
-        metadata["annotations"] = {}
-    if "kubernetes.io/change-cause" not in metadata["annotations"]:
-        metadata["annotations"]["kubernetes.io/change-cause"] = " ".join(sys.argv)
+    if metadata is None:
+        metadata = {}
 
+    # Handle nested dictionaries in metadata
+    processed_metadata = {}
     for key, value in metadata.items():
+        if isinstance(value, dict):
+            # Keep nested structure for fields like annotations and labels
+            processed_metadata[key] = value
+        else:
+            # Convert non-dict values to string
+            processed_metadata[key] = str(value)
+
+    # Replicate `kubectl [create|replace|apply] --record`
+    if "annotations" not in processed_metadata:
+        processed_metadata["annotations"] = {}
+    if "kubernetes.io/change-cause" not in processed_metadata["annotations"]:
+        processed_metadata["annotations"]["kubernetes.io/change-cause"] = " ".join(sys.argv)
+
+    for key, value in processed_metadata.items():
         if hasattr(meta_obj, key):
             setattr(meta_obj, key, value)
 

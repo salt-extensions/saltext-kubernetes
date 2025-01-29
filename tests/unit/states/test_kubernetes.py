@@ -961,4 +961,6 @@ def test_secret_present_with_context():
                 template="jinja",
                 saltenv="base",
                 context=context,
+                type=None,
+                metadata={},
             )

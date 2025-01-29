@@ -507,6 +507,8 @@ def secret_present(
     template=None,
     context=None,
     saltenv="base",
+    type=None,
+    metadata=None,
     **kwargs,
 ):
     """
@@ -535,11 +537,20 @@ def secret_present(
 
     saltenv
         The salt environment to use. Defaults to 'base'.
+
+    type
+        The type of secret to create. Defaults to 'Opaque'.
+
+    metadata
+        The metadata to include in the secret (annotations, labels, etc).
     """
     ret = {"name": name, "changes": {}, "result": False, "comment": ""}
 
     if data and source:
         return _error(ret, "'source' cannot be used in combination with 'data'")
+
+    if metadata is None:
+        metadata = {}
 
     secret = __salt__["kubernetes.show_secret"](name, namespace, **kwargs)
 
@@ -559,6 +570,8 @@ def secret_present(
             template=template,
             saltenv=saltenv,
             context=context,
+            type=type,
+            metadata=metadata,
             **kwargs,
         )
         ret["changes"][f"{namespace}.{name}"] = {"old": {}, "new": res}
@@ -569,7 +582,7 @@ def secret_present(
             return ret
 
         # TODO: improve checks  # pylint: disable=fixme
-        log.info("Forcing the recreation of the service")
+        log.info("Forcing the recreation of the secret")
         ret["comment"] = "The secret is already present. Forcing recreation"
         res = __salt__["kubernetes.replace_secret"](
             name=name,
@@ -579,6 +592,8 @@ def secret_present(
             template=template,
             saltenv=saltenv,
             context=context,
+            type=type,
+            metadata=metadata,
             **kwargs,
         )
 
