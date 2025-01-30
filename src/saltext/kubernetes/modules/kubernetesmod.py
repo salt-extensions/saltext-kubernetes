@@ -1071,7 +1071,7 @@ def create_secret(
         if isinstance(src_obj, dict):
             if "data" in src_obj:
                 data = src_obj["data"]
-            type = src_obj.get("type", "Opaque")
+            type = src_obj.get("type")
     elif data is None:
         data = {}
 
@@ -1088,7 +1088,7 @@ def create_secret(
     body = kubernetes.client.V1Secret(
         metadata=__dict_to_object_meta(name, namespace, metadata),
         data=encoded_data,
-        type=type if type else "Opaque",
+        type=type,
     )
 
     try:
@@ -1355,11 +1355,8 @@ def replace_secret(
 
     # Get existing secret type if not specified
     if not type:
-        try:
-            existing_secret = kubernetes.client.CoreV1Api().read_namespaced_secret(name, namespace)
-            type = existing_secret.type
-        except ApiException:
-            type = "Opaque"
+        existing_secret = kubernetes.client.CoreV1Api().read_namespaced_secret(name, namespace)
+        type = existing_secret.type
 
     body = kubernetes.client.V1Secret(
         metadata=__dict_to_object_meta(name, namespace, metadata), data=encoded_data, type=type

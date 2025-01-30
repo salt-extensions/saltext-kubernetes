@@ -597,11 +597,15 @@ def secret_present(
             **kwargs,
         )
 
-    ret["changes"] = {
-        # Omit values from the return. They are unencrypted
-        # and can contain sensitive data.
-        "data": list(res["data"])
-    }
+    try:
+        ret["changes"] = {
+            # Omit values from the return. They are unencrypted
+            # and can contain sensitive data.
+            "data": list(res["data"])
+        }
+    # TypeError: 'NoneType' object is not iterable
+    except TypeError:
+        ret["changes"] = {"data": []}
     ret["result"] = True
 
     return ret

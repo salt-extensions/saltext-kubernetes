@@ -1023,3 +1023,26 @@ def test_node_label_folder_absent(kubernetes, caplog, loaders):
     assert result["result"] is True
     assert result["comment"] == "The label folder does not exist"
     assert not result["changes"]
+
+
+def test_service_account_token_secret_present(kubernetes):
+    """Test creating a service account token secret via state"""
+    secret_name = "test-svc-token"
+    namespace = "default"
+
+    # Create token secret using state using default service account
+    ret = kubernetes.secret_present(
+        name=secret_name,
+        namespace=namespace,
+        data={},  # Empty data - kubernetes will populate
+        type="kubernetes.io/service-account-token",
+        metadata={"annotations": {"kubernetes.io/service-account.name": "default"}},
+    )
+
+    assert ret["result"] is True
+    assert ret["changes"], "Expected changes when creating secret"
+    assert isinstance(ret["changes"]["data"], list)  # Should return list of keys
+
+    # We don't test second run since token will always be different
+    # Just clean up
+    kubernetes.secret_absent(name=secret_name, namespace=namespace)
