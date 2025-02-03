@@ -44,6 +44,7 @@ CLI Example:
 
 """
 import base64
+import binascii
 import errno
 import logging
 import os.path
@@ -1429,14 +1430,19 @@ def replace_configmap(
 def __is_base64(value):
     """
     Check if a string is base64 encoded by attempting to decode it.
+    Handles whitespace and validates against base64.
     """
     try:
         if not isinstance(value, str):
             return False
-        decoded = base64.b64decode(value)
-        # Try encoding back to verify it's legitimate base64
-        return base64.b64encode(decoded).decode("utf-8") == value
-    except Exception:  # pylint: disable=broad-except
+
+        # Remove whitespace and newlines
+        value = "".join(value.split())
+
+        # Try decoding with validation
+        base64.b64decode(value, validate=True)
+        return True
+    except binascii.Error:
         return False
 
 
