@@ -36,8 +36,6 @@ dynamic = ["version"]
 dependencies = [
     "salt>=3006",
     "kubernetes>=19.15.0; platform_system == 'Linux'",
-    "PyYAML>=5.3.1",
-    "docker>=6.0.0",
 ]
 
 [project.readme]
@@ -73,14 +71,12 @@ lint = [
 ]
 tests = [
     "pytest>=7.2.0",
-    "pytest-salt-factories>=1.0.0rc19",
+    "pytest-salt-factories>=1.0.0; sys_platform == 'win32'",
+    "pytest-salt-factories[docker]>=1.0.0; sys_platform != 'win32'",
+    "kubernetes>=19.15.0",
     "pytest-helpers-namespace>=2019.1.8",
     "pytest-subtests",
     "pytest-timeout",
-    "kubernetes>=19.15.0",
-    "PyYAML>=5.3.1",
-    "mock>=4.0.3",
-    "pytest-custom-exit-code>=0.3",
     "pytest-kind>=22.8.0",
     "cryptography>=42.0.0",
 ]

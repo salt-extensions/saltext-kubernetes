@@ -290,7 +290,7 @@ def _lint(session, rcfile, flags, paths, tee_output=True):
             stdout.seek(0)
             contents = stdout.read()
             if contents:
-                contents.decode("utf-8")
+                contents = contents.decode("utf-8")
                 sys.stdout.write(contents)
                 sys.stdout.flush()
                 if pylint_report_path:

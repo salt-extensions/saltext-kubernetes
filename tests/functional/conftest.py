@@ -31,12 +31,15 @@ def state_tree_prod(tmp_path_factory):  # pragma: no cover
 
 
 @pytest.fixture(scope="module")
-def minion_config_defaults():  # pragma: no cover
+def minion_config_defaults(kind_cluster):  # pragma: no cover
     """
     Functional test modules can provide this fixture to tweak the default
     configuration dictionary passed to the minion factory
     """
-    return {}
+    return {
+        "kubernetes.kubeconfig": str(kind_cluster.kubeconfig_path),
+        "kubernetes.context": "kind-salt-test",
+    }
 
 
 @pytest.fixture(scope="module")

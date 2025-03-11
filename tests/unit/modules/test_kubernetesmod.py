@@ -6,10 +6,8 @@ import logging
 import logging.handlers
 
 # pylint: disable=no-value-for-parameter
-from contextlib import contextmanager
 from unittest.mock import MagicMock
 from unittest.mock import Mock
-from unittest.mock import mock_open
 from unittest.mock import patch
 
 import pytest
@@ -17,41 +15,13 @@ from kubernetes.client import V1Container
 from kubernetes.client import V1DeploymentSpec
 from kubernetes.client import V1PodSpec
 from kubernetes.client import V1PodTemplateSpec
+from salt.exceptions import CommandExecutionError
 from salt.modules import config
 
 from saltext.kubernetes.modules import kubernetesmod as kubernetes
 
 # Configure logging
 log = logging.getLogger(__name__)
-log.setLevel(logging.DEBUG)
-
-# Disable logging for tests
-logging.disable(logging.CRITICAL)
-
-
-@pytest.fixture(autouse=True)
-def setup_test_environment():
-    """Configure test environment setup and cleanup"""
-    # Store existing handlers
-    root_logger = logging.getLogger()
-    existing_handlers = root_logger.handlers[:]
-
-    # Remove all handlers
-    for handler in root_logger.handlers[:]:
-        root_logger.removeHandler(handler)
-
-    # Add a null handler during tests
-    null_handler = logging.NullHandler()
-    root_logger.addHandler(null_handler)
-
-    yield
-
-    # Cleanup
-    root_logger.removeHandler(null_handler)
-
-    # Restore original handlers
-    for handler in existing_handlers:
-        root_logger.addHandler(handler)
 
 
 @pytest.fixture()
@@ -64,7 +34,6 @@ def configure_loader_modules():
             "__opts__": {
                 "kubernetes.kubeconfig": "/home/testuser/.minikube/kubeconfig.cfg",
                 "kubernetes.context": "minikube",
-                "cachedir": "/tmp/salt-test-cache",
                 "extension_modules": "",
                 "file_client": "local",
             }
@@ -77,17 +46,15 @@ def configure_loader_modules():
             "__grains__": {},
             "__pillar__": {},
             "__opts__": {
-                "cachedir": "/tmp/salt-test-cache",
                 "extension_modules": "",
                 "file_client": "local",
             },
-            "__context__": {},
         },
     }
 
 
-@contextmanager
-def mock_kubernetes_library():
+@pytest.fixture
+def mock_kubernetes_lib():
     """
     After fixing the bug in 1c821c0e77de58892c77d8e55386fac25e518c31,
     it caused kubernetes._cleanup() to get called for virtually every
@@ -97,131 +64,118 @@ def mock_kubernetes_library():
         yield mock_kubernetes_lib
 
 
-def test_nodes():
+def test_nodes(mock_kubernetes_lib):
     """
     Test node listing.
     :return:
     """
-    with mock_kubernetes_library() as mock_kubernetes_lib:
-        mock_kubernetes_lib.client.CoreV1Api.return_value = Mock(
-            **{
-                "list_node.return_value.to_dict.return_value": {
-                    "items": [{"metadata": {"name": "mock_node_name"}}]
-                }
+    mock_kubernetes_lib.client.CoreV1Api.return_value = Mock(
+        **{
+            "list_node.return_value.to_dict.return_value": {
+                "items": [{"metadata": {"name": "mock_node_name"}}]
             }
-        )
-        assert kubernetes.nodes() == ["mock_node_name"]
-        assert kubernetes.kubernetes.client.CoreV1Api().list_node().to_dict.called
+        }
+    )
+    assert kubernetes.nodes() == ["mock_node_name"]
+    assert kubernetes.kubernetes.client.CoreV1Api().list_node().to_dict.called
 
 
-def test_deployments():
+def test_deployments(mock_kubernetes_lib):
     """
     Tests deployment listing.
     :return:
     """
-    with mock_kubernetes_library() as mock_kubernetes_lib:
-        mock_kubernetes_lib.client.AppsV1Api.return_value = Mock(
-            **{
-                "list_namespaced_deployment.return_value.to_dict.return_value": {
-                    "items": [{"metadata": {"name": "mock_deployment_name"}}]
-                }
+    mock_kubernetes_lib.client.AppsV1Api.return_value = Mock(
+        **{
+            "list_namespaced_deployment.return_value.to_dict.return_value": {
+                "items": [{"metadata": {"name": "mock_deployment_name"}}]
             }
-        )
-        assert kubernetes.deployments() == ["mock_deployment_name"]
-        # py#int: disable=E1120
-        assert kubernetes.kubernetes.client.AppsV1Api().list_namespaced_deployment().to_dict.called
+        }
+    )
+    assert kubernetes.deployments() == ["mock_deployment_name"]
+    # py#int: disable=E1120
+    assert kubernetes.kubernetes.client.AppsV1Api().list_namespaced_deployment().to_dict.called
 
 
-def test_services():
+def test_services(mock_kubernetes_lib):
     """
     Tests services listing.
     :return:
     """
-    with mock_kubernetes_library() as mock_kubernetes_lib:
-        mock_kubernetes_lib.client.CoreV1Api.return_value = Mock(
-            **{
-                "list_namespaced_service.return_value.to_dict.return_value": {
-                    "items": [{"metadata": {"name": "mock_service_name"}}]
-                }
+    mock_kubernetes_lib.client.CoreV1Api.return_value = Mock(
+        **{
+            "list_namespaced_service.return_value.to_dict.return_value": {
+                "items": [{"metadata": {"name": "mock_service_name"}}]
             }
-        )
-        assert kubernetes.services() == ["mock_service_name"]
-        assert kubernetes.kubernetes.client.CoreV1Api().list_namespaced_service().to_dict.called
+        }
+    )
+    assert kubernetes.services() == ["mock_service_name"]
+    assert kubernetes.kubernetes.client.CoreV1Api().list_namespaced_service().to_dict.called
 
 
-def test_pods():
+def test_pods(mock_kubernetes_lib):
     """
     Tests pods listing.
     :return:
     """
-    with mock_kubernetes_library() as mock_kubernetes_lib:
-        mock_kubernetes_lib.client.CoreV1Api.return_value = Mock(
-            **{
-                "list_namespaced_pod.return_value.to_dict.return_value": {
-                    "items": [{"metadata": {"name": "mock_pod_name"}}]
-                }
+    mock_kubernetes_lib.client.CoreV1Api.return_value = Mock(
+        **{
+            "list_namespaced_pod.return_value.to_dict.return_value": {
+                "items": [{"metadata": {"name": "mock_pod_name"}}]
             }
-        )
-        assert kubernetes.pods() == ["mock_pod_name"]
-        assert kubernetes.kubernetes.client.CoreV1Api().list_namespaced_pod().to_dict.called
+        }
+    )
+    assert kubernetes.pods() == ["mock_pod_name"]
+    assert kubernetes.kubernetes.client.CoreV1Api().list_namespaced_pod().to_dict.called
 
 
-def test_delete_deployments():
+def test_delete_deployments(mock_kubernetes_lib):
     """
     Tests deployment deletion
     :return:
     """
-    with mock_kubernetes_library() as mock_kubernetes_lib:
-        with patch(
-            "saltext.kubernetes.modules.kubernetesmod.show_deployment", Mock(return_value=None)
-        ):
-            mock_kubernetes_lib.client.V1DeleteOptions = Mock(return_value="")
-            mock_kubernetes_lib.client.AppsV1Api.return_value = Mock(
-                **{"delete_namespaced_deployment.return_value.to_dict.return_value": {"code": ""}}
-            )
-            assert kubernetes.delete_deployment("test") == {"code": 200}
-            assert (
-                kubernetes.kubernetes.client.AppsV1Api()
-                .delete_namespaced_deployment()
-                .to_dict.called
-            )
+    with patch("saltext.kubernetes.modules.kubernetesmod.show_deployment", Mock(return_value=None)):
+        mock_kubernetes_lib.client.V1DeleteOptions = Mock(return_value="")
+        mock_kubernetes_lib.client.AppsV1Api.return_value = Mock(
+            **{"delete_namespaced_deployment.return_value.to_dict.return_value": {"code": 200}}
+        )
+        assert kubernetes.delete_deployment("test") == {"code": 200}
+        assert (
+            kubernetes.kubernetes.client.AppsV1Api().delete_namespaced_deployment().to_dict.called
+        )
 
 
-def test_create_deployments():
+def test_create_deployments(mock_kubernetes_lib):
     """
     Tests deployment creation.
     :return:
     """
-    with mock_kubernetes_library() as mock_kubernetes_lib:
-        mock_kubernetes_lib.client.V1DeploymentSpec = V1DeploymentSpec
-        mock_kubernetes_lib.client.V1PodTemplateSpec = V1PodTemplateSpec
-        mock_kubernetes_lib.client.V1PodSpec = V1PodSpec
-        mock_kubernetes_lib.client.V1Container = V1Container
-        mock_kubernetes_lib.client.AppsV1Api.return_value = Mock(
-            **{"create_namespaced_deployment.return_value.to_dict.return_value": {}}
-        )
-        spec = {
-            "template": {
-                "metadata": {"labels": {"app": "test"}},
-                "spec": {"containers": [{"name": "test-container", "image": "nginx"}]},
-            },
-            "selector": {"matchLabels": {"app": "test"}},
-        }
-        assert kubernetes.create_deployment("test", "default", {}, spec, None, None, None) == {}
-        assert (
-            kubernetes.kubernetes.client.AppsV1Api().create_namespaced_deployment().to_dict.called
-        )
+    mock_kubernetes_lib.client.V1DeploymentSpec = V1DeploymentSpec
+    mock_kubernetes_lib.client.V1PodTemplateSpec = V1PodTemplateSpec
+    mock_kubernetes_lib.client.V1PodSpec = V1PodSpec
+    mock_kubernetes_lib.client.V1Container = V1Container
+    mock_kubernetes_lib.client.AppsV1Api.return_value = Mock(
+        **{"create_namespaced_deployment.return_value.to_dict.return_value": {}}
+    )
+    spec = {
+        "template": {
+            "metadata": {"labels": {"app": "test"}},
+            "spec": {"containers": [{"name": "test-container", "image": "nginx"}]},
+        },
+        "selector": {"matchLabels": {"app": "test"}},
+    }
+    assert kubernetes.create_deployment("test", "default", {}, spec, None, None, None) == {}
+    assert kubernetes.kubernetes.client.AppsV1Api().create_namespaced_deployment().to_dict.called
 
 
-def test_setup_kubeconfig_file():
+def test_setup_kubeconfig_file(mock_kubernetes_lib):
     """
     Test that the `kubernetes.kubeconfig` configuration isn't overwritten
     :return:
     """
-    with mock_kubernetes_library() as mock_kubernetes_lib:
-        mock_kubernetes_lib.config.load_kube_config = Mock()
-        cfg = kubernetes._setup_conn()
-        assert config.option("kubernetes.kubeconfig") == cfg["kubeconfig"]
+    mock_kubernetes_lib.config.load_kube_config = Mock()
+    cfg = kubernetes._setup_conn()
+    assert config.option("kubernetes.kubeconfig") == cfg["kubeconfig"]
 
 
 def test_node_labels():
@@ -279,128 +233,164 @@ def test_enforce_only_strings_dict():
     assert func(data) == {"unicode": "1", "2": "2"}
 
 
-def test_create_deployment_with_context():
-    """
-    Test deployment creation with template context using actual YAML file
-    """
-    mock_template_data = {
-        "result": True,
-        "data": """apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: test-deploy
-spec:
-  replicas: 3
-  selector:
-    matchLabels:
-      app: test-deploy
-  template:
-    metadata:
-      labels:
-        app: test-deploy
-    spec:
-      containers:
-      - name: test-deploy
-        image: nginx:latest""",
-    }
+@pytest.mark.parametrize(
+    "invalid_spec,expected_error",
+    [
+        # Missing ports list
+        ({"selector": {"app": "nginx"}, "type": "ClusterIP"}, "ports"),
+        # Invalid port value type
+        (
+            {
+                "ports": [{"name": "http", "port": "invalid", "targetPort": 80}],
+                "selector": {"app": "nginx"},
+            },
+            "invalid",
+        ),
+        # Invalid service type
+        (
+            {
+                "ports": [{"name": "http", "port": 80}],
+                "selector": {"app": "nginx"},
+                "type": "InvalidType",
+            },
+            "type",
+        ),
+        # Invalid NodePort value
+        (
+            {
+                "ports": [{"name": "http", "port": 80, "nodePort": 12345}],
+                "selector": {"app": "nginx"},
+                "type": "NodePort",
+            },
+            "between 30000-32767",
+        ),
+        # Invalid ports structure
+        ({"ports": "invalid", "selector": {"app": "nginx"}}, "must be a list"),
+        # Missing port name in multi-port service
+        (
+            {"ports": [{"port": 80}, {"port": 443}], "selector": {"app": "nginx"}},
+            "must specify 'name'",
+        ),
+    ],
+)
+def test_service_validation(mock_kubernetes_lib, invalid_spec, expected_error):
+    """Test service validation for different configurations"""
+    mock_kubernetes_lib.client.CoreV1Api.return_value = Mock(
+        **{"create_namespaced_service.return_value.to_dict.return_value": {}}
+    )
 
-    mock_file_contents = MagicMock(return_value=mock_template_data["data"])
-
-    with mock_kubernetes_library() as mock_kubernetes_lib:
-        mock_kubernetes_lib.client.V1DeploymentSpec = V1DeploymentSpec
-        mock_kubernetes_lib.client.V1PodTemplateSpec = V1PodTemplateSpec
-        mock_kubernetes_lib.client.V1PodSpec = V1PodSpec
-        mock_kubernetes_lib.client.V1Container = V1Container
-        with (
-            patch("salt.utils.files.fopen", mock_open(read_data=mock_file_contents())),
-            patch(
-                "salt.utils.templates.TEMPLATE_REGISTRY",
-                {"jinja": MagicMock(return_value=mock_template_data)},
-            ),
-        ):
-            context = {"name": "test-deploy", "replicas": 3, "image": "nginx:latest", "port": 80}
-            mock_kubernetes_lib.client.AppsV1Api.return_value = Mock(
-                **{"create_namespaced_deployment.return_value.to_dict.return_value": {}}
-            )
-            ret = kubernetes.create_deployment(
-                "test-deploy",
-                "default",
-                {},
-                {},
-                "/mock/deployment.yaml",
-                "jinja",
-                "base",
-                context=context,
-            )
-            assert ret == {}
+    with pytest.raises(CommandExecutionError, match=expected_error):
+        kubernetes.create_service(
+            name="test-service",
+            namespace="default",
+            metadata={},
+            spec=invalid_spec,
+            source=None,
+            template=None,
+            saltenv="base",
+        )
 
 
-def test_create_service_with_context():
-    """
-    Test service creation with template context using actual YAML file
-    """
-    template_content = """
-apiVersion: v1
-kind: Service
-metadata:
-  name: {{ context.name }}
-spec:
-  ports:
-  - port: {{ context.port }}
-    targetPort: {{ context.target_port }}
-  type: {{ context.type }}
-"""
-    rendered_content = """
-apiVersion: v1
-kind: Service
-metadata:
-  name: test-svc
-spec:
-  ports:
-  - port: 80
-    targetPort: 8080
-  type: LoadBalancer
-"""
-    mock_template_data = {"result": True, "data": rendered_content}
-
-    mock_jinja = MagicMock(return_value=mock_template_data)
-    template_registry = {"jinja": mock_jinja}
-
-    with mock_kubernetes_library() as mock_kubernetes_lib:
-        with (
-            patch("salt.utils.files.fopen", mock_open(read_data=template_content)),
-            patch("salt.utils.templates.TEMPLATE_REGISTRY", template_registry),
-            patch(
-                "salt.utils.yaml.safe_load",
-                return_value={
-                    "apiVersion": "v1",
-                    "kind": "Service",
-                    "metadata": {"name": "test-svc"},
-                    "spec": {"ports": [{"port": 80, "targetPort": 8080}], "type": "LoadBalancer"},
+@pytest.mark.parametrize(
+    "invalid_spec,expected_error",
+    [
+        # Missing template
+        ({"selector": {"matchLabels": {"app": "nginx"}}}, "template"),
+        # Invalid replicas type
+        (
+            {
+                "replicas": "invalid",
+                "selector": {"matchLabels": {"app": "nginx"}},
+                "template": {
+                    "metadata": {"labels": {"app": "nginx"}},
+                    "spec": {"containers": [{"name": "nginx", "image": "nginx:latest"}]},
                 },
-            ),
-        ):
+            },
+            "invalid",
+        ),
+        # Invalid template spec (missing container image)
+        (
+            {
+                "selector": {"matchLabels": {"app": "nginx"}},
+                "template": {
+                    "metadata": {"labels": {"app": "nginx"}},
+                    "spec": {"containers": [{"name": "nginx"}]},
+                },
+            },
+            "image",
+        ),
+    ],
+)
+def test_deployment_invalid_spec(mock_kubernetes_lib, invalid_spec, expected_error):
+    """Test creating a deployment with invalid spec raises appropriate error"""
+    mock_kubernetes_lib.client.AppsV1Api.return_value = Mock(
+        **{"create_namespaced_deployment.return_value.to_dict.return_value": {}}
+    )
 
-            context = {"name": "test-svc", "port": 80, "target_port": 8080, "type": "LoadBalancer"}
-            mock_kubernetes_lib.client.CoreV1Api.return_value = Mock(
-                **{"create_namespaced_service.return_value.to_dict.return_value": {}}
+    with patch(
+        "saltext.kubernetes.modules.kubernetesmod.__dict_to_deployment_spec"
+    ) as mock_spec_creator:
+        mock_spec_creator.side_effect = CommandExecutionError(
+            f"Invalid Deployment spec: {expected_error}"
+        )
+
+        with pytest.raises(CommandExecutionError, match=expected_error):
+            kubernetes.create_deployment(
+                name="test-deployment",
+                namespace="default",
+                metadata={},
+                spec=invalid_spec,
+                source=None,
+                template=None,
+                saltenv="base",
             )
-            ret = kubernetes.create_service(
-                "test-svc",
-                "default",
-                {},
-                {},
-                "/mock/service.yaml",
-                "jinja",
-                "base",
-                context=context,
+
+
+@pytest.mark.parametrize(
+    "invalid_spec,expected_error",
+    [
+        # Missing containers list
+        ({}, "containers"),
+        # Empty containers list
+        ({"containers": []}, "containers"),
+        # Missing required container name
+        ({"containers": [{"image": "nginx:latest"}]}, "name"),
+        # Missing required container image
+        ({"containers": [{"name": "nginx"}]}, "image"),
+        # Invalid container port type
+        (
+            {
+                "containers": [
+                    {
+                        "name": "nginx",
+                        "image": "nginx:latest",
+                        "ports": [{"containerPort": "invalid"}],
+                    }
+                ]
+            },
+            "invalid",
+        ),
+        # Invalid port structure
+        ({"containers": [{"name": "nginx", "image": "nginx:latest", "ports": "invalid"}]}, "ports"),
+    ],
+)
+def test_pod_with_invalid_spec(mock_kubernetes_lib, invalid_spec, expected_error):
+    """Test creating a pod with invalid spec raises appropriate error"""
+    mock_kubernetes_lib.client.CoreV1Api.return_value = Mock(
+        **{"create_namespaced_pod.return_value.to_dict.return_value": {}}
+    )
+
+    with patch("saltext.kubernetes.modules.kubernetesmod.__dict_to_pod_spec") as mock_spec_creator:
+        mock_spec_creator.side_effect = CommandExecutionError(f"Invalid Pod spec: {expected_error}")
+
+        with pytest.raises(CommandExecutionError, match=expected_error):
+            kubernetes.create_pod(
+                name="test-pod",
+                namespace="default",
+                metadata={},
+                spec=invalid_spec,
+                source=None,
+                template=None,
+                saltenv="base",
+                wait=True,
             )
-            assert ret == {}
-
-            mock_jinja.assert_called_once()
-            call_kwargs = mock_jinja.call_args[1]
-            assert call_kwargs.get("context") == context
-
-            assert "port: 80" in rendered_content
-            assert "targetPort: 8080" in rendered_content
-            assert "type: LoadBalancer" in rendered_content

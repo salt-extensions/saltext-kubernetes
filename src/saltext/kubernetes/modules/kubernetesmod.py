@@ -44,7 +44,6 @@ CLI Example:
 
 """
 import base64
-import binascii
 import errno
 import logging
 import os.path
@@ -68,6 +67,7 @@ try:
     from kubernetes.client import V1Deployment
     from kubernetes.client import V1DeploymentSpec
     from kubernetes.client.rest import ApiException
+    from kubernetes.watch import Watch
     from urllib3.exceptions import HTTPError
 
     HAS_LIBS = True
@@ -184,10 +184,9 @@ def nodes(**kwargs):
         return [k8s_node["metadata"]["name"] for k8s_node in api_response.to_dict().get("items")]
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
-            return None
-        else:
-            log.exception("Exception when calling CoreV1Api->list_node")
-            raise CommandExecutionError(exc)
+            return []
+        log.exception("Exception when calling CoreV1Api->list_node")
+        raise CommandExecutionError(exc)
     finally:
         _cleanup(**cfg)
 
@@ -209,9 +208,8 @@ def node(name, **kwargs):
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
             return None
-        else:
-            log.exception("Exception when calling CoreV1Api->list_node")
-            raise CommandExecutionError(exc)
+        log.exception("Exception when calling CoreV1Api->list_node")
+        raise CommandExecutionError(exc)
     finally:
         _cleanup(**cfg)
 
@@ -225,6 +223,9 @@ def node(name, **kwargs):
 def node_labels(name, **kwargs):
     """
     Return the labels of the node identified by the specified name
+
+    name
+        The name of the node
 
     CLI Example:
 
@@ -245,6 +246,15 @@ def node_add_label(node_name, label_name, label_value, **kwargs):
     Set the value of the label identified by `label_name` to `label_value` on
     the node identified by the name `node_name`.
     Creates the label if not present.
+
+    node_name
+        The name of the node
+
+    label_name
+        The name of the label
+
+    label_value
+        The value of the label
 
     CLI Example:
 
@@ -279,6 +289,12 @@ def node_remove_label(node_name, label_name, **kwargs):
     Removes the label identified by `label_name` from
     the node identified by the name `node_name`.
 
+    node_name
+        The name of the node
+
+    label_name
+        The name of the label
+
     CLI Example:
 
     .. code-block:: bash
@@ -295,9 +311,8 @@ def node_remove_label(node_name, label_name, **kwargs):
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
             return None
-        else:
-            log.exception("Exception when calling CoreV1Api->patch_node")
-            raise CommandExecutionError(exc)
+        log.exception("Exception when calling CoreV1Api->patch_node")
+        raise CommandExecutionError(exc)
     finally:
         _cleanup(**cfg)
 
@@ -322,10 +337,9 @@ def namespaces(**kwargs):
         return [nms["metadata"]["name"] for nms in api_response.to_dict().get("items")]
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
-            return None
-        else:
-            log.exception("Exception when calling CoreV1Api->list_namespace")
-            raise CommandExecutionError(exc)
+            return []
+        log.exception("Exception when calling CoreV1Api->list_namespace")
+        raise CommandExecutionError(exc)
     finally:
         _cleanup(**cfg)
 
@@ -333,6 +347,9 @@ def namespaces(**kwargs):
 def deployments(namespace="default", **kwargs):
     """
     Return a list of kubernetes deployments defined in the namespace
+
+    namespace
+        The namespace to list deployments from
 
     CLI Example:
 
@@ -349,10 +366,9 @@ def deployments(namespace="default", **kwargs):
         return [dep["metadata"]["name"] for dep in api_response.to_dict().get("items")]
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
-            return None
-        else:
-            log.exception("Exception when calling AppsV1Api->list_namespaced_deployment")
-            raise CommandExecutionError(exc)
+            return []
+        log.exception("Exception when calling AppsV1Api->list_namespaced_deployment")
+        raise CommandExecutionError(exc)
     finally:
         _cleanup(**cfg)
 
@@ -360,6 +376,9 @@ def deployments(namespace="default", **kwargs):
 def services(namespace="default", **kwargs):
     """
     Return a list of kubernetes services defined in the namespace
+
+    namespace
+        The namespace to list services from
 
     CLI Example:
 
@@ -376,10 +395,9 @@ def services(namespace="default", **kwargs):
         return [srv["metadata"]["name"] for srv in api_response.to_dict().get("items")]
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
-            return None
-        else:
-            log.exception("Exception when calling CoreV1Api->list_namespaced_service")
-            raise CommandExecutionError(exc)
+            return []
+        log.exception("Exception when calling CoreV1Api->list_namespaced_service")
+        raise CommandExecutionError(exc)
     finally:
         _cleanup(**cfg)
 
@@ -387,6 +405,9 @@ def services(namespace="default", **kwargs):
 def pods(namespace="default", **kwargs):
     """
     Return a list of kubernetes pods defined in the namespace
+
+    namespace
+        The namespace to list pods from
 
     CLI Example:
 
@@ -403,9 +424,8 @@ def pods(namespace="default", **kwargs):
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
             return []  # Return empty list for nonexistent namespace
-        else:
-            log.exception("Exception when calling CoreV1Api->list_namespaced_pod")
-            raise CommandExecutionError(exc)
+        log.exception("Exception when calling CoreV1Api->list_namespaced_pod")
+        raise CommandExecutionError(exc)
     finally:
         _cleanup(**cfg)
 
@@ -413,6 +433,9 @@ def pods(namespace="default", **kwargs):
 def secrets(namespace="default", **kwargs):
     """
     Return a list of kubernetes secrets defined in the namespace
+
+    namespace
+        The namespace to list secrets from
 
     CLI Example:
 
@@ -429,10 +452,9 @@ def secrets(namespace="default", **kwargs):
         return [secret["metadata"]["name"] for secret in api_response.to_dict().get("items")]
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
-            return None
-        else:
-            log.exception("Exception when calling CoreV1Api->list_namespaced_secret")
-            raise CommandExecutionError(exc)
+            return []
+        log.exception("Exception when calling CoreV1Api->list_namespaced_secret")
+        raise CommandExecutionError(exc)
     finally:
         _cleanup(**cfg)
 
@@ -440,6 +462,9 @@ def secrets(namespace="default", **kwargs):
 def configmaps(namespace="default", **kwargs):
     """
     Return a list of kubernetes configmaps defined in the namespace
+
+    namespace
+        The namespace to list configmaps from
 
     CLI Example:
 
@@ -459,9 +484,8 @@ def configmaps(namespace="default", **kwargs):
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
             return []  # Return empty list for nonexistent namespace
-        else:
-            log.exception("Exception when calling CoreV1Api->list_namespaced_config_map")
-            raise CommandExecutionError(exc)
+        log.exception("Exception when calling CoreV1Api->list_namespaced_config_map")
+        raise CommandExecutionError(exc)
     finally:
         _cleanup(**cfg)
 
@@ -469,6 +493,12 @@ def configmaps(namespace="default", **kwargs):
 def show_deployment(name, namespace="default", **kwargs):
     """
     Return the kubernetes deployment defined by name and namespace
+
+    name
+        The name of the deployment
+
+    namespace
+        The namespace to look for the deployment
 
     CLI Example:
 
@@ -486,9 +516,8 @@ def show_deployment(name, namespace="default", **kwargs):
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
             return None
-        else:
-            log.exception("Exception when calling AppsV1Api->read_namespaced_deployment")
-            raise CommandExecutionError(exc)
+        log.exception("Exception when calling AppsV1Api->read_namespaced_deployment")
+        raise CommandExecutionError(exc)
     finally:
         _cleanup(**cfg)
 
@@ -496,6 +525,12 @@ def show_deployment(name, namespace="default", **kwargs):
 def show_service(name, namespace="default", **kwargs):
     """
     Return the kubernetes service defined by name and namespace
+
+    name
+        The name of the service
+
+    namespace
+        The namespace to look for the service
 
     CLI Example:
 
@@ -513,9 +548,8 @@ def show_service(name, namespace="default", **kwargs):
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
             return None
-        else:
-            log.exception("Exception when calling CoreV1Api->read_namespaced_service")
-            raise CommandExecutionError(exc)
+        log.exception("Exception when calling CoreV1Api->read_namespaced_service")
+        raise CommandExecutionError(exc)
     finally:
         _cleanup(**cfg)
 
@@ -523,6 +557,12 @@ def show_service(name, namespace="default", **kwargs):
 def show_pod(name, namespace="default", **kwargs):
     """
     Return POD information for a given pod name defined in the namespace
+
+    name
+        The name of the pod
+
+    namespace
+        The namespace to look for the pod
 
     CLI Example:
 
@@ -540,9 +580,8 @@ def show_pod(name, namespace="default", **kwargs):
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
             return None
-        else:
-            log.exception("Exception when calling CoreV1Api->read_namespaced_pod")
-            raise CommandExecutionError(exc)
+        log.exception("Exception when calling CoreV1Api->read_namespaced_pod")
+        raise CommandExecutionError(exc)
     finally:
         _cleanup(**cfg)
 
@@ -551,14 +590,14 @@ def show_namespace(name, **kwargs):
     """
     Return information for a given namespace defined by the specified name
 
+    name
+        The name of the namespace to show
+
     CLI Example:
 
     .. code-block:: bash
 
         salt '*' kubernetes.show_namespace kube-system
-
-    Raises:
-        CommandExecutionError: If there is an error retrieving the namespace information
     """
     cfg = _setup_conn(**kwargs)
 
@@ -569,9 +608,8 @@ def show_namespace(name, **kwargs):
     except ApiException as exc:
         if exc.status == 404:
             return None
-        else:
-            log.exception("Exception when calling CoreV1Api->read_namespace")
-            raise CommandExecutionError(exc) from exc
+        log.exception("Exception when calling CoreV1Api->read_namespace")
+        raise CommandExecutionError(exc) from exc
     except HTTPError as exc:
         log.exception("HTTP error occurred")
         raise CommandExecutionError(exc) from exc
@@ -584,6 +622,15 @@ def show_secret(name, namespace="default", decode=False, **kwargs):
     Return the kubernetes secret defined by name and namespace.
     The secrets can be decoded if specified by the user. Warning: this has
     security implications.
+
+    name
+        The name of the secret
+
+    namespace
+        The namespace to look for the secret
+
+    decode
+        Decode the secret values. Default is False
 
     CLI Example:
 
@@ -599,7 +646,7 @@ def show_secret(name, namespace="default", decode=False, **kwargs):
         api_response = api_instance.read_namespaced_secret(name, namespace)
         response_dict = api_response.to_dict()
 
-        if response_dict.get("data") and (decode or decode == "True"):
+        if response_dict.get("data") and decode:
             decoded_data = {}
             for key, value in response_dict["data"].items():
                 try:
@@ -612,9 +659,8 @@ def show_secret(name, namespace="default", decode=False, **kwargs):
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
             return None
-        else:
-            log.exception("Exception when calling CoreV1Api->read_namespaced_secret")
-            raise CommandExecutionError(exc)
+        log.exception("Exception when calling CoreV1Api->read_namespaced_secret")
+        raise CommandExecutionError(exc)
     finally:
         _cleanup(**cfg)
 
@@ -622,6 +668,12 @@ def show_secret(name, namespace="default", decode=False, **kwargs):
 def show_configmap(name, namespace="default", **kwargs):
     """
     Return the kubernetes configmap defined by name and namespace.
+
+    name
+        The name of the configmap
+
+    namespace
+        The namespace to look for the configmap
 
     CLI Example:
 
@@ -639,23 +691,33 @@ def show_configmap(name, namespace="default", **kwargs):
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
             return None
-        else:
-            log.exception("Exception when calling CoreV1Api->read_namespaced_config_map")
-            raise CommandExecutionError(exc)
+        log.exception("Exception when calling CoreV1Api->read_namespaced_config_map")
+        raise CommandExecutionError(exc)
     finally:
         _cleanup(**cfg)
 
 
-def delete_deployment(name, namespace="default", **kwargs):
+def delete_deployment(name, namespace="default", wait=False, timeout=60, **kwargs):
     """
     Deletes the kubernetes deployment defined by name and namespace
+
+    name
+        The name of the deployment
+
+    namespace
+        The namespace to delete the deployment from
+
+    wait
+        Wait for deployment deletion to complete (default: False)
+
+    timeout
+        Timeout in seconds to wait for deletion (default: 60)
 
     CLI Example:
 
     .. code-block:: bash
 
-        salt '*' kubernetes.delete_deployment my-nginx
-        salt '*' kubernetes.delete_deployment name=my-nginx namespace=default
+        salt '*' kubernetes.delete_deployment my-nginx default wait=True
     """
     cfg = _setup_conn(**kwargs)
     body = kubernetes.client.V1DeleteOptions(orphan_dependents=True)
@@ -665,6 +727,13 @@ def delete_deployment(name, namespace="default", **kwargs):
         api_response = api_instance.delete_namespaced_deployment(
             name=name, namespace=namespace, body=body
         )
+
+        if wait:
+            if not _wait_for_resource_status(
+                api_instance, "deployment", name, namespace, "deleted", timeout
+            ):
+                raise CommandExecutionError(f"Timeout waiting for deployment {name} to be deleted")
+
         mutable_api_response = api_response.to_dict()
         if not salt.utils.platform.is_windows():
             try:
@@ -693,16 +762,27 @@ def delete_deployment(name, namespace="default", **kwargs):
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
             return None
-        else:
-            log.exception("Exception when calling AppsV1Api->delete_namespaced_deployment")
-            raise CommandExecutionError(exc)
+        log.exception("Exception when calling AppsV1Api->delete_namespaced_deployment")
+        raise CommandExecutionError(exc)
     finally:
         _cleanup(**cfg)
 
 
-def delete_service(name, namespace="default", **kwargs):
+def delete_service(name, namespace="default", wait=False, timeout=60, **kwargs):
     """
     Deletes the kubernetes service defined by name and namespace
+
+    name
+        The name of the service
+
+    namespace
+        The namespace to delete the service from
+
+    wait
+        Wait for service deletion to complete (default: False)
+
+    timeout
+        Timeout in seconds to wait for deletion (default: 60)
 
     CLI Example:
 
@@ -717,6 +797,12 @@ def delete_service(name, namespace="default", **kwargs):
         api_instance = kubernetes.client.CoreV1Api()
         api_response = api_instance.delete_namespaced_service(name=name, namespace=namespace)
 
+        if wait:
+            if not _wait_for_resource_status(
+                api_instance, "service", name, namespace, "deleted", timeout
+            ):
+                raise CommandExecutionError(f"Timeout waiting for service {name} to be deleted")
+
         return api_response.to_dict()
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
@@ -728,9 +814,21 @@ def delete_service(name, namespace="default", **kwargs):
         _cleanup(**cfg)
 
 
-def delete_pod(name, namespace="default", **kwargs):
+def delete_pod(name, namespace="default", wait=False, timeout=60, **kwargs):
     """
     Deletes the kubernetes pod defined by name and namespace
+
+    name
+        The name of the pod
+
+    namespace
+        The namespace to delete the pod from
+
+    wait
+        Wait for pod deletion to complete (default: False)
+
+    timeout
+        Timeout in seconds to wait for deletion (default: 60)
 
     CLI Example:
 
@@ -746,6 +844,12 @@ def delete_pod(name, namespace="default", **kwargs):
         api_instance = kubernetes.client.CoreV1Api()
         api_response = api_instance.delete_namespaced_pod(name=name, namespace=namespace, body=body)
 
+        if wait:
+            if not _wait_for_resource_status(
+                api_instance, "pod", name, namespace, "deleted", timeout
+            ):
+                raise CommandExecutionError(f"Timeout waiting for pod {name} to be deleted")
+
         return api_response.to_dict()
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
@@ -757,9 +861,18 @@ def delete_pod(name, namespace="default", **kwargs):
         _cleanup(**cfg)
 
 
-def delete_namespace(name, **kwargs):
+def delete_namespace(name, wait=False, timeout=60, **kwargs):
     """
     Deletes the kubernetes namespace defined by name
+
+    name
+        The name of the namespace
+
+    wait
+        Wait for namespace deletion to complete (default: False)
+
+    timeout
+        Timeout in seconds to wait for deletion (default: 60)
 
     CLI Example:
 
@@ -767,9 +880,6 @@ def delete_namespace(name, **kwargs):
 
         salt '*' kubernetes.delete_namespace salt
         salt '*' kubernetes.delete_namespace name=salt
-
-    Raises:
-        CommandExecutionError: If the namespace deletion fails or is forbidden
     """
     cfg = _setup_conn(**kwargs)
     body = kubernetes.client.V1DeleteOptions(orphan_dependents=True)
@@ -777,6 +887,13 @@ def delete_namespace(name, **kwargs):
     try:
         api_instance = kubernetes.client.CoreV1Api()
         api_response = api_instance.delete_namespace(name=name, body=body)
+
+        if wait:
+            if not _wait_for_resource_status(
+                api_instance, "namespace", name, None, "deleted", timeout
+            ):
+                raise CommandExecutionError(f"Timeout waiting for namespace {name} to be deleted")
+
         return api_response.to_dict()
     except ApiException as exc:
         if exc.status == 404:
@@ -792,9 +909,21 @@ def delete_namespace(name, **kwargs):
         _cleanup(**cfg)
 
 
-def delete_secret(name, namespace="default", **kwargs):
+def delete_secret(name, namespace="default", wait=False, timeout=60, **kwargs):
     """
     Deletes the kubernetes secret defined by name and namespace
+
+    name
+        The name of the secret
+
+    namespace
+        The namespace to delete the secret from
+
+    wait
+        Wait for secret deletion to complete (default: False)
+
+    timeout
+        Timeout in seconds to wait for deletion (default: 60)
 
     CLI Example:
 
@@ -812,20 +941,37 @@ def delete_secret(name, namespace="default", **kwargs):
             name=name, namespace=namespace, body=body
         )
 
+        if wait:
+            if not _wait_for_resource_status(
+                api_instance, "secret", name, namespace, "deleted", timeout
+            ):
+                raise CommandExecutionError(f"Timeout waiting for secret {name} to be deleted")
+
         return api_response.to_dict()
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
             return None
-        else:
-            log.exception("Exception when calling CoreV1Api->delete_namespaced_secret")
-            raise CommandExecutionError(exc)
+        log.exception("Exception when calling CoreV1Api->delete_namespaced_secret")
+        raise CommandExecutionError(exc)
     finally:
         _cleanup(**cfg)
 
 
-def delete_configmap(name, namespace="default", **kwargs):
+def delete_configmap(name, namespace="default", wait=False, timeout=60, **kwargs):
     """
     Deletes the kubernetes configmap defined by name and namespace
+
+    name
+        The name of the configmap
+
+    namespace
+        The namespace to delete the configmap from
+
+    wait
+        Wait for configmap deletion to complete (default: False)
+
+    timeout
+        Timeout in seconds to wait for deletion (default: 60)
 
     CLI Example:
 
@@ -843,6 +989,12 @@ def delete_configmap(name, namespace="default", **kwargs):
             name=name, namespace=namespace, body=body
         )
 
+        if wait:
+            if not _wait_for_resource_status(
+                api_instance, "configmap", name, namespace, "deleted", timeout
+            ):
+                raise CommandExecutionError(f"Timeout waiting for configmap {name} to be deleted")
+
         return api_response.to_dict()
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
@@ -855,16 +1007,56 @@ def delete_configmap(name, namespace="default", **kwargs):
 
 
 def create_deployment(
-    name, namespace, metadata, spec, source, template, saltenv, context=None, **kwargs
+    name,
+    namespace,
+    metadata,
+    spec,
+    source,
+    template,
+    saltenv,
+    context=None,
+    wait=False,
+    timeout=60,
+    **kwargs,
 ):
     """
     Creates the kubernetes deployment as defined by the user.
+
+    name
+        The name of the deployment
+
+    namespace
+        The namespace to create the deployment in
+
+    metadata
+        Deployment metadata dict
+
+    spec
+        Deployment spec dict following kubernetes API conventions
+
+    source
+        File path to deployment definition
+
+    template
+        Template engine to use to render the source file
+
+    saltenv
+        Salt environment to pull the source file from
+
+    context
+        Variables to make available in templated files
+
+    wait
+        Wait for deployment to become ready (default: False)
+
+    timeout
+        Timeout in seconds to wait for deployment (default: 60)
 
     CLI Example:
 
     .. code-block:: bash
 
-        salt '*' kubernetes.create_deployment *args
+        salt '*' kubernetes.create_deployment name=nginx namespace=default spec='{"replicas": 1}' wait=True
     """
     body = __create_object_body(
         kind="Deployment",
@@ -886,40 +1078,85 @@ def create_deployment(
         api_instance = kubernetes.client.AppsV1Api()
         api_response = api_instance.create_namespaced_deployment(namespace, body)
 
+        if wait:
+            if not _wait_for_resource_status(
+                api_instance, "deployment", name, namespace, "ready", timeout
+            ):
+                raise CommandExecutionError(
+                    f"Timeout waiting for deployment {name} to become ready"
+                )
+
         return api_response.to_dict()
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
             return None
-        else:
-            log.exception("Exception when calling AppsV1Api->create_namespaced_deployment")
-            raise CommandExecutionError(exc)
+        log.exception("Exception when calling AppsV1Api->create_namespaced_deployment")
+        raise CommandExecutionError(exc)
     finally:
         _cleanup(**cfg)
 
 
-def create_pod(name, namespace, metadata, spec, source, template, saltenv, context=None, **kwargs):
+def create_pod(
+    name,
+    namespace,
+    metadata,
+    spec,
+    source,
+    template,
+    saltenv,
+    context=None,
+    wait=False,
+    timeout=60,
+    **kwargs,
+):
     """
     Creates a kubernetes pod as defined by the user.
 
-    Args:
-        name: The name of the pod
-        namespace: The namespace to create the pod in
-        metadata: Pod metadata dict
-        spec: Pod spec dict following kubernetes API conventions
-        source: File path to pod definition
-        template: Template engine to use to render the source file
-        saltenv: Salt environment to pull the source file from
-        context: Variables to make available in templated files
-        **kwargs: Extra arguments to pass to the API call
+    name
+        The name of the pod
+
+    namespace
+        The namespace to create the pod in
+
+    metadata
+        Pod metadata dict
+
+    spec
+        Pod spec dict following kubernetes API conventions
+
+    source
+        File path to pod definition
+
+    template
+        Template engine to use to render the source file
+
+    saltenv
+        Salt environment to pull the source file from
+
+    context
+        Variables to make available in templated files
+
+    wait
+        Wait for pod to become ready (default: False)
+
+    timeout
+        Timeout in seconds to wait for pod (default: 60)
 
     Pod spec must follow kubernetes API conventions:
-        ports:
-          - containerPort: 8080
-            name: http
-            protocol: TCP
+
+    .. code-block:: yaml
+
+        - spec:
+            ports:
+            - containerPort: 8080
+                name: http
+                protocol: TCP
 
     CLI Examples:
 
+    .. code-block:: bash
+
+        salt '*' kubernetes.create_pod name=nginx namespace=default spec='{"containers": [{"name": "nginx", "image": "nginx"}]}'
     """
     body = __create_object_body(
         kind="Pod",
@@ -941,47 +1178,85 @@ def create_pod(name, namespace, metadata, spec, source, template, saltenv, conte
         api_instance = kubernetes.client.CoreV1Api()
         api_response = api_instance.create_namespaced_pod(namespace, body)
 
+        if wait:
+            if not _wait_for_resource_status(
+                api_instance, "pod", name, namespace, "ready", timeout
+            ):
+                raise CommandExecutionError(f"Timeout waiting for pod {name} to become ready")
+
         return api_response.to_dict()
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
             return None
-        else:
-            log.exception("Exception when calling CoreV1Api->create_namespaced_pod")
-            raise CommandExecutionError(exc)
+        log.exception("Exception when calling CoreV1Api->create_namespaced_pod")
+        raise CommandExecutionError(exc)
     finally:
         _cleanup(**cfg)
 
 
 def create_service(
-    name, namespace, metadata, spec, source, template, saltenv, context=None, **kwargs
+    name,
+    namespace,
+    metadata,
+    spec,
+    source,
+    template,
+    saltenv,
+    context=None,
+    wait=False,
+    timeout=60,
+    **kwargs,
 ):
     """
     Creates the kubernetes service as defined by the user.
 
-    Args:
-        name: The name of the service
-        namespace: The namespace to create the service in
-        metadata: Service metadata dict
-        spec: Service spec dict that follows kubernetes API conventions
-        source: File path to service definition
-        template: Template engine to use to render the source file
-        saltenv: Salt environment to pull the source file from
-        context: Variables to make available in templated files
-        **kwargs: Extra arguments to pass to the API call
+    name
+        The name of the service
+
+    namespace
+        The namespace to create the service in
+
+    metadata
+        Service metadata dict
+
+    spec
+        Service spec dict that follows kubernetes API conventions
+
+    source
+        File path to service definition
+
+    template
+        Template engine to use to render the source file
+
+    saltenv
+        Salt environment to pull the source file from
+
+    context
+        Variables to make available in templated files
+
+    wait
+        Wait for service to become ready (default: False)
+
+    timeout
+        Timeout in seconds to wait for service (default: 60)
 
     Service spec must follow kubernetes API conventions. Port specifications can be:
 
-    Simple integer for basic port definition: [80, 443]
+    Simple integer for basic port definition: ``[80, 443]``
 
     Dictionary for advanced configuration:
-        ports:
-          - port: 80
-            targetPort: 8080
-            name: http    # Required if multiple ports are specified
-          - port: 443
-            targetPort: web-https  # targetPort can reference container port names
-            name: https
-            nodePort: 30443       # nodePort must be between 30000-32767
+
+    .. code-block:: yaml
+
+        - spec:
+            ports:
+              - port: 80
+                targetPort: 8080
+                name: http    # Required if multiple ports are specified
+              - port: 443
+                targetPort: web-https  # targetPort can reference container port names
+                name: https
+                nodePort: 30443       # nodePort must be between 30000-32767
 
     CLI Examples:
 
@@ -1015,13 +1290,18 @@ def create_service(
         api_instance = kubernetes.client.CoreV1Api()
         api_response = api_instance.create_namespaced_service(namespace, body)
 
+        if wait:
+            if not _wait_for_resource_status(
+                api_instance, "service", name, namespace, "ready", timeout
+            ):
+                raise CommandExecutionError(f"Timeout waiting for service {name} to become ready")
+
         return api_response.to_dict()
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
             return None
-        else:
-            log.exception("Exception when calling CoreV1Api->create_namespaced_service")
-            raise CommandExecutionError(exc)
+        log.exception("Exception when calling CoreV1Api->create_namespaced_service")
+        raise CommandExecutionError(exc)
     finally:
         _cleanup(**cfg)
 
@@ -1036,11 +1316,50 @@ def create_secret(
     context=None,
     type=None,
     metadata=None,
+    wait=False,
+    timeout=60,
     **kwargs,
 ):
     """
     Creates the kubernetes secret as defined by the user.
     Values that are already base64 encoded will not be re-encoded.
+
+    Note:
+    Automatic encoding of secret values might cause issues if the values are not correctly identified as base64.
+    If you run into issues - encode the values before passing them to this function.
+
+    name
+        The name of the secret
+
+    namespace
+        The namespace to create the secret in
+
+    data
+        A dictionary of key-value pairs to store in the secret
+
+    source
+        File path to secret definition
+
+    template
+        Template engine to use to render the source file
+
+    saltenv
+        Salt environment to pull the source file from
+
+    context
+        Variables to make available in templated files
+
+    type
+        The type of the secret
+
+    metadata
+        Secret metadata dict
+
+    wait
+        Wait for secret to become ready (default: False)
+
+    timeout
+        Timeout in seconds to wait for secret (default: 60)
 
     CLI Example:
 
@@ -1095,6 +1414,13 @@ def create_secret(
     try:
         api_instance = kubernetes.client.CoreV1Api()
         api_response = api_instance.create_namespaced_secret(namespace, body)
+
+        if wait:
+            if not _wait_for_resource_status(
+                api_instance, "secret", name, namespace, "ready", timeout
+            ):
+                raise CommandExecutionError(f"Timeout waiting for secret {name} to become ready")
+
         return api_response.to_dict()
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException):
@@ -1103,17 +1429,54 @@ def create_secret(
                     f"Secret {name} already exists in namespace {namespace}. Use replace_secret to update it."
                 )
             if exc.status == 404:
-                return None
+                raise CommandExecutionError(f"{namespace} namespace does not exist")
+            log.exception("Exception when calling CoreV1Api->create_namespaced_secret")
         raise CommandExecutionError(str(exc))
     finally:
         _cleanup(**cfg)
 
 
 def create_configmap(
-    name, namespace, data, source=None, template=None, saltenv="base", context=None, **kwargs
+    name,
+    namespace,
+    data,
+    source=None,
+    template=None,
+    saltenv="base",
+    context=None,
+    wait=False,
+    timeout=60,
+    **kwargs,
 ):
     """
     Creates the kubernetes configmap as defined by the user.
+
+    name
+        The name of the configmap
+
+    namespace
+        The namespace to create the configmap in
+
+    data
+        A dictionary of key-value pairs to store in the configmap
+
+    source
+        File path to configmap definition
+
+    template
+        Template engine to use to render the source file
+
+    saltenv
+        Salt environment to pull the source file from
+
+    context
+        Variables to make available in templated files
+
+    wait
+        Wait for configmap to become ready (default: False)
+
+    timeout
+        Timeout in seconds to wait for configmap (default: 60)
 
     CLI Example:
 
@@ -1145,13 +1508,18 @@ def create_configmap(
         api_instance = kubernetes.client.CoreV1Api()
         api_response = api_instance.create_namespaced_config_map(namespace, body)
 
+        if wait:
+            if not _wait_for_resource_status(
+                api_instance, "config_map", name, namespace, "ready", timeout
+            ):
+                raise CommandExecutionError(f"Timeout waiting for configmap {name} to become ready")
+
         return api_response.to_dict()
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
             return None
-        else:
-            log.exception("Exception when calling CoreV1Api->create_namespaced_config_map")
-            raise CommandExecutionError(exc)
+        log.exception("Exception when calling CoreV1Api->create_namespaced_config_map")
+        raise CommandExecutionError(exc)
     finally:
         _cleanup(**cfg)
 
@@ -1160,15 +1528,15 @@ def create_namespace(name, **kwargs):
     """
     Creates a namespace with the specified name.
 
+    name
+        The name of the namespace to create
+
     CLI Example:
 
     .. code-block:: bash
 
         salt '*' kubernetes.create_namespace salt
         salt '*' kubernetes.create_namespace name=salt
-
-    Raises:
-        CommandExecutionError: If the namespace creation fails, already exists, or has invalid name
     """
     meta_obj = kubernetes.client.V1ObjectMeta(name=name)
     body = kubernetes.client.V1Namespace(metadata=meta_obj)
@@ -1195,11 +1563,51 @@ def create_namespace(name, **kwargs):
 
 
 def replace_deployment(
-    name, metadata, spec, source, template, saltenv, namespace="default", context=None, **kwargs
+    name,
+    metadata,
+    spec,
+    source,
+    template,
+    saltenv,
+    namespace="default",
+    context=None,
+    wait=False,
+    timeout=60,
+    **kwargs,
 ):
     """
     Replaces an existing deployment with a new one defined by name and
     namespace, having the specificed metadata and spec.
+
+    name
+        The name of the deployment
+
+    metadata
+        Deployment metadata dict
+
+    spec
+        Deployment spec dict following kubernetes API conventions
+
+    source
+        File path to deployment definition
+
+    template
+        Template engine to use to render the source file
+
+    saltenv
+        Salt environment to pull the source file from
+
+    namespace
+        The namespace to replace the deployment in
+
+    context
+        Variables to make available in templated files
+
+    wait
+        Wait for deployment to become ready (default: False)
+
+    timeout
+        Timeout in seconds to wait for deployment (default: 60)
 
     CLI Example:
 
@@ -1227,13 +1635,20 @@ def replace_deployment(
         api_instance = kubernetes.client.AppsV1Api()
         api_response = api_instance.replace_namespaced_deployment(name, namespace, body)
 
+        if wait:
+            if not _wait_for_resource_status(
+                api_instance, "deployment", name, namespace, "ready", timeout
+            ):
+                raise CommandExecutionError(
+                    f"Timeout waiting for deployment {name} to become ready"
+                )
+
         return api_response.to_dict()
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
             return None
-        else:
-            log.exception("Exception when calling AppsV1Api->replace_namespaced_deployment")
-            raise CommandExecutionError(exc)
+        log.exception("Exception when calling AppsV1Api->replace_namespaced_deployment")
+        raise CommandExecutionError(exc)
     finally:
         _cleanup(**cfg)
 
@@ -1248,17 +1663,60 @@ def replace_service(
     saltenv,
     namespace="default",
     context=None,
+    wait=False,
+    timeout=60,
     **kwargs,
 ):
     """
     Replaces an existing service with a new one defined by name and namespace,
-    having the specificed metadata and spec.
+    having the specified metadata and spec.
+
+    name
+        The name of the service
+
+    metadata
+        Service metadata dict
+
+    spec
+        Service spec dict following kubernetes API conventions
+
+    source
+        File path to service definition
+
+    template
+        Template engine to use to render the source file
+
+    old_service
+        The existing service to replace
+
+    saltenv
+        Salt environment to pull the source file from
+
+    namespace
+        The namespace to replace the service in
+
+    context
+        Variables to make available in templated files
+
+    wait
+        Wait for service to become ready (default: False)
+
+    timeout
+        Timeout in seconds to wait for service (default: 60)
 
     CLI Example:
 
     .. code-block:: bash
 
-        salt '*' kubernetes.replace_service *args
+        salt '*' kubernetes.replace_service name=my-service \
+            metadata='{"labels": {"app": "my-app"}}' \
+            spec='{"ports": [{"port": 80, "targetPort": 8080}], "selector": {"app": "my-app"}}' \
+            source=/path/to/service.yaml \
+            template=jinja \
+            old_service='{"metadata": {"resource_version": "12345"}, "spec": {"cluster_ip": "10.0.0.1"}}' \
+            saltenv=base \
+            namespace=default \
+            context='{"var1": "value1"}'
     """
     body = __create_object_body(
         kind="Service",
@@ -1285,13 +1743,18 @@ def replace_service(
         api_instance = kubernetes.client.CoreV1Api()
         api_response = api_instance.replace_namespaced_service(name, namespace, body)
 
+        if wait:
+            if not _wait_for_resource_status(
+                api_instance, "service", name, namespace, "ready", timeout
+            ):
+                raise CommandExecutionError(f"Timeout waiting for service {name} to become ready")
+
         return api_response.to_dict()
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
             return None
-        else:
-            log.exception("Exception when calling CoreV1Api->replace_namespaced_service")
-            raise CommandExecutionError(exc)
+        log.exception("Exception when calling CoreV1Api->replace_namespaced_service")
+        raise CommandExecutionError(exc)
     finally:
         _cleanup(**cfg)
 
@@ -1306,12 +1769,51 @@ def replace_secret(
     context=None,
     type=None,
     metadata=None,
+    wait=False,
+    timeout=60,
     **kwargs,
 ):
     """
     Replaces an existing secret with a new one defined by name and namespace.
     Values that are already base64 encoded will not be re-encoded.
     If a source file is specified, the secret type will be read from the template.
+
+    Note:
+    Automatic encoding of secret values might cause issues if the values are not correctly identified as base64.
+    If you run into issues - encode the values before passing them to this function.
+
+    name
+        The name of the secret
+
+    data
+        A dictionary of key-value pairs to store in the secret
+
+    source
+        File path to secret definition
+
+    template
+        Template engine to use to render the source file
+
+    saltenv
+        Salt environment to pull the source file from
+
+    namespace
+        The namespace to replace the secret in
+
+    context
+        Variables to make available in templated files
+
+    type
+        The type of the secret
+
+    metadata
+        Secret metadata dict
+
+    wait
+        Wait for secret to become ready (default: False)
+
+    timeout
+        Timeout in seconds to wait for secret (default: 60)
 
     CLI Example:
 
@@ -1368,6 +1870,13 @@ def replace_secret(
     try:
         api_instance = kubernetes.client.CoreV1Api()
         api_response = api_instance.replace_namespaced_secret(name, namespace, body)
+
+        if wait:
+            if not _wait_for_resource_status(
+                api_instance, "secret", name, namespace, "ready", timeout
+            ):
+                raise CommandExecutionError(f"Timeout waiting for secret {name} to be ready")
+
         return api_response.to_dict()
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
@@ -1385,11 +1894,40 @@ def replace_configmap(
     saltenv="base",
     namespace="default",
     context=None,
+    wait=False,
+    timeout=60,
     **kwargs,
 ):
     """
     Replaces an existing configmap with a new one defined by name and
     namespace with the specified data.
+
+    name
+        The name of the configmap
+
+    data
+        A dictionary of key-value pairs to store in the configmap
+
+    source
+        File path to configmap definition
+
+    template
+        Template engine to use to render the source file
+
+    saltenv
+        Salt environment to pull the source file from
+
+    namespace
+        The namespace to replace the configmap in
+
+    context
+        Variables to make available in templated files
+
+    wait
+        Wait for configmap to become ready (default: False)
+
+    timeout
+        Timeout in seconds to wait for configmap (default: 60)
 
     CLI Example:
 
@@ -1416,13 +1954,18 @@ def replace_configmap(
         api_instance = kubernetes.client.CoreV1Api()
         api_response = api_instance.replace_namespaced_config_map(name, namespace, body)
 
+        if wait:
+            if not _wait_for_resource_status(
+                api_instance, "config_map", name, namespace, "ready", timeout
+            ):
+                raise CommandExecutionError(f"Timeout waiting for configmap {name} to be ready")
+
         return api_response.to_dict()
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
             return None
-        else:
-            log.exception("Exception when calling CoreV1Api->replace_namespaced_configmap")
-            raise CommandExecutionError(exc)
+        log.exception("Exception when calling CoreV1Api->replace_namespaced_configmap")
+        raise CommandExecutionError(exc)
     finally:
         _cleanup(**cfg)
 
@@ -1432,17 +1975,16 @@ def __is_base64(value):
     Check if a string is base64 encoded by attempting to decode it.
     Handles whitespace and validates against base64.
     """
+    if not isinstance(value, str):
+        return False
+
+    # Remove whitespace and newlines
+    value = "".join(value.split())
     try:
-        if not isinstance(value, str):
-            return False
-
-        # Remove whitespace and newlines
-        value = "".join(value.split())
-
         # Try decoding with validation
         base64.b64decode(value, validate=True)
         return True
-    except binascii.Error:
+    except ValueError:
         return False
 
 
@@ -1737,9 +2279,6 @@ def __dict_to_service_spec(spec):
 
     Returns:
         kubernetes.client.V1ServiceSpec: The converted service spec
-
-    Raises:
-        CommandExecutionError: If the spec is invalid or missing required fields
     """
     if not isinstance(spec, dict):
         raise CommandExecutionError(f"Service spec must be a dictionary, got {type(spec)}")
@@ -1842,8 +2381,134 @@ def __enforce_only_strings_dict(dictionary):
     ret = {}
 
     for key, value in dictionary.items():
-        ret[str(key) if not isinstance(key, str) else key] = (
-            str(value) if not isinstance(value, str) else value
-        )
+        ret[str(key)] = str(value)
 
     return ret
+
+
+def _wait_for_resource_status(
+    api_instance, resource_type, name, namespace, expected_status, timeout=60
+):
+    """
+    Helper function to wait for a resource to reach an expected status.
+
+    api_instance
+        The kubernetes API instance to use
+
+    resource_type
+        Type of resource to wait for (e.g., 'deployment', 'pod', 'service')
+
+    name
+        Name of the resource
+
+    namespace
+        Namespace of the resource
+
+    expected_status
+        Expected status to wait for ('created', 'deleted', 'ready')
+
+    timeout
+        Timeout in seconds (default: 60)
+
+    Returns True if the resource reached the expected status, False otherwise.
+    """
+    try:
+        w = Watch()
+        start_time = time.time()
+
+        if expected_status == "deleted":
+            # For deletion, periodically check if the resource still exists until timeout
+            while time.time() - start_time < timeout:
+                try:
+                    if resource_type == "deployment":
+                        api_instance.read_namespaced_deployment(name, namespace)
+                    elif resource_type == "namespace":
+                        api_instance.read_namespace(name)
+                    elif resource_type == "service":
+                        api_instance.read_namespaced_service(name, namespace)
+                    elif resource_type == "pod":
+                        api_instance.read_namespaced_pod(name, namespace)
+                    elif resource_type == "secret":
+                        api_instance.read_namespaced_secret(name, namespace)
+                    elif resource_type == "configmap":
+                        api_instance.read_namespaced_config_map(name, namespace)
+                except ApiException as e:
+                    if e.status == 404:
+                        # Resource is gone, deletion successful
+                        return True
+                # Resource still exists, wait before retrying
+                time.sleep(1)
+            # Timed out waiting for deletion
+            return False
+
+        # For creation/ready status watching
+        for event in w.stream(
+            func=getattr(api_instance, f"list_namespaced_{resource_type}"),
+            namespace=namespace,
+            field_selector=f"metadata.name={name}",
+            timeout_seconds=timeout,
+        ):
+            if event["object"].metadata.name == name:
+                if expected_status == "created":
+                    return True
+                elif expected_status == "ready":
+                    if resource_type == "deployment":
+                        if (
+                            event["object"].status.available_replicas
+                            and event["object"].status.available_replicas
+                            == event["object"].spec.replicas
+                        ):
+                            return True
+                    elif resource_type == "pod":
+                        # More detailed pod readiness check
+                        if event["object"].status.phase == "Running":
+                            if not event["object"].status.container_statuses:
+                                continue
+
+                            all_containers_ready = True
+                            unready_containers = []
+
+                            for container_status in event["object"].status.container_statuses:
+                                if not container_status.ready:
+                                    all_containers_ready = False
+                                    unready_containers.append(container_status.name)
+
+                            if all_containers_ready:
+                                return True
+                    elif resource_type == "service":
+                        # For services, check if endpoints exist
+                        endpoints_api = kubernetes.client.CoreV1Api()
+                        try:
+                            endpoints = endpoints_api.read_namespaced_endpoints(name, namespace)
+                            if endpoints and endpoints.subsets:
+                                for subset in endpoints.subsets:
+                                    if subset.addresses:
+                                        return True  # Service has endpoints
+                        except ApiException:
+                            pass
+                        return False  # No endpoints found
+                    else:
+                        return True  # For other resources, assume ready when created
+
+            if time.time() - start_time >= timeout:
+                log.warning(
+                    "Timeout reached while waiting for %s/%s to become %s",
+                    resource_type,
+                    name,
+                    expected_status,
+                )
+                return False
+
+        log.warning(
+            "Watch stream ended before %s/%s reached %s status",
+            resource_type,
+            name,
+            expected_status,
+        )
+        return False
+
+    except (ApiException, HTTPError) as exc:
+        log.exception("Exception when waiting for %s", resource_type)
+        raise CommandExecutionError(exc)
+    finally:
+        w.stop()

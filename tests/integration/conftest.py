@@ -1,13 +1,13 @@
 import pytest
 
 
-@pytest.fixture(scope="package")
+@pytest.fixture(scope="module")
 def master(master):  # pragma: no cover
     with master.started():
         yield master
 
 
-@pytest.fixture(scope="package")
+@pytest.fixture(scope="module")
 def minion(minion):  # pragma: no cover
     with minion.started():
         yield minion
