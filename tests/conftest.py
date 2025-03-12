@@ -43,55 +43,31 @@ def salt_factories_config():  # pragma: no cover
 @pytest.fixture(scope="module")
 def master_config():  # pragma: no cover
     """
-    Default master configuration for kubernetes tests
-    """
-    return {
-        "open_mode": True,
-        "timeout": 120,
-    }
-
-
-@pytest.fixture(scope="module")
-def master_config_overrides():  # pragma: no cover
-    """
-    Override the default configuration per package
+    Salt master configuration overrides for integration tests.
     """
     return {}
 
 
 @pytest.fixture(scope="module")
-def master(salt_factories, master_config, master_config_overrides):  # pragma: no cover
-    return salt_factories.salt_master_daemon(
-        random_string("master-"), defaults=master_config, overrides=master_config_overrides
-    )
+def master(salt_factories, master_config):  # pragma: no cover
+    return salt_factories.salt_master_daemon(random_string("master-"), overrides=master_config)
 
 
 @pytest.fixture(scope="module")
 def minion_config(kind_cluster):  # pragma: no cover
     """
-    Default minion configuration for kubernetes tests
+    Salt minion configuration overrides for integration tests.
     """
     return {
         "kubernetes.kubeconfig": str(kind_cluster.kubeconfig_path),
         "kubernetes.context": "kind-salt-test",
         "providers": {"pkg": "kubernetes"},
-        "open_mode": True,
     }
 
 
 @pytest.fixture(scope="module")
-def minion_config_overrides():  # pragma: no cover
-    """
-    Override the default configuration per package
-    """
-    return {}
-
-
-@pytest.fixture(scope="module")
-def minion(master, minion_config, minion_config_overrides):  # pragma: no cover
-    return master.salt_minion_daemon(
-        random_string("minion-"), defaults=minion_config, overrides=minion_config_overrides
-    )
+def minion(master, minion_config):  # pragma: no cover
+    return master.salt_minion_daemon(random_string("minion-"), overrides=minion_config)
 
 
 @pytest.fixture(scope="session", params=K8S_VERSIONS)
@@ -100,6 +76,7 @@ def kind_cluster(request):  # pragma: no cover
     Create Kind cluster for testing with specified Kubernetes version
     """
     cluster = KindCluster(name="salt-test", image=f"kindest/node:{request.param}")
+    err = None
     try:
         cluster.create()
 
@@ -152,11 +129,12 @@ def kind_cluster(request):  # pragma: no cover
                 break
             except subprocess.CalledProcessError as exc:  # pylint: disable=try-except-raise
                 retries -= 1
-                if retries == 0:
-                    log.error("Failed to validate cluster:")
-                    log.error("stdout: %s", exc.stdout)
-                    log.error("stderr: %s", exc.stderr)
-                    raise
+                err = exc
+        else:
+            log.error("Failed to validate cluster:")
+            log.error("stdout: %s", err.stdout)
+            log.error("stderr: %s", err.stderr)
+            raise err
 
         yield cluster
     finally:
