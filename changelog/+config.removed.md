@@ -1,1 +1,1 @@
-Removed the ability to override minion configuration in function parameters (`context`, `kubeconfig`, `kubeconfig_data`)
+Removed legacy connection setup method (`_setup_conn_old`) and config options (`kubernetes.api_url`, `kubernetes.user`, `kubernetes.password`, etc.). Use `kubernetes.kubeconfig`/`kubernetes.kubeconfig-data` with `kubernetes.context` instead.

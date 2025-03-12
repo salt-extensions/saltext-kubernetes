@@ -14,6 +14,9 @@ Module for handling kubernetes calls.
 The data format for `kubernetes.kubeconfig-data` value is the content of
 `kubeconfig` base64 encoded in one line.
 
+These settings can be overridden by adding `context and `kubeconfig` or
+`kubeconfig_data` parameters when calling a function.
+
 Only `kubeconfig` or `kubeconfig-data` should be provided. In case both are
 provided `kubeconfig` entry is preferred.
 
@@ -22,6 +25,7 @@ CLI Example:
 .. code-block:: bash
 
     salt '*' kubernetes.nodes
+    salt '*' kubernetes.nodes kubeconfig=/etc/salt/k8s/kubeconfig context=minikube
 
 .. versionadded:: 2017.7.0
 .. versionchanged:: 2019.2.0
@@ -107,15 +111,17 @@ if not salt.utils.platform.is_windows():
     POLLING_TIME_LIMIT = 30
 
 
-def _setup_conn(**_kwargs):
+def _setup_conn(**kwargs):
     """
     Setup kubernetes API connection singleton
     """
-    kubeconfig = __salt__["config.option"]("kubernetes.kubeconfig")
-    kubeconfig_data = __salt__["config.option"]("kubernetes.kubeconfig-data")
-    context = __salt__["config.option"]("kubernetes.context")
+    kubeconfig = kwargs.get("kubeconfig") or __salt__["config.option"]("kubernetes.kubeconfig")
+    kubeconfig_data = kwargs.get("kubeconfig_data") or __salt__["config.option"](
+        "kubernetes.kubeconfig-data"
+    )
+    context = kwargs.get("context") or __salt__["config.option"]("kubernetes.context")
 
-    if kubeconfig_data and not kubeconfig:
+    if (kubeconfig_data and not kubeconfig) or (kubeconfig_data and kwargs.get("kubeconfig_data")):
         with tempfile.NamedTemporaryFile(prefix="salt-kubeconfig-", delete=False) as kcfg:
             kcfg.write(base64.b64decode(kubeconfig_data))
             kubeconfig = kcfg.name
@@ -349,7 +355,7 @@ def deployments(namespace="default", **kwargs):
     Return a list of kubernetes deployments defined in the namespace
 
     namespace
-        The namespace to list deployments from
+        The namespace to list deployments from. Defaults to ``default``.
 
     CLI Example:
 
@@ -378,7 +384,7 @@ def services(namespace="default", **kwargs):
     Return a list of kubernetes services defined in the namespace
 
     namespace
-        The namespace to list services from
+        The namespace to list services from. Defaults to ``default``.
 
     CLI Example:
 
@@ -407,7 +413,7 @@ def pods(namespace="default", **kwargs):
     Return a list of kubernetes pods defined in the namespace
 
     namespace
-        The namespace to list pods from
+        The namespace to list pods from. Defaults to ``default``.
 
     CLI Example:
 
@@ -435,7 +441,7 @@ def secrets(namespace="default", **kwargs):
     Return a list of kubernetes secrets defined in the namespace
 
     namespace
-        The namespace to list secrets from
+        The namespace to list secrets from. Defaults to ``default``.
 
     CLI Example:
 
@@ -464,7 +470,7 @@ def configmaps(namespace="default", **kwargs):
     Return a list of kubernetes configmaps defined in the namespace
 
     namespace
-        The namespace to list configmaps from
+        The namespace to list configmaps from. Defaults to ``default``.
 
     CLI Example:
 
@@ -498,7 +504,7 @@ def show_deployment(name, namespace="default", **kwargs):
         The name of the deployment
 
     namespace
-        The namespace to look for the deployment
+        The namespace to look for the deployment. Defaults to ``default``.
 
     CLI Example:
 
@@ -530,7 +536,7 @@ def show_service(name, namespace="default", **kwargs):
         The name of the service
 
     namespace
-        The namespace to look for the service
+        The namespace to look for the service. Defaults to ``default``.
 
     CLI Example:
 
@@ -562,7 +568,7 @@ def show_pod(name, namespace="default", **kwargs):
         The name of the pod
 
     namespace
-        The namespace to look for the pod
+        The namespace to look for the pod. Defaults to ``default``.
 
     CLI Example:
 
@@ -627,7 +633,7 @@ def show_secret(name, namespace="default", decode=False, **kwargs):
         The name of the secret
 
     namespace
-        The namespace to look for the secret
+        The namespace to look for the secret. Defaults to ``default``.
 
     decode
         Decode the secret values. Default is False
@@ -673,7 +679,7 @@ def show_configmap(name, namespace="default", **kwargs):
         The name of the configmap
 
     namespace
-        The namespace to look for the configmap
+        The namespace to look for the configmap. Defaults to ``default``.
 
     CLI Example:
 
@@ -705,12 +711,16 @@ def delete_deployment(name, namespace="default", wait=False, timeout=60, **kwarg
         The name of the deployment
 
     namespace
-        The namespace to delete the deployment from
+        The namespace to delete the deployment from. Defaults to ``default``.
 
     wait
+        .. versionadded:: 2.0.0
+
         Wait for deployment deletion to complete (default: False)
 
     timeout
+        .. versionadded:: 2.0.0
+
         Timeout in seconds to wait for deletion (default: 60)
 
     CLI Example:
@@ -734,31 +744,7 @@ def delete_deployment(name, namespace="default", wait=False, timeout=60, **kwarg
             ):
                 raise CommandExecutionError(f"Timeout waiting for deployment {name} to be deleted")
 
-        mutable_api_response = api_response.to_dict()
-        if not salt.utils.platform.is_windows():
-            try:
-                with _time_limit(POLLING_TIME_LIMIT):
-                    while show_deployment(name, namespace) is not None:
-                        time.sleep(1)
-                    else:  # pylint: disable=useless-else-on-loop
-                        mutable_api_response["code"] = 200
-            except TimeoutError:
-                pass
-        else:
-            # Windows has not signal.alarm implementation, so we are just falling
-            # back to loop-counting.
-            for _ in range(60):
-                if show_deployment(name, namespace) is None:
-                    mutable_api_response["code"] = 200
-                    break
-                time.sleep(1)
-        if mutable_api_response["code"] != 200:
-            log.warning(
-                "Reached polling time limit. Deployment is not yet "
-                "deleted, but we are backing off. Sorry, but you'll "
-                "have to check manually."
-            )
-        return mutable_api_response
+        return api_response.to_dict()
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
             return None
@@ -776,12 +762,16 @@ def delete_service(name, namespace="default", wait=False, timeout=60, **kwargs):
         The name of the service
 
     namespace
-        The namespace to delete the service from
+        The namespace to delete the service from. Defaults to ``default``.
 
     wait
+        .. versionadded:: 2.0.0
+
         Wait for service deletion to complete (default: False)
 
     timeout
+        .. versionadded:: 2.0.0
+
         Timeout in seconds to wait for deletion (default: 60)
 
     CLI Example:
@@ -822,12 +812,16 @@ def delete_pod(name, namespace="default", wait=False, timeout=60, **kwargs):
         The name of the pod
 
     namespace
-        The namespace to delete the pod from
+        The namespace to delete the pod from. Defaults to ``default``.
 
     wait
+        .. versionadded:: 2.0.0
+
         Wait for pod deletion to complete (default: False)
 
     timeout
+        .. versionadded:: 2.0.0
+
         Timeout in seconds to wait for deletion (default: 60)
 
     CLI Example:
@@ -869,9 +863,13 @@ def delete_namespace(name, wait=False, timeout=60, **kwargs):
         The name of the namespace
 
     wait
+        .. versionadded:: 2.0.0
+
         Wait for namespace deletion to complete (default: False)
 
     timeout
+        .. versionadded:: 2.0.0
+
         Timeout in seconds to wait for deletion (default: 60)
 
     CLI Example:
@@ -917,12 +915,16 @@ def delete_secret(name, namespace="default", wait=False, timeout=60, **kwargs):
         The name of the secret
 
     namespace
-        The namespace to delete the secret from
+        The namespace to delete the secret from. Defaults to ``default``.
 
     wait
+        .. versionadded:: 2.0.0
+
         Wait for secret deletion to complete (default: False)
 
     timeout
+        .. versionadded:: 2.0.0
+
         Timeout in seconds to wait for deletion (default: 60)
 
     CLI Example:
@@ -965,12 +967,16 @@ def delete_configmap(name, namespace="default", wait=False, timeout=60, **kwargs
         The name of the configmap
 
     namespace
-        The namespace to delete the configmap from
+        The namespace to delete the configmap from. Defaults to ``default``.
 
     wait
+        .. versionadded:: 2.0.0
+
         Wait for configmap deletion to complete (default: False)
 
     timeout
+        .. versionadded:: 2.0.0
+
         Timeout in seconds to wait for deletion (default: 60)
 
     CLI Example:
@@ -1014,7 +1020,7 @@ def create_deployment(
     source,
     template,
     saltenv,
-    context=None,
+    defaults=None,
     wait=False,
     timeout=60,
     **kwargs,
@@ -1043,13 +1049,19 @@ def create_deployment(
     saltenv
         Salt environment to pull the source file from
 
-    context
+    defaults
+        .. versionadded:: 2.0.0
+
         Variables to make available in templated files
 
     wait
+        .. versionadded:: 2.0.0
+
         Wait for deployment to become ready (default: False)
 
     timeout
+        .. versionadded:: 2.0.0
+
         Timeout in seconds to wait for deployment (default: 60)
 
     CLI Example:
@@ -1069,7 +1081,7 @@ def create_deployment(
         source=source,
         template=template,
         saltenv=saltenv,
-        context=context,
+        defaults=defaults,
     )
 
     cfg = _setup_conn(**kwargs)
@@ -1104,7 +1116,7 @@ def create_pod(
     source,
     template,
     saltenv,
-    context=None,
+    defaults=None,
     wait=False,
     timeout=60,
     **kwargs,
@@ -1133,13 +1145,19 @@ def create_pod(
     saltenv
         Salt environment to pull the source file from
 
-    context
+    defaults
+        .. versionadded:: 2.0.0
+
         Variables to make available in templated files
 
     wait
+        .. versionadded:: 2.0.0
+
         Wait for pod to become ready (default: False)
 
     timeout
+        .. versionadded:: 2.0.0
+
         Timeout in seconds to wait for pod (default: 60)
 
     Pod spec must follow kubernetes API conventions:
@@ -1169,7 +1187,7 @@ def create_pod(
         source=source,
         template=template,
         saltenv=saltenv,
-        context=context,
+        defaults=defaults,
     )
 
     cfg = _setup_conn(**kwargs)
@@ -1202,7 +1220,7 @@ def create_service(
     source,
     template,
     saltenv,
-    context=None,
+    defaults=None,
     wait=False,
     timeout=60,
     **kwargs,
@@ -1231,13 +1249,19 @@ def create_service(
     saltenv
         Salt environment to pull the source file from
 
-    context
+    defaults
+        .. versionadded:: 2.0.0
+
         Variables to make available in templated files
 
     wait
+        .. versionadded:: 2.0.0
+
         Wait for service to become ready (default: False)
 
     timeout
+        .. versionadded:: 2.0.0
+
         Timeout in seconds to wait for service (default: 60)
 
     Service spec must follow kubernetes API conventions. Port specifications can be:
@@ -1281,7 +1305,7 @@ def create_service(
         source=source,
         template=template,
         saltenv=saltenv,
-        context=context,
+        defaults=defaults,
     )
 
     cfg = _setup_conn(**kwargs)
@@ -1313,8 +1337,8 @@ def create_secret(
     source=None,
     template=None,
     saltenv="base",
-    context=None,
-    type=None,
+    defaults=None,
+    secret_type=None,
     metadata=None,
     wait=False,
     timeout=60,
@@ -1324,15 +1348,15 @@ def create_secret(
     Creates the kubernetes secret as defined by the user.
     Values that are already base64 encoded will not be re-encoded.
 
-    Note:
-    Automatic encoding of secret values might cause issues if the values are not correctly identified as base64.
-    If you run into issues - encode the values before passing them to this function.
+    .. note::
+        Automatic encoding of secret values might cause issues if the values are not correctly identified as base64.
+        If you run into issues - encode the values before passing them to this function.
 
     name
         The name of the secret
 
     namespace
-        The namespace to create the secret in
+        The namespace to create the secret in. Defaults to ``default``.
 
     data
         A dictionary of key-value pairs to store in the secret
@@ -1346,19 +1370,29 @@ def create_secret(
     saltenv
         Salt environment to pull the source file from
 
-    context
+    defaults
+        .. versionadded:: 2.0.0
+
         Variables to make available in templated files
 
-    type
+    secret_type
+        .. versionadded:: 2.0.0
+
         The type of the secret
 
     metadata
+        .. versionadded:: 2.0.0
+
         Secret metadata dict
 
     wait
+        .. versionadded:: 2.0.0
+
         Wait for secret to become ready (default: False)
 
     timeout
+        .. versionadded:: 2.0.0
+
         Timeout in seconds to wait for secret (default: 60)
 
     CLI Example:
@@ -1387,11 +1421,12 @@ def create_secret(
     """
     cfg = _setup_conn(**kwargs)
     if source:
-        src_obj = __read_and_render_yaml_file(source, template, saltenv, context)
-        if isinstance(src_obj, dict):
-            if "data" in src_obj:
-                data = src_obj["data"]
-            type = src_obj.get("type")
+        src_obj = __read_and_render_yaml_file(source, template, saltenv, defaults)
+        if not isinstance(src_obj, dict):
+            raise CommandExecutionError("`source` did not render to a dictionary")
+        if "data" in src_obj:
+            data = src_obj["data"]
+        secret_type = src_obj.get("secret_type")
     elif data is None:
         data = {}
 
@@ -1408,7 +1443,7 @@ def create_secret(
     body = kubernetes.client.V1Secret(
         metadata=__dict_to_object_meta(name, namespace, metadata),
         data=encoded_data,
-        type=type,
+        type=secret_type,
     )
 
     try:
@@ -1443,7 +1478,7 @@ def create_configmap(
     source=None,
     template=None,
     saltenv="base",
-    context=None,
+    defaults=None,
     wait=False,
     timeout=60,
     **kwargs,
@@ -1469,13 +1504,19 @@ def create_configmap(
     saltenv
         Salt environment to pull the source file from
 
-    context
+    defaults
+        .. versionadded:: 2.0.0
+
         Variables to make available in templated files
 
     wait
+        .. versionadded:: 2.0.0
+
         Wait for configmap to become ready (default: False)
 
     timeout
+        .. versionadded:: 2.0.0
+
         Timeout in seconds to wait for configmap (default: 60)
 
     CLI Example:
@@ -1489,7 +1530,7 @@ def create_configmap(
             name=settings namespace=default data='{"example.conf": "# example file"}'
     """
     if source:
-        data = __read_and_render_yaml_file(source, template, saltenv, context)
+        data = __read_and_render_yaml_file(source, template, saltenv, defaults)
     elif data is None:
         data = {}
 
@@ -1570,7 +1611,7 @@ def replace_deployment(
     template,
     saltenv,
     namespace="default",
-    context=None,
+    defaults=None,
     wait=False,
     timeout=60,
     **kwargs,
@@ -1598,15 +1639,21 @@ def replace_deployment(
         Salt environment to pull the source file from
 
     namespace
-        The namespace to replace the deployment in
+        The namespace to replace the deployment in. Defaults to ``default``.
 
-    context
+    defaults
+        .. versionadded:: 2.0.0
+
         Variables to make available in templated files
 
     wait
+        .. versionadded:: 2.0.0
+
         Wait for deployment to become ready (default: False)
 
     timeout
+        .. versionadded:: 2.0.0
+
         Timeout in seconds to wait for deployment (default: 60)
 
     CLI Example:
@@ -1626,7 +1673,7 @@ def replace_deployment(
         source=source,
         template=template,
         saltenv=saltenv,
-        context=context,
+        defaults=defaults,
     )
 
     cfg = _setup_conn(**kwargs)
@@ -1662,7 +1709,7 @@ def replace_service(
     old_service,
     saltenv,
     namespace="default",
-    context=None,
+    defaults=None,
     wait=False,
     timeout=60,
     **kwargs,
@@ -1693,15 +1740,21 @@ def replace_service(
         Salt environment to pull the source file from
 
     namespace
-        The namespace to replace the service in
+        The namespace to replace the service in. Defaults to ``default``.
 
-    context
+    defaults
+        .. versionadded:: 2.0.0
+
         Variables to make available in templated files
 
     wait
+        .. versionadded:: 2.0.0
+
         Wait for service to become ready (default: False)
 
     timeout
+        .. versionadded:: 2.0.0
+
         Timeout in seconds to wait for service (default: 60)
 
     CLI Example:
@@ -1716,7 +1769,7 @@ def replace_service(
             old_service='{"metadata": {"resource_version": "12345"}, "spec": {"cluster_ip": "10.0.0.1"}}' \
             saltenv=base \
             namespace=default \
-            context='{"var1": "value1"}'
+            defaults='{"var1": "value1"}'
     """
     body = __create_object_body(
         kind="Service",
@@ -1729,7 +1782,7 @@ def replace_service(
         source=source,
         template=template,
         saltenv=saltenv,
-        context=context,
+        defaults=defaults,
     )
 
     # Some attributes have to be preserved
@@ -1766,8 +1819,8 @@ def replace_secret(
     template=None,
     saltenv="base",
     namespace="default",
-    context=None,
-    type=None,
+    defaults=None,
+    secret_type=None,
     metadata=None,
     wait=False,
     timeout=60,
@@ -1778,9 +1831,9 @@ def replace_secret(
     Values that are already base64 encoded will not be re-encoded.
     If a source file is specified, the secret type will be read from the template.
 
-    Note:
-    Automatic encoding of secret values might cause issues if the values are not correctly identified as base64.
-    If you run into issues - encode the values before passing them to this function.
+    .. note::
+        Automatic encoding of secret values might cause issues if the values are not correctly identified as base64.
+        If you run into issues - encode the values before passing them to this function.
 
     name
         The name of the secret
@@ -1798,21 +1851,31 @@ def replace_secret(
         Salt environment to pull the source file from
 
     namespace
-        The namespace to replace the secret in
+        The namespace to replace the secret in. Defaults to ``default``.
 
-    context
+    defaults
+        .. versionadded:: 2.0.0
+
         Variables to make available in templated files
 
-    type
+    secret_type
+        .. versionadded:: 2.0.0
+
         The type of the secret
 
     metadata
+        .. versionadded:: 2.0.0
+
         Secret metadata dict
 
     wait
+        .. versionadded:: 2.0.0
+
         Wait for secret to become ready (default: False)
 
     timeout
+        .. versionadded:: 2.0.0
+
         Timeout in seconds to wait for secret (default: 60)
 
     CLI Example:
@@ -1830,19 +1893,22 @@ def replace_secret(
         # For docker registry secrets
         salt 'minion3' kubernetes.replace_secret \
             name=docker-registry \
-            source=/path/to/docker-secret.yaml
+            source=/path/to/docker-secret.yaml \
+            secret_type=kubernetes.io/dockerconfigjson
 
         # For TLS secrets
         salt 'minion4' kubernetes.replace_secret \
             name=tls-secret \
-            source=/path/to/tls-secret.yaml
+            source=/path/to/tls-secret.yaml \
+            secret_type=kubernetes.io/tls
     """
     if source:
-        src_obj = __read_and_render_yaml_file(source, template, saltenv, context)
-        if isinstance(src_obj, dict):
-            if "data" in src_obj:
-                data = src_obj["data"]
-            type = src_obj.get("type")
+        src_obj = __read_and_render_yaml_file(source, template, saltenv, defaults)
+        if not isinstance(src_obj, dict):
+            raise CommandExecutionError("`source` did not render to a dictionary")
+        if "data" in src_obj:
+            data = src_obj["data"]
+        secret_type = src_obj.get("secret_type")
     elif data is None:
         data = {}
 
@@ -1859,10 +1925,12 @@ def replace_secret(
     # Get existing secret type if not specified
     if not type:
         existing_secret = kubernetes.client.CoreV1Api().read_namespaced_secret(name, namespace)
-        type = existing_secret.type
+        secret_type = existing_secret.type
 
     body = kubernetes.client.V1Secret(
-        metadata=__dict_to_object_meta(name, namespace, metadata), data=encoded_data, type=type
+        metadata=__dict_to_object_meta(name, namespace, metadata),
+        data=encoded_data,
+        type=secret_type,
     )
 
     cfg = _setup_conn(**kwargs)
@@ -1893,7 +1961,7 @@ def replace_configmap(
     template=None,
     saltenv="base",
     namespace="default",
-    context=None,
+    defaults=None,
     wait=False,
     timeout=60,
     **kwargs,
@@ -1918,15 +1986,21 @@ def replace_configmap(
         Salt environment to pull the source file from
 
     namespace
-        The namespace to replace the configmap in
+        The namespace to replace the configmap in. Defaults to ``default``.
 
-    context
+    defaults
+        .. versionadded:: 2.0.0
+
         Variables to make available in templated files
 
     wait
+        .. versionadded:: 2.0.0
+
         Wait for configmap to become ready (default: False)
 
     timeout
+        .. versionadded:: 2.0.0
+
         Timeout in seconds to wait for configmap (default: 60)
 
     CLI Example:
@@ -1940,7 +2014,7 @@ def replace_configmap(
             name=settings namespace=default data='{"example.conf": "# example file"}'
     """
     if source:
-        data = __read_and_render_yaml_file(source, template, saltenv, context)
+        data = __read_and_render_yaml_file(source, template, saltenv, defaults)
 
     data = __enforce_only_strings_dict(data)
 
@@ -1999,13 +2073,13 @@ def __create_object_body(
     source,
     template,
     saltenv,
-    context=None,
+    defaults=None,
 ):
     """
     Create a Kubernetes Object body instance.
     """
     if source:
-        src_obj = __read_and_render_yaml_file(source, template, saltenv, context)
+        src_obj = __read_and_render_yaml_file(source, template, saltenv, defaults)
         if not isinstance(src_obj, dict) or "kind" not in src_obj or src_obj["kind"] != kind:
             raise CommandExecutionError(f"The source file should define only a {kind} object")
 
@@ -2030,7 +2104,7 @@ def __create_object_body(
     )
 
 
-def __read_and_render_yaml_file(source, template, saltenv, context=None):
+def __read_and_render_yaml_file(source, template, saltenv, defaults=None):
     """
     Read a yaml file and, if needed, renders that using the specified
     templating. Returns the python objects defined inside of the file.
@@ -2044,9 +2118,9 @@ def __read_and_render_yaml_file(source, template, saltenv, context=None):
 
         if template:
             if template in salt.utils.templates.TEMPLATE_REGISTRY:
-                # Apply templating with context
-                if context is None:
-                    context = {}
+                # Apply templating with defaults
+                if defaults is None:
+                    defaults = {}
 
                 data = salt.utils.templates.TEMPLATE_REGISTRY[template](
                     contents,
@@ -2057,7 +2131,7 @@ def __read_and_render_yaml_file(source, template, saltenv, context=None):
                     pillar=__pillar__,
                     salt=__salt__,
                     opts=__opts__,
-                    context=context,
+                    context=defaults,
                 )
 
                 if not data["result"]:
@@ -2227,22 +2301,20 @@ def __dict_to_pod_spec(spec):
 
             processed_ports = []
             for port in ports:
-                if isinstance(port, dict):
-                    port_copy = port.copy()
-                    # Handle containerPort conversion
-                    if "containerPort" in port_copy:
-                        try:
-                            port_copy["container_port"] = int(port_copy.pop("containerPort"))
-                        except (TypeError, ValueError) as exc:
-                            raise CommandExecutionError(
-                                f"containerPort in container {container_copy['name']} must be an integer: {exc}"
-                            )
-                    processed_ports.append(kubernetes.client.V1ContainerPort(**port_copy))
-                else:
+                if not isinstance(port, dict):
                     raise CommandExecutionError(
                         f"Port in container {container_copy['name']} must be a dictionary"
                     )
-            container_copy["ports"] = processed_ports
+                port_copy = port.copy()
+                # Handle containerPort conversion
+                if "containerPort" in port_copy:
+                    try:
+                        port_copy["container_port"] = int(port_copy.pop("containerPort"))
+                    except (TypeError, ValueError) as exc:
+                        raise CommandExecutionError(
+                            f"containerPort in container {container_copy['name']} must be an integer: {exc}"
+                        )
+                processed_ports.append(kubernetes.client.V1ContainerPort(**port_copy))
 
         containers.append(kubernetes.client.V1Container(**container_copy))
 
@@ -2256,13 +2328,11 @@ def __dict_to_pod_spec(spec):
 
         processed_secrets = []
         for secret in image_pull_secrets:
-            if isinstance(secret, dict):
-                processed_secrets.append(kubernetes.client.V1LocalObjectReference(**secret))
-            else:
+            if not isinstance(secret, dict):
                 raise CommandExecutionError(
                     f"Each imagePullSecret must be a dictionary, not {type(secret).__name__}"
                 )
-        processed_spec["image_pull_secrets"] = processed_secrets
+            processed_secrets.append(kubernetes.client.V1LocalObjectReference(**secret))
 
     try:
         return kubernetes.client.V1PodSpec(**processed_spec)
@@ -2390,6 +2460,8 @@ def _wait_for_resource_status(
     api_instance, resource_type, name, namespace, expected_status, timeout=60
 ):
     """
+    .. versionadded:: 2.0.0
+
     Helper function to wait for a resource to reach an expected status.
 
     api_instance

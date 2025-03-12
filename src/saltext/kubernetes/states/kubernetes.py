@@ -67,30 +67,31 @@ The kubernetes module is used to manage different kubernetes resources.
       require:
         - pip: kubernetes-python-module
 
-    # kubernetes deployment using a template with custom context variables
-    nginx-template-with-context:
+    # kubernetes deployment using a template with custom defaults variables
+    nginx-template-with-defaults:
       kubernetes.deployment_present:
         - name: nginx-template
         - source: salt://k8s/nginx-template.yml.jinja
         - template: jinja
-        - context:
+        - defaults:
             replicas: 3
             nginx_version: 1.19
             environment: production
             app_label: frontend
 
-    # kubernetes secret with context variables
-    cert-secret-with-context:
+    # kubernetes secret with defaults variables
+    cert-secret-with-defaults:
       kubernetes.secret_present:
         - name: tls-cert
         - source: salt://k8s/tls-cert.yml.jinja
         - template: jinja
-        - context:
+        - defaults:
             cert_name: myapp.example.com
             cert_data: |
                 -----BEGIN CERTIFICATE-----
                 ...
                 -----END CERTIFICATE-----
+        - secret_type: kubernetes.io/tls
 
     # Kubernetes secret
     k8s-secret:
@@ -144,9 +145,13 @@ def deployment_absent(name, namespace="default", wait=False, timeout=60, **kwarg
         The name of the namespace
 
     wait
+        .. versionadded:: 2.0.0
+
         If set to True, the function will wait until the deployment is deleted.
 
     timeout
+        .. versionadded:: 2.0.0
+
         The time in seconds to wait for the deployment to
 
     Example:
@@ -188,13 +193,9 @@ def deployment_absent(name, namespace="default", wait=False, timeout=60, **kwarg
         ret["comment"] = str(err)
         return ret
 
-    if res["code"] == 200:
-        ret["result"] = True
-        ret["changes"] = {"kubernetes.deployment": {"new": "absent", "old": "present"}}
-        ret["comment"] = res["message"]
-    else:
-        ret["comment"] = f"Something went wrong, response: {res}"
-
+    ret["result"] = True
+    ret["changes"] = {"kubernetes.deployment": {"new": "absent", "old": "present"}}
+    ret["comment"] = res["message"]
     return ret
 
 
@@ -205,7 +206,7 @@ def deployment_present(
     spec=None,
     source="",
     template="",
-    context=None,
+    defaults=None,
     wait=False,
     timeout=60,
     **kwargs,
@@ -235,13 +236,19 @@ def deployment_present(
     template
         Template engine to be used to render the source file.
 
-    context
+    defaults
+        .. versionadded:: 2.0.0
+
         Variables to be passed into the template.
 
     wait
+        .. versionadded:: 2.0.0
+
         If set to True, the function will wait until the deployment is created.
 
     timeout
+        .. versionadded:: 2.0.0
+
         The time in seconds to wait for the deployment to be created.
 
     Example:
@@ -299,7 +306,7 @@ def deployment_present(
                 source=source,
                 template=template,
                 saltenv=__env__,
-                context=context,
+                defaults=defaults,
                 wait=wait,
                 timeout=timeout,
                 **kwargs,
@@ -327,7 +334,7 @@ def deployment_present(
                 source=source,
                 template=template,
                 saltenv=__env__,
-                context=context,
+                defaults=defaults,
                 wait=wait,
                 timeout=timeout,
                 **kwargs,
@@ -350,7 +357,7 @@ def service_present(
     spec=None,
     source="",
     template="",
-    context=None,
+    defaults=None,
     wait=False,
     timeout=60,
     **kwargs,
@@ -380,13 +387,19 @@ def service_present(
     template
         Template engine to be used to render the source file.
 
-    context
+    defaults
+        .. versionadded:: 2.0.0
+
         Variables to be passed into the template.
 
     wait
+        .. versionadded:: 2.0.0
+
         If set to True, the function will wait until the service is created.
 
     timeout
+        .. versionadded:: 2.0.0
+
         The time in seconds to wait for the service to be created.
 
     Example:
@@ -439,7 +452,7 @@ def service_present(
                 source=source,
                 template=template,
                 saltenv=__env__,
-                context=context,
+                defaults=defaults,
                 wait=wait,
                 timeout=timeout,
                 **kwargs,
@@ -468,7 +481,7 @@ def service_present(
                 template=template,
                 old_service=service,
                 saltenv=__env__,
-                context=context,
+                defaults=defaults,
                 wait=wait,
                 timeout=timeout,
                 **kwargs,
@@ -495,9 +508,13 @@ def service_absent(name, namespace="default", wait=False, timeout=60, **kwargs):
         The name of the namespace
 
     wait
+        .. versionadded:: 2.0.0
+
         If set to True, the function will wait until the service is deleted.
 
     timeout
+        .. versionadded:: 2.0.0
+
         The time in seconds to wait for the service to be deleted.
 
     Example:
@@ -550,9 +567,13 @@ def namespace_absent(name, wait=False, timeout=60, **kwargs):
         The name of the namespace
 
     wait
+        .. versionadded:: 2.0.0
+
         If set to True, the function will wait until the namespace is deleted.
 
     timeout
+        .. versionadded:: 2.0.0
+
         The time in seconds to wait for the namespace to be deleted.
 
     Example:
@@ -666,9 +687,13 @@ def secret_absent(name, namespace="default", wait=False, timeout=60, **kwargs):
         The name of the namespace
 
     wait
+        .. versionadded:: 2.0.0
+
         If set to True, the function will wait until the secret is deleted.
 
     timeout
+        .. versionadded:: 2.0.0
+
         The time in seconds to wait for the secret to be deleted.
 
     Example:
@@ -724,8 +749,8 @@ def secret_present(
     data=None,
     source=None,
     template=None,
-    context=None,
-    type=None,
+    defaults=None,
+    secret_type=None,
     metadata=None,
     wait=False,
     timeout=60,
@@ -752,19 +777,29 @@ def secret_present(
     template
         Template engine to be used to render the source file.
 
-    context
+    defaults
+        .. versionadded:: 2.0.0
+
         Variables to be passed into the template.
 
-    type
+    secret_type
+        .. versionadded:: 2.0.0
+
         The type of secret to create. Defaults to 'Opaque'.
 
     metadata
+        .. versionadded:: 2.0.0
+
         The metadata to include in the secret (annotations, labels, etc).
 
     wait
+        .. versionadded:: 2.0.0
+
         If set to True, the function will wait until the secret is created.
 
     timeout
+        .. versionadded:: 2.0.0
+
         The time in seconds to wait for the secret to be created.
 
     Example:
@@ -811,8 +846,8 @@ def secret_present(
                 source=source,
                 template=template,
                 saltenv=__env__,
-                context=context,
-                type=type,
+                defaults=defaults,
+                secret_type=secret_type,
                 metadata=metadata,
                 wait=wait,
                 timeout=timeout,
@@ -841,8 +876,8 @@ def secret_present(
                 source=source,
                 template=template,
                 saltenv=__env__,
-                context=context,
-                type=type,
+                defaults=defaults,
+                secret_type=secret_type,
                 metadata=metadata,
                 wait=wait,
                 timeout=timeout,
@@ -876,9 +911,13 @@ def configmap_absent(name, namespace="default", wait=False, timeout=60, **kwargs
         used unless a different one is specified.
 
     wait
+        .. versionadded:: 2.0.0
+
         If set to True, the function will wait until the configmap is deleted.
 
     timeout
+        .. versionadded:: 2.0.0
+
         The time in seconds to wait for the configmap to be deleted.
 
     Example:
@@ -933,7 +972,7 @@ def configmap_present(
     data=None,
     source=None,
     template=None,
-    context=None,
+    defaults=None,
     wait=False,
     timeout=60,
     **kwargs,
@@ -959,13 +998,19 @@ def configmap_present(
     template
         Template engine to be used to render the source file.
 
-    context
+    defaults
+        .. versionadded:: 2.0.0
+
         Variables to be passed into the template.
 
     wait
+        .. versionadded:: 2.0.0
+
         If set to True, the function will wait until the configmap is created.
 
     timeout
+        .. versionadded:: 2.0.0
+
         The time in seconds to wait for the configmap to be created.
 
     Example:
@@ -1008,7 +1053,7 @@ def configmap_present(
                 source=source,
                 template=template,
                 saltenv=__env__,
-                context=context,
+                defaults=defaults,
                 wait=wait,
                 timeout=timeout,
                 **kwargs,
@@ -1035,7 +1080,7 @@ def configmap_present(
                 source=source,
                 template=template,
                 saltenv=__env__,
-                context=context,
+                defaults=defaults,
                 wait=wait,
                 timeout=timeout,
                 **kwargs,
@@ -1062,9 +1107,13 @@ def pod_absent(name, namespace="default", wait=False, timeout=60, **kwargs):
         The name of the namespace
 
     wait
+        .. versionadded:: 2.0.0
+
         If set to True, the function will wait until the pod is deleted.
 
     timeout
+        .. versionadded:: 2.0.0
+
         The time in seconds to wait for the pod to be deleted.
 
     Example:
@@ -1116,7 +1165,7 @@ def pod_present(
     spec=None,
     source="",
     template="",
-    context=None,
+    defaults=None,
     wait=False,
     timeout=60,
     **kwargs,
@@ -1146,13 +1195,19 @@ def pod_present(
     template
         Template engine to be used to render the source file.
 
-    context
+    defaults
+        .. versionadded:: 2.0.0
+
         Variables to be passed into the template.
 
     wait
+        .. versionadded:: 2.0.0
+
         If set to True, the function will wait until the pod is created.
 
     timeout
+        .. versionadded:: 2.0.0
+
         The time in seconds to wait for the pod to be created.
 
     Example:
@@ -1204,7 +1259,7 @@ def pod_present(
                 source=source,
                 template=template,
                 saltenv=__env__,
-                context=context,
+                defaults=defaults,
                 wait=wait,
                 timeout=timeout,
                 **kwargs,

@@ -61,7 +61,6 @@ def minion_config(kind_cluster):  # pragma: no cover
     return {
         "kubernetes.kubeconfig": str(kind_cluster.kubeconfig_path),
         "kubernetes.context": "kind-salt-test",
-        "providers": {"pkg": "kubernetes"},
     }
 
 

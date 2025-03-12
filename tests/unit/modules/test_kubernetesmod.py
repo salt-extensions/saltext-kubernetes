@@ -3,7 +3,6 @@
 """
 
 import logging
-import logging.handlers
 
 # pylint: disable=no-value-for-parameter
 from unittest.mock import MagicMock
@@ -93,7 +92,6 @@ def test_deployments(mock_kubernetes_lib):
         }
     )
     assert kubernetes.deployments() == ["mock_deployment_name"]
-    # py#int: disable=E1120
     assert kubernetes.kubernetes.client.AppsV1Api().list_namespaced_deployment().to_dict.called
 
 

@@ -141,12 +141,11 @@ def test_create_namespace_twice(kubernetes, _cleanup):
     _cleanup("namespace", test_ns)
 
 
-def test_create_namespace_with_invalid_name(kubernetes, caplog):
+def test_create_namespace_with_invalid_name(kubernetes):
     """
     Test creating a namespace with an invalid name raises appropriate error
     Names must be lowercase RFC 1123 labels (no underscores or uppercase)
     """
-    caplog.set_level(logging.INFO)
     invalid_name = "under_score"
 
     with pytest.raises(CommandExecutionError) as exc:
@@ -181,35 +180,35 @@ def test_list_namespaces_filtering(kubernetes, _cleanup):
 
 
 @pytest.mark.parametrize(
-    "case",
+    "name,data,expected",
     [
-        {
-            "name": "salt-test-plaintext",
-            "data": {"key": "value"},
-            "expected": "value",
-        },
-        {
-            "name": "salt-test-preencoded",
-            "data": {"key": "dmFsdWU="},
-            "expected": "value",
-        },
+        (
+            "salt-test-plaintext",
+            {"key": "value"},
+            "value",
+        ),
+        (
+            "salt-test-preencoded",
+            {"key": "dmFsdWU="},
+            "value",
+        ),
     ],
 )
-def test_create_secret_inputs(case, kubernetes, _cleanup):
+def test_create_secret_inputs(name, data, expected, kubernetes, _cleanup):
     """Test creating secrets with different input formats"""
     namespace = "default"
 
     # Create secret
-    res = kubernetes.create_secret(case["name"], namespace=namespace, data=case["data"], wait=True)
+    res = kubernetes.create_secret(name, namespace=namespace, data=data, wait=True)
     assert isinstance(res, dict)
-    assert res["metadata"]["name"] == case["name"]
+    assert res["metadata"]["name"] == name
 
     # Verify decoded value
-    res = kubernetes.show_secret(case["name"], namespace, decode=True)
-    assert res["data"]["key"] == case["expected"]
+    res = kubernetes.show_secret(name, namespace, decode=True)
+    assert res["data"]["key"] == expected
 
     # Cleanup
-    _cleanup("secret", case["name"], namespace)
+    _cleanup("secret", name, namespace)
 
 
 def test_create_secret_twice(kubernetes, _cleanup):
@@ -253,13 +252,13 @@ def test_secret_type_preservation(kubernetes, _cleanup):
     [
         {
             "name": "salt-test-opaque-secret",
-            "type": "Opaque",
+            "secret_type": "Opaque",
             "data": {"key": "value"},
             "replace_data": {"newkey": "newvalue"},
         },
         {
             "name": "salt-test-dockerconfig",
-            "type": "kubernetes.io/dockerconfigjson",
+            "secret_type": "kubernetes.io/dockerconfigjson",
             "data": {
                 ".dockerconfigjson": '{"auths":{"registry.example.com":{"username":"user","password":"pass"}}}'
             },
@@ -269,13 +268,13 @@ def test_secret_type_preservation(kubernetes, _cleanup):
         },
         {
             "name": "salt-test-basic-auth",
-            "type": "kubernetes.io/basic-auth",
+            "secret_type": "kubernetes.io/basic-auth",
             "data": {"username": "admin", "password": "secret"},
             "replace_data": {"username": "newadmin", "password": "newsecret"},
         },
         {
             "name": "salt-test-tls",
-            "type": "kubernetes.io/tls",
+            "secret_type": "kubernetes.io/tls",
             "data": {
                 "tls.crt": "-----BEGIN CERTIFICATE-----\nMIICwjCCAaqgAwIBAgIBADANBgkqhkiG9w0BAQsFADAS\n-----END CERTIFICATE-----",
                 "tls.key": "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEA\n-----END PRIVATE KEY-----",
@@ -287,7 +286,7 @@ def test_secret_type_preservation(kubernetes, _cleanup):
         },
         {
             "name": "salt-test-multiline-b64",
-            "type": "kubernetes.io/tls",
+            "secret_type": "kubernetes.io/tls",
             "data": {
                 "tls.crt": (
                     "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSUM5akNDQWQ2Z0F3SUJBZ0lSQVA4"
@@ -321,7 +320,7 @@ def test_secret_types(case, kubernetes, _cleanup):
             case["name"],
             namespace=namespace,
             data=case["data"],
-            type=case["type"],
+            secret_type=case["secret_type"],
             wait=True,
         )
         assert isinstance(res, dict)
@@ -330,7 +329,7 @@ def test_secret_types(case, kubernetes, _cleanup):
         # Verify secret was created with correct type
         secret = kubernetes.show_secret(case["name"], namespace)
         assert secret != [], f"Secret {case['name']} was not created"
-        assert secret["type"] == case["type"]
+        assert secret["type"] == case["secret_type"]
 
         # Verify data
         res = kubernetes.show_secret(case["name"], namespace, decode=True)
@@ -343,14 +342,14 @@ def test_secret_types(case, kubernetes, _cleanup):
             case["name"],
             namespace=namespace,
             data=case["replace_data"],
-            type=case["type"],
+            secret_type=case["secret_type"],
             wait=True,
         )
 
         # Verify type was preserved
         secret = kubernetes.show_secret(case["name"], namespace)
         assert secret is not None
-        assert secret["type"] == case["type"]
+        assert secret["type"] == case["secret_type"]
 
     finally:
         _cleanup("secret", case["name"], namespace)

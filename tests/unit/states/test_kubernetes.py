@@ -813,7 +813,7 @@ def test_deployment_present_with_metadata_validation():
                 source="",
                 template="",
                 saltenv="base",
-                context=None,
+                defaults=None,
                 wait=False,
                 timeout=60,
             )
@@ -841,7 +841,7 @@ def test_service_present_with_spec_validation():
                 source="",
                 template="",
                 saltenv="base",
-                context=None,
+                defaults=None,
                 wait=False,
                 timeout=60,
             )
