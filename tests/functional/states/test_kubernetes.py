@@ -350,22 +350,22 @@ def test_namespace_absent(kubernetes):
     assert not ret.changes
 
 
-def test_namespace_present_with_defaults(kubernetes, namespace_template, _cleanup):
+def test_namespace_present_with_template_context(kubernetes, namespace_template, _cleanup):
     """
-    Test kubernetes.namespace_present ensures namespace is created using defaults
+    Test kubernetes.namespace_present ensures namespace is created using template_context
     """
-    test_ns = "salt-test-namespace-defaults"
-    defaults = {
+    test_ns = "salt-test-namespace-template-context"
+    template_context = {
         "name": test_ns,
         "labels": {"app": "test"},
     }
 
-    # Create namespace using defaults
+    # Create namespace using template_context
     ret = kubernetes.namespace_present(
         name=test_ns,
         source=namespace_template,
         template="jinja",
-        defaults=defaults,
+        template_context=template_context,
         wait=True,
     )
     assert ret.result is True
@@ -376,7 +376,7 @@ def test_namespace_present_with_defaults(kubernetes, namespace_template, _cleanu
         name=test_ns,
         source=namespace_template,
         template="jinja",
-        defaults=defaults,
+        template_context=template_context,
     )
     assert ret.result is True
     assert "The namespace already exists" in ret.comment
@@ -475,26 +475,26 @@ def test_pod_absent(kubernetes, _pod_spec):
     assert not ret.changes
 
 
-def test_pod_present_with_defaults(kubernetes, pod_template, _cleanup):
+def test_pod_present_with_template_context(kubernetes, pod_template, _cleanup):
     """
-    Test kubernetes.pod_present ensures pod is created using defaults
+    Test kubernetes.pod_present ensures pod is created using template_context
     """
-    test_pod = "salt-test-pod-present-defaults"
+    test_pod = "salt-test-pod-present-template-context"
     namespace = "default"
-    defaults = {
+    template_context = {
         "name": test_pod,
         "namespace": namespace,
         "image": "nginx:latest",
         "labels": {"app": "test"},
     }
 
-    # Create pod using defaults
+    # Create pod using template_context
     ret = kubernetes.pod_present(
         name=test_pod,
         namespace=namespace,
         source=pod_template,
         template="jinja",
-        defaults=defaults,
+        template_context=template_context,
         wait=True,
     )
 
@@ -511,7 +511,7 @@ def test_pod_present_with_defaults(kubernetes, pod_template, _cleanup):
     #     namespace=namespace,
     #     source=pod_template,
     #     template="jinja",
-    #     defaults=defaults,
+    #     template_context=template_context,
     # )
     # # This should return False with the expected message
     # assert ret.result is False
@@ -608,13 +608,13 @@ def test_deployment_absent(kubernetes, _deployment_spec):
     assert not ret.changes
 
 
-def test_deployment_present_with_defaults(kubernetes, deployment_template, _cleanup):
+def test_deployment_present_with_template_context(kubernetes, deployment_template, _cleanup):
     """
-    Test kubernetes.deployment_present ensures deployment is created using defaults
+    Test kubernetes.deployment_present ensures deployment is created using template_context
     """
     test_deployment = "salt-test-deployment-present"
     namespace = "default"
-    defaults = {
+    template_context = {
         "name": test_deployment,
         "namespace": namespace,
         "image": "nginx:latest",
@@ -623,13 +623,13 @@ def test_deployment_present_with_defaults(kubernetes, deployment_template, _clea
         "app_label": "test",
     }
 
-    # Create deployment using defaults
+    # Create deployment using template_context
     ret = kubernetes.deployment_present(
         name=test_deployment,
         namespace=namespace,
         source=deployment_template,
         template="jinja",
-        defaults=defaults,
+        template_context=template_context,
         wait=True,
     )
     assert ret.result is True
@@ -643,7 +643,7 @@ def test_deployment_present_with_defaults(kubernetes, deployment_template, _clea
     #     namespace=namespace,
     #     source=deployment_template,
     #     template="jinja",
-    #     defaults=defaults,
+    #     template_context=template_context,
     # )
     # assert ret.result is True
     # assert "The deployment already present" in ret.comment
@@ -739,13 +739,13 @@ def test_secret_absent(kubernetes):
     assert not ret.changes
 
 
-def test_secret_present_with_defaults(kubernetes, secret_template, _cleanup):
+def test_secret_present_with_template_context(kubernetes, secret_template, _cleanup):
     """
-    Test kubernetes.secret_present ensures secret is created using defaults
+    Test kubernetes.secret_present ensures secret is created using template_context
     """
     test_secret = "salt-test-secret-present"
     namespace = "default"
-    defaults = {
+    template_context = {
         "name": test_secret,
         "namespace": namespace,
         "labels": {"app": "test"},
@@ -756,22 +756,22 @@ def test_secret_present_with_defaults(kubernetes, secret_template, _cleanup):
         },
     }
 
-    # Create secret using defaults
+    # Create secret using template_context
     ret = kubernetes.secret_present(
         name=test_secret,
         namespace=namespace,
         source=secret_template,
         template="jinja",
-        defaults=defaults,
+        template_context=template_context,
         wait=True,
     )
     assert ret.result is True
-    assert sorted(ret.changes["data"]) == sorted(defaults["secret_data"])
+    assert sorted(ret.changes["data"]) == sorted(template_context["secret_data"])
     assert ret.changes
 
     # Verify secret exists and can be replaced
-    new_defaults = defaults.copy()
-    new_defaults["secret_data"] = {
+    new_template_context = template_context.copy()
+    new_template_context["secret_data"] = {
         "username": "bmV3YWRtaW4=",  # base64 encoded "newadmin"
         "password": "bmV3c2VjcmV0",  # base64 encoded "newsecret"
     }
@@ -780,7 +780,7 @@ def test_secret_present_with_defaults(kubernetes, secret_template, _cleanup):
         namespace=namespace,
         source=secret_template,
         template="jinja",
-        defaults=new_defaults,
+        template_context=new_template_context,
         wait=True,
     )
     assert ret.result is True
@@ -878,13 +878,13 @@ def test_service_absent(kubernetes, _service_spec):
     assert not ret.changes
 
 
-def test_service_present_with_defaults(kubernetes, service_template, _cleanup):
+def test_service_present_with_template_context(kubernetes, service_template, _cleanup):
     """
-    Test kubernetes.service_present ensures service is created using defaults
+    Test kubernetes.service_present ensures service is created using template_context
     """
     test_service = "salt-test-service-present"
     namespace = "default"
-    defaults = {
+    template_context = {
         "name": test_service,
         "namespace": namespace,
         "labels": {"app": "test"},
@@ -896,13 +896,13 @@ def test_service_present_with_defaults(kubernetes, service_template, _cleanup):
         "selector": {"app": "test"},
     }
 
-    # Create service using defaults
+    # Create service using template_context
     ret = kubernetes.service_present(
         name=test_service,
         namespace=namespace,
         source=service_template,
         template="jinja",
-        defaults=defaults,
+        template_context=template_context,
         wait=True,
     )
     assert ret.result is True
@@ -916,7 +916,7 @@ def test_service_present_with_defaults(kubernetes, service_template, _cleanup):
     #     namespace=namespace,
     #     source=service_template,
     #     template="jinja",
-    #     defaults=defaults,
+    #     template_context=template_context,
     # )
     # assert ret.result is True
     # assert "The service already exists" in ret.comment
@@ -1013,13 +1013,13 @@ def test_configmap_absent(kubernetes):
     assert not ret.changes
 
 
-def test_configmap_present_with_defaults(kubernetes, configmap_template, _cleanup):
+def test_configmap_present_with_template_context(kubernetes, configmap_template, _cleanup):
     """
-    Test kubernetes.configmap_present ensures configmap is created using defaults
+    Test kubernetes.configmap_present ensures configmap is created using template_context
     """
     test_configmap = "salt-test-configmap-present"
     namespace = "default"
-    defaults = {
+    template_context = {
         "name": test_configmap,
         "namespace": namespace,
         "labels": {"app": "test"},
@@ -1029,21 +1029,21 @@ def test_configmap_present_with_defaults(kubernetes, configmap_template, _cleanu
         },
     }
 
-    # Create configmap using defaults
+    # Create configmap using template_context
     ret = kubernetes.configmap_present(
         name=test_configmap,
         namespace=namespace,
         source=configmap_template,
         template="jinja",
-        defaults=defaults,
+        template_context=template_context,
         wait=True,
     )
     assert ret.result is True
     assert ret.changes
 
     # Verify configmap exists and can be replaced
-    new_defaults = defaults.copy()
-    new_defaults["configmap_data"] = {
+    new_template_context = template_context.copy()
+    new_template_context["configmap_data"] = {
         "config.yaml": "foo: newbar\nkey: newvalue",
         "app.properties": "app.name=newapp\napp.port=9090",
     }
@@ -1052,7 +1052,7 @@ def test_configmap_present_with_defaults(kubernetes, configmap_template, _cleanu
         namespace=namespace,
         source=configmap_template,
         template="jinja",
-        defaults=new_defaults,
+        template_context=new_template_context,
         wait=True,
     )
     assert ret.result is True

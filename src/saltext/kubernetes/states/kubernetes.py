@@ -67,25 +67,25 @@ The kubernetes module is used to manage different kubernetes resources.
       require:
         - pip: kubernetes-python-module
 
-    # kubernetes deployment using a template with custom defaults variables
-    nginx-template-with-defaults:
+    # kubernetes deployment using a template with custom template_context variables
+    nginx-template-with-template_context:
       kubernetes.deployment_present:
         - name: nginx-template
         - source: salt://k8s/nginx-template.yml.jinja
         - template: jinja
-        - defaults:
+        - template_context:
             replicas: 3
             nginx_version: 1.19
             environment: production
             app_label: frontend
 
-    # kubernetes secret with defaults variables
-    cert-secret-with-defaults:
+    # kubernetes secret with template_context variables
+    cert-secret-with-template_context:
       kubernetes.secret_present:
         - name: tls-cert
         - source: salt://k8s/tls-cert.yml.jinja
         - template: jinja
-        - defaults:
+        - template_context:
             cert_name: myapp.example.com
             cert_data: |
                 -----BEGIN CERTIFICATE-----
@@ -206,7 +206,7 @@ def deployment_present(
     spec=None,
     source="",
     template="",
-    defaults=None,
+    template_context=None,
     wait=False,
     timeout=60,
     **kwargs,
@@ -236,7 +236,7 @@ def deployment_present(
     template
         Template engine to be used to render the source file.
 
-    defaults
+    template_context
         .. versionadded:: 2.0.0
 
         Variables to be passed into the template.
@@ -306,7 +306,7 @@ def deployment_present(
                 source=source,
                 template=template,
                 saltenv=__env__,
-                defaults=defaults,
+                template_context=template_context,
                 wait=wait,
                 timeout=timeout,
                 **kwargs,
@@ -334,7 +334,7 @@ def deployment_present(
                 source=source,
                 template=template,
                 saltenv=__env__,
-                defaults=defaults,
+                template_context=template_context,
                 wait=wait,
                 timeout=timeout,
                 **kwargs,
@@ -357,7 +357,7 @@ def service_present(
     spec=None,
     source="",
     template="",
-    defaults=None,
+    template_context=None,
     wait=False,
     timeout=60,
     **kwargs,
@@ -387,7 +387,7 @@ def service_present(
     template
         Template engine to be used to render the source file.
 
-    defaults
+    template_context
         .. versionadded:: 2.0.0
 
         Variables to be passed into the template.
@@ -452,7 +452,7 @@ def service_present(
                 source=source,
                 template=template,
                 saltenv=__env__,
-                defaults=defaults,
+                template_context=template_context,
                 wait=wait,
                 timeout=timeout,
                 **kwargs,
@@ -481,7 +481,7 @@ def service_present(
                 template=template,
                 old_service=service,
                 saltenv=__env__,
-                defaults=defaults,
+                template_context=template_context,
                 wait=wait,
                 timeout=timeout,
                 **kwargs,
@@ -749,7 +749,7 @@ def secret_present(
     data=None,
     source=None,
     template=None,
-    defaults=None,
+    template_context=None,
     secret_type=None,
     metadata=None,
     wait=False,
@@ -777,7 +777,7 @@ def secret_present(
     template
         Template engine to be used to render the source file.
 
-    defaults
+    template_context
         .. versionadded:: 2.0.0
 
         Variables to be passed into the template.
@@ -785,7 +785,7 @@ def secret_present(
     secret_type
         .. versionadded:: 2.0.0
 
-        The type of secret to create. Defaults to 'Opaque'.
+        The type of secret to create. Defaults to ``Opaque``.
 
     metadata
         .. versionadded:: 2.0.0
@@ -846,7 +846,7 @@ def secret_present(
                 source=source,
                 template=template,
                 saltenv=__env__,
-                defaults=defaults,
+                template_context=template_context,
                 secret_type=secret_type,
                 metadata=metadata,
                 wait=wait,
@@ -876,7 +876,7 @@ def secret_present(
                 source=source,
                 template=template,
                 saltenv=__env__,
-                defaults=defaults,
+                template_context=template_context,
                 secret_type=secret_type,
                 metadata=metadata,
                 wait=wait,
@@ -972,7 +972,7 @@ def configmap_present(
     data=None,
     source=None,
     template=None,
-    defaults=None,
+    template_context=None,
     wait=False,
     timeout=60,
     **kwargs,
@@ -998,7 +998,7 @@ def configmap_present(
     template
         Template engine to be used to render the source file.
 
-    defaults
+    template_context
         .. versionadded:: 2.0.0
 
         Variables to be passed into the template.
@@ -1053,7 +1053,7 @@ def configmap_present(
                 source=source,
                 template=template,
                 saltenv=__env__,
-                defaults=defaults,
+                template_context=template_context,
                 wait=wait,
                 timeout=timeout,
                 **kwargs,
@@ -1080,7 +1080,7 @@ def configmap_present(
                 source=source,
                 template=template,
                 saltenv=__env__,
-                defaults=defaults,
+                template_context=template_context,
                 wait=wait,
                 timeout=timeout,
                 **kwargs,
@@ -1165,7 +1165,7 @@ def pod_present(
     spec=None,
     source="",
     template="",
-    defaults=None,
+    template_context=None,
     wait=False,
     timeout=60,
     **kwargs,
@@ -1195,7 +1195,7 @@ def pod_present(
     template
         Template engine to be used to render the source file.
 
-    defaults
+    template_context
         .. versionadded:: 2.0.0
 
         Variables to be passed into the template.
@@ -1259,7 +1259,7 @@ def pod_present(
                 source=source,
                 template=template,
                 saltenv=__env__,
-                defaults=defaults,
+                template_context=template_context,
                 wait=wait,
                 timeout=timeout,
                 **kwargs,

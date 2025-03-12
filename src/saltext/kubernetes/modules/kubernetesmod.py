@@ -1020,7 +1020,7 @@ def create_deployment(
     source,
     template,
     saltenv,
-    defaults=None,
+    template_context=None,
     wait=False,
     timeout=60,
     **kwargs,
@@ -1049,7 +1049,7 @@ def create_deployment(
     saltenv
         Salt environment to pull the source file from
 
-    defaults
+    template_context
         .. versionadded:: 2.0.0
 
         Variables to make available in templated files
@@ -1081,7 +1081,7 @@ def create_deployment(
         source=source,
         template=template,
         saltenv=saltenv,
-        defaults=defaults,
+        template_context=template_context,
     )
 
     cfg = _setup_conn(**kwargs)
@@ -1116,7 +1116,7 @@ def create_pod(
     source,
     template,
     saltenv,
-    defaults=None,
+    template_context=None,
     wait=False,
     timeout=60,
     **kwargs,
@@ -1145,7 +1145,7 @@ def create_pod(
     saltenv
         Salt environment to pull the source file from
 
-    defaults
+    template_context
         .. versionadded:: 2.0.0
 
         Variables to make available in templated files
@@ -1187,7 +1187,7 @@ def create_pod(
         source=source,
         template=template,
         saltenv=saltenv,
-        defaults=defaults,
+        template_context=template_context,
     )
 
     cfg = _setup_conn(**kwargs)
@@ -1220,7 +1220,7 @@ def create_service(
     source,
     template,
     saltenv,
-    defaults=None,
+    template_context=None,
     wait=False,
     timeout=60,
     **kwargs,
@@ -1249,7 +1249,7 @@ def create_service(
     saltenv
         Salt environment to pull the source file from
 
-    defaults
+    template_context
         .. versionadded:: 2.0.0
 
         Variables to make available in templated files
@@ -1305,7 +1305,7 @@ def create_service(
         source=source,
         template=template,
         saltenv=saltenv,
-        defaults=defaults,
+        template_context=template_context,
     )
 
     cfg = _setup_conn(**kwargs)
@@ -1337,7 +1337,7 @@ def create_secret(
     source=None,
     template=None,
     saltenv="base",
-    defaults=None,
+    template_context=None,
     secret_type=None,
     metadata=None,
     wait=False,
@@ -1370,7 +1370,7 @@ def create_secret(
     saltenv
         Salt environment to pull the source file from
 
-    defaults
+    template_context
         .. versionadded:: 2.0.0
 
         Variables to make available in templated files
@@ -1421,7 +1421,7 @@ def create_secret(
     """
     cfg = _setup_conn(**kwargs)
     if source:
-        src_obj = __read_and_render_yaml_file(source, template, saltenv, defaults)
+        src_obj = __read_and_render_yaml_file(source, template, saltenv, template_context)
         if not isinstance(src_obj, dict):
             raise CommandExecutionError("`source` did not render to a dictionary")
         if "data" in src_obj:
@@ -1478,7 +1478,7 @@ def create_configmap(
     source=None,
     template=None,
     saltenv="base",
-    defaults=None,
+    template_context=None,
     wait=False,
     timeout=60,
     **kwargs,
@@ -1504,7 +1504,7 @@ def create_configmap(
     saltenv
         Salt environment to pull the source file from
 
-    defaults
+    template_context
         .. versionadded:: 2.0.0
 
         Variables to make available in templated files
@@ -1530,7 +1530,7 @@ def create_configmap(
             name=settings namespace=default data='{"example.conf": "# example file"}'
     """
     if source:
-        data = __read_and_render_yaml_file(source, template, saltenv, defaults)
+        data = __read_and_render_yaml_file(source, template, saltenv, template_context)
     elif data is None:
         data = {}
 
@@ -1611,7 +1611,7 @@ def replace_deployment(
     template,
     saltenv,
     namespace="default",
-    defaults=None,
+    template_context=None,
     wait=False,
     timeout=60,
     **kwargs,
@@ -1641,7 +1641,7 @@ def replace_deployment(
     namespace
         The namespace to replace the deployment in. Defaults to ``default``.
 
-    defaults
+    template_context
         .. versionadded:: 2.0.0
 
         Variables to make available in templated files
@@ -1673,7 +1673,7 @@ def replace_deployment(
         source=source,
         template=template,
         saltenv=saltenv,
-        defaults=defaults,
+        template_context=template_context,
     )
 
     cfg = _setup_conn(**kwargs)
@@ -1709,7 +1709,7 @@ def replace_service(
     old_service,
     saltenv,
     namespace="default",
-    defaults=None,
+    template_context=None,
     wait=False,
     timeout=60,
     **kwargs,
@@ -1742,7 +1742,7 @@ def replace_service(
     namespace
         The namespace to replace the service in. Defaults to ``default``.
 
-    defaults
+    template_context
         .. versionadded:: 2.0.0
 
         Variables to make available in templated files
@@ -1769,7 +1769,7 @@ def replace_service(
             old_service='{"metadata": {"resource_version": "12345"}, "spec": {"cluster_ip": "10.0.0.1"}}' \
             saltenv=base \
             namespace=default \
-            defaults='{"var1": "value1"}'
+            template_context='{"var1": "value1"}'
     """
     body = __create_object_body(
         kind="Service",
@@ -1782,7 +1782,7 @@ def replace_service(
         source=source,
         template=template,
         saltenv=saltenv,
-        defaults=defaults,
+        template_context=template_context,
     )
 
     # Some attributes have to be preserved
@@ -1819,7 +1819,7 @@ def replace_secret(
     template=None,
     saltenv="base",
     namespace="default",
-    defaults=None,
+    template_context=None,
     secret_type=None,
     metadata=None,
     wait=False,
@@ -1853,7 +1853,7 @@ def replace_secret(
     namespace
         The namespace to replace the secret in. Defaults to ``default``.
 
-    defaults
+    template_context
         .. versionadded:: 2.0.0
 
         Variables to make available in templated files
@@ -1903,7 +1903,7 @@ def replace_secret(
             secret_type=kubernetes.io/tls
     """
     if source:
-        src_obj = __read_and_render_yaml_file(source, template, saltenv, defaults)
+        src_obj = __read_and_render_yaml_file(source, template, saltenv, template_context)
         if not isinstance(src_obj, dict):
             raise CommandExecutionError("`source` did not render to a dictionary")
         if "data" in src_obj:
@@ -1961,7 +1961,7 @@ def replace_configmap(
     template=None,
     saltenv="base",
     namespace="default",
-    defaults=None,
+    template_context=None,
     wait=False,
     timeout=60,
     **kwargs,
@@ -1988,7 +1988,7 @@ def replace_configmap(
     namespace
         The namespace to replace the configmap in. Defaults to ``default``.
 
-    defaults
+    template_context
         .. versionadded:: 2.0.0
 
         Variables to make available in templated files
@@ -2014,7 +2014,7 @@ def replace_configmap(
             name=settings namespace=default data='{"example.conf": "# example file"}'
     """
     if source:
-        data = __read_and_render_yaml_file(source, template, saltenv, defaults)
+        data = __read_and_render_yaml_file(source, template, saltenv, template_context)
 
     data = __enforce_only_strings_dict(data)
 
@@ -2073,13 +2073,13 @@ def __create_object_body(
     source,
     template,
     saltenv,
-    defaults=None,
+    template_context=None,
 ):
     """
     Create a Kubernetes Object body instance.
     """
     if source:
-        src_obj = __read_and_render_yaml_file(source, template, saltenv, defaults)
+        src_obj = __read_and_render_yaml_file(source, template, saltenv, template_context)
         if not isinstance(src_obj, dict) or "kind" not in src_obj or src_obj["kind"] != kind:
             raise CommandExecutionError(f"The source file should define only a {kind} object")
 
@@ -2104,7 +2104,7 @@ def __create_object_body(
     )
 
 
-def __read_and_render_yaml_file(source, template, saltenv, defaults=None):
+def __read_and_render_yaml_file(source, template, saltenv, template_context=None):
     """
     Read a yaml file and, if needed, renders that using the specified
     templating. Returns the python objects defined inside of the file.
@@ -2118,9 +2118,9 @@ def __read_and_render_yaml_file(source, template, saltenv, defaults=None):
 
         if template:
             if template in salt.utils.templates.TEMPLATE_REGISTRY:
-                # Apply templating with defaults
-                if defaults is None:
-                    defaults = {}
+                # Apply templating with template_context
+                if template_context is None:
+                    template_context = {}
 
                 data = salt.utils.templates.TEMPLATE_REGISTRY[template](
                     contents,
@@ -2131,7 +2131,7 @@ def __read_and_render_yaml_file(source, template, saltenv, defaults=None):
                     pillar=__pillar__,
                     salt=__salt__,
                     opts=__opts__,
-                    context=defaults,
+                    context=template_context,
                 )
 
                 if not data["result"]:
