@@ -322,8 +322,6 @@ def node_remove_label(node_name, label_name, **kwargs):
     finally:
         _cleanup(**cfg)
 
-    return None
-
 
 def namespaces(**kwargs):
     """
@@ -1100,8 +1098,11 @@ def create_deployment(
 
         return api_response.to_dict()
     except (ApiException, HTTPError) as exc:
-        if isinstance(exc, ApiException) and exc.status == 404:
-            return None
+        if isinstance(exc, ApiException):
+            if exc.status == 404:
+                return None
+            if exc.status == 409:
+                raise CommandExecutionError(f"Deployment {name} already exists") from exc
         log.exception("Exception when calling AppsV1Api->create_namespaced_deployment")
         raise CommandExecutionError(exc)
     finally:
@@ -1204,8 +1205,11 @@ def create_pod(
 
         return api_response.to_dict()
     except (ApiException, HTTPError) as exc:
-        if isinstance(exc, ApiException) and exc.status == 404:
-            return None
+        if isinstance(exc, ApiException):
+            if exc.status == 404:
+                return None
+            if exc.status == 409:
+                raise CommandExecutionError(f"Pod {name} already exists") from exc
         log.exception("Exception when calling CoreV1Api->create_namespaced_pod")
         raise CommandExecutionError(exc)
     finally:
@@ -1322,8 +1326,11 @@ def create_service(
 
         return api_response.to_dict()
     except (ApiException, HTTPError) as exc:
-        if isinstance(exc, ApiException) and exc.status == 404:
-            return None
+        if isinstance(exc, ApiException):
+            if exc.status == 404:
+                return None
+            if exc.status == 409:
+                raise CommandExecutionError(f"Service {name} already exists") from exc
         log.exception("Exception when calling CoreV1Api->create_namespaced_service")
         raise CommandExecutionError(exc)
     finally:
@@ -1557,8 +1564,11 @@ def create_configmap(
 
         return api_response.to_dict()
     except (ApiException, HTTPError) as exc:
-        if isinstance(exc, ApiException) and exc.status == 404:
-            return None
+        if isinstance(exc, ApiException):
+            if exc.status == 404:
+                return None
+            if exc.status == 409:
+                raise CommandExecutionError(f"ConfigMap {name} already exists") from exc
         log.exception("Exception when calling CoreV1Api->create_namespaced_config_map")
         raise CommandExecutionError(exc)
     finally:
