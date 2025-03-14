@@ -1,5 +1,5 @@
 """
-    :codeauthor: Jochen Breuer <jbreuer@suse.de>
+:codeauthor: Jochen Breuer <jbreuer@suse.de>
 """
 
 # pylint: disable=no-value-for-parameter
