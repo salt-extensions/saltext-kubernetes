@@ -18,7 +18,6 @@ nox.options.reuse_existing_virtualenvs = True
 nox.options.error_on_missing_interpreters = False
 # Speed up all sessions by using uv if possible
 if tuple(map(int, metadata.version("nox").split("."))) >= (2024, 3):
-    os.environ["VIRTUALENV_UV_VERSION"] = "<0.6"
     nox.options.default_venv_backend = "uv|virtualenv"
 
 # Python versions to test against
@@ -126,6 +125,7 @@ def _install_requirements(
 
 @nox.session(python=PYTHON_VERSIONS)
 def tests(session):
+    session.install("uv<0.6")
     _install_requirements(session, install_source=True)
 
     sitecustomize_dir = session.run("salt-factories", "--coverage", silent=True, log=False)
@@ -407,6 +407,7 @@ def docs(session):
     """
     Build Docs
     """
+    session.install("uv<0.6")
     _install_requirements(
         session,
         install_coverage_requirements=False,
