@@ -316,7 +316,7 @@ def node_remove_label(node_name, label_name, **kwargs):
         return api_response
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
-            return None
+            raise CommandExecutionError(f"Node {node_name} not found") from exc
         log.exception("Exception when calling CoreV1Api->patch_node")
         raise CommandExecutionError(exc)
     finally:
@@ -1100,7 +1100,7 @@ def create_deployment(
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException):
             if exc.status == 404:
-                return None
+                raise CommandExecutionError(f"Deployment {namespace}/{name} not found") from exc
             if exc.status == 409:
                 raise CommandExecutionError(f"Deployment {name} already exists") from exc
         log.exception("Exception when calling AppsV1Api->create_namespaced_deployment")
@@ -1207,7 +1207,7 @@ def create_pod(
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException):
             if exc.status == 404:
-                return None
+                raise CommandExecutionError(f"Pod {namespace}/{name} not found") from exc
             if exc.status == 409:
                 raise CommandExecutionError(f"Pod {name} already exists") from exc
         log.exception("Exception when calling CoreV1Api->create_namespaced_pod")
@@ -1328,7 +1328,7 @@ def create_service(
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException):
             if exc.status == 404:
-                return None
+                raise CommandExecutionError(f"Service {namespace}/{name} not found") from exc
             if exc.status == 409:
                 raise CommandExecutionError(f"Service {name} already exists") from exc
         log.exception("Exception when calling CoreV1Api->create_namespaced_service")
@@ -1471,7 +1471,7 @@ def create_secret(
                     f"Secret {name} already exists in namespace {namespace}. Use replace_secret to update it."
                 )
             if exc.status == 404:
-                raise CommandExecutionError(f"{namespace} namespace does not exist")
+                raise CommandExecutionError(f"Secret {namespace}/{name} not found") from exc
             log.exception("Exception when calling CoreV1Api->create_namespaced_secret")
         raise CommandExecutionError(str(exc))
     finally:
@@ -1566,7 +1566,7 @@ def create_configmap(
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException):
             if exc.status == 404:
-                return None
+                raise CommandExecutionError(f"ConfigMap {namespace}/{name} not found") from exc
             if exc.status == 409:
                 raise CommandExecutionError(f"ConfigMap {name} already exists") from exc
         log.exception("Exception when calling CoreV1Api->create_namespaced_config_map")
@@ -1703,7 +1703,7 @@ def replace_deployment(
         return api_response.to_dict()
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
-            return None
+            raise CommandExecutionError(f"Deployment {namespace}/{name} not found") from exc
         log.exception("Exception when calling AppsV1Api->replace_namespaced_deployment")
         raise CommandExecutionError(exc)
     finally:
@@ -1815,7 +1815,7 @@ def replace_service(
         return api_response.to_dict()
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
-            return None
+            raise CommandExecutionError(f"Service {namespace}/{name} not found") from exc
         log.exception("Exception when calling CoreV1Api->replace_namespaced_service")
         raise CommandExecutionError(exc)
     finally:
@@ -1958,7 +1958,8 @@ def replace_secret(
         return api_response.to_dict()
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
-            return None
+            raise CommandExecutionError(f"Secret {namespace}/{name} not found") from exc
+        log.exception("Exception when calling CoreV1Api->replace_namespaced_secret")
         raise CommandExecutionError(str(exc))
     finally:
         _cleanup(**cfg)
@@ -2047,7 +2048,7 @@ def replace_configmap(
         return api_response.to_dict()
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
-            return None
+            raise CommandExecutionError(f"ConfigMap {namespace}/{name} not found") from exc
         log.exception("Exception when calling CoreV1Api->replace_namespaced_configmap")
         raise CommandExecutionError(exc)
     finally:

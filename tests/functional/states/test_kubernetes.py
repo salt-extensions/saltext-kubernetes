@@ -11,18 +11,12 @@ pytestmark = [
 ]
 
 
-@pytest.fixture
+@pytest.fixture()
 def kubernetes(states):
     """
     Return kubernetes state module
     """
     return states.kubernetes
-
-
-@pytest.fixture
-def namespace_name():
-    """Fixture providing a namespace name for testing"""
-    return random_string("namespace-", uppercase=False)
 
 
 @pytest.fixture
@@ -46,11 +40,11 @@ def namespace_template(state_tree):
 
 
 @pytest.fixture(params=[True])
-def namespace(kubernetes, request, namespace_name):
+def namespace(kubernetes, request):
     """
     Fixture providing a namespace for testing
     """
-    name = namespace_name
+    name = random_string("namespace-", uppercase=False)
 
     # Only create the namespace if requested
     if request.param:
@@ -74,7 +68,6 @@ def test_namespace_present(kubernetes, namespace):
     assert ret.changes
 
 
-@pytest.mark.parametrize("namespace", [True], indirect=True)
 def test_namespace_present_idempotency(kubernetes, namespace):
     """
     Test kubernetes.namespace_present is idempotent
@@ -85,7 +78,6 @@ def test_namespace_present_idempotency(kubernetes, namespace):
     assert "already exists" in ret.comment
 
 
-@pytest.mark.parametrize("namespace", [True], indirect=True)
 def test_namespace_present_test_mode(kubernetes, namespace):
     """
     Test kubernetes.namespace_present in test mode
@@ -118,7 +110,6 @@ def test_namespace_present_template_context(kubernetes, namespace, namespace_tem
     assert ret.changes
 
 
-@pytest.mark.parametrize("namespace", [True], indirect=True)
 def test_namespace_absent(kubernetes, namespace):
     """
     Test kubernetes.namespace_absent deletes a namespace
@@ -129,7 +120,6 @@ def test_namespace_absent(kubernetes, namespace):
     assert ret.changes["kubernetes.namespace"]["new"] == "absent"
 
 
-@pytest.mark.parametrize("namespace", [True], indirect=True)
 def test_namespace_absent_test_mode(kubernetes, namespace):
     """
     Test kubernetes.namespace_absent in test mode
@@ -140,7 +130,6 @@ def test_namespace_absent_test_mode(kubernetes, namespace):
     assert not ret.changes
 
 
-@pytest.mark.parametrize("namespace", [True], indirect=True)
 def test_namespace_absent_idempotency(kubernetes, namespace):
     """
     Test kubernetes.namespace_absent is idempotent
@@ -153,14 +142,6 @@ def test_namespace_absent_idempotency(kubernetes, namespace):
     assert ret.result is True
     assert "does not exist" in ret.comment
     assert not ret.changes
-
-
-@pytest.fixture
-def pod_name():
-    """
-    Fixture providing a pod name for testing
-    """
-    return random_string("pod-", uppercase=False)
 
 
 @pytest.fixture
@@ -204,11 +185,11 @@ def pod_template(state_tree):
 
 
 @pytest.fixture(params=[True])
-def pod(kubernetes, pod_name, _pod_spec, request):
+def pod(kubernetes, _pod_spec, request):
     """
     Fixture providing a pod for testing
     """
-    name = pod_name
+    name = random_string("pod-", uppercase=False)
     namespace = "default"
 
     # Only create the pod if requested
@@ -247,7 +228,6 @@ def test_pod_present(kubernetes, pod, _pod_spec):
     # TODO: The state module needs fixed to handle proper present functionality
 
 
-# @pytest.mark.parametrize("pod", [True], indirect=True)
 # def test_pod_present_idempotency(kubernetes, pod, _pod_spec):
 #     """
 #     Test kubernetes.pod_present is idempotent
@@ -264,7 +244,6 @@ def test_pod_present(kubernetes, pod, _pod_spec):
 #     assert not ret.changes
 
 
-@pytest.mark.parametrize("pod", [True], indirect=True)
 def test_pod_present_test_mode(kubernetes, pod, _pod_spec):
     """
     Test kubernetes.pod_present in test mode
@@ -305,7 +284,6 @@ def test_pod_present_template_context(kubernetes, pod, pod_template):
     assert ret.changes
 
 
-@pytest.mark.parametrize("pod", [True], indirect=True)
 def test_pod_absent(kubernetes, pod):
     """
     Test kubernetes.pod_absent deletes a pod
@@ -320,7 +298,6 @@ def test_pod_absent(kubernetes, pod):
     assert ret.changes["kubernetes.pod"]["new"] == "absent"
 
 
-@pytest.mark.parametrize("pod", [True], indirect=True)
 def test_pod_absent_test_mode(kubernetes, pod):
     """
     Test kubernetes.pod_absent in test mode
@@ -335,7 +312,6 @@ def test_pod_absent_test_mode(kubernetes, pod):
     assert not ret.changes
 
 
-@pytest.mark.parametrize("pod", [True], indirect=True)
 def test_pod_absent_idempotency(kubernetes, pod):
     """
     Test kubernetes.pod_absent is idempotent
@@ -348,14 +324,6 @@ def test_pod_absent_idempotency(kubernetes, pod):
     assert ret.result is True
     assert "does not exist" in ret.comment
     assert not ret.changes
-
-
-@pytest.fixture
-def deployment_name():
-    """
-    Fixture providing a service name for testing
-    """
-    return random_string("deployment-", uppercase=False)
 
 
 @pytest.fixture
@@ -415,11 +383,11 @@ def deployment_template(state_tree):
 
 
 @pytest.fixture(params=[True])
-def deployment(kubernetes, deployment_name, _deployment_spec, request):
+def deployment(kubernetes, _deployment_spec, request):
     """
     Fixture providing a deployment for testing
     """
-    name = deployment_name
+    name = random_string("deployment-", uppercase=False)
     namespace = "default"
 
     # Only create the deployment if requested
@@ -458,7 +426,6 @@ def test_deployment_present(kubernetes, deployment, _deployment_spec):
     # TODO: The state module needs fixed to handle proper present functionality
 
 
-# @pytest.mark.parametrize("deployment", [True], indirect=True)
 # def test_deployment_present_idempotency(kubernetes, deployment, _deployment_spec):
 #     """
 #     Test kubernetes.deployment_present is idempotent
@@ -474,7 +441,6 @@ def test_deployment_present(kubernetes, deployment, _deployment_spec):
 #     assert not ret.changes
 
 
-@pytest.mark.parametrize("deployment", [True], indirect=True)
 def test_deployment_present_replace(kubernetes, deployment):
     """
     Test kubernetes.deployment_present replaces a deployment
@@ -507,7 +473,6 @@ def test_deployment_present_replace(kubernetes, deployment):
     assert ret.changes["spec"]["replicas"] == 3
 
 
-@pytest.mark.parametrize("deployment", [True], indirect=True)
 def test_deployment_present_test_mode(kubernetes, deployment, _deployment_spec):
     """
     Test kubernetes.deployment_present in test mode
@@ -550,7 +515,6 @@ def test_deployment_present_template_context(kubernetes, deployment, deployment_
     assert ret.changes
 
 
-@pytest.mark.parametrize("deployment", [True], indirect=True)
 def test_deployment_absent(kubernetes, deployment):
     """
     Test kubernetes.deployment_absent deletes a deployment
@@ -565,7 +529,6 @@ def test_deployment_absent(kubernetes, deployment):
     assert ret.changes["kubernetes.deployment"]["new"] == "absent"
 
 
-@pytest.mark.parametrize("deployment", [True], indirect=True)
 def test_deployment_absent_test_mode(kubernetes, deployment):
     """
     Test kubernetes.deployment_absent in test mode
@@ -580,7 +543,6 @@ def test_deployment_absent_test_mode(kubernetes, deployment):
     assert not ret.changes
 
 
-@pytest.mark.parametrize("deployment", [True], indirect=True)
 def test_deployment_absent_idempotency(kubernetes, deployment):
     """
     Test kubernetes.deployment_absent is idempotent
@@ -595,12 +557,6 @@ def test_deployment_absent_idempotency(kubernetes, deployment):
     assert ret.result is True
     assert "does not exist" in ret.comment
     assert not ret.changes
-
-
-@pytest.fixture
-def secret_name():
-    """Fixture providing a secret name for testing"""
-    return random_string("secret-", uppercase=False)
 
 
 @pytest.fixture
@@ -630,11 +586,11 @@ def secret_template(state_tree):
 
 
 @pytest.fixture(params=[True])
-def secret(kubernetes, secret_name, request):
+def secret(kubernetes, request):
     """
     Fixture providing a secret for testing
     """
-    name = secret_name
+    name = random_string("secret-", uppercase=False)
     namespace = "default"
 
     # Only create the secret if requested
@@ -673,7 +629,6 @@ def test_secret_present(kubernetes, secret):
     # TODO: The state module needs fixed to handle proper present functionality
 
 
-# @pytest.mark.parametrize("secret", [True], indirect=True)
 # def test_secret_present_idempotency(kubernetes, secret):
 #     """
 #     Test kubernetes.secret_present is idempotent
@@ -689,7 +644,6 @@ def test_secret_present(kubernetes, secret):
 #     assert not ret.changes
 
 
-@pytest.mark.parametrize("secret", [True], indirect=True)
 def test_secret_present_test_mode(kubernetes, secret):
     """
     Test kubernetes.secret_present in test mode
@@ -705,7 +659,6 @@ def test_secret_present_test_mode(kubernetes, secret):
     assert not ret.changes
 
 
-@pytest.mark.parametrize("secret", [True], indirect=True)
 def test_secret_present_replace(kubernetes, secret):
     """
     Test kubernetes.secret_present replaces a secret
@@ -767,7 +720,6 @@ def test_service_account_token_secret_present(kubernetes, secret):
     assert ret.changes
 
 
-@pytest.mark.parametrize("secret", [True], indirect=True)
 def test_secret_absent(kubernetes, secret):
     """
     Test kubernetes.secret_absent deletes a secret
@@ -782,7 +734,6 @@ def test_secret_absent(kubernetes, secret):
     assert ret.changes["kubernetes.secret"]["new"] == "absent"
 
 
-@pytest.mark.parametrize("secret", [True], indirect=True)
 def test_secret_absent_test_mode(kubernetes, secret):
     """
     Test kubernetes.secret_absent in test mode
@@ -797,7 +748,6 @@ def test_secret_absent_test_mode(kubernetes, secret):
     assert not ret.changes
 
 
-@pytest.mark.parametrize("secret", [True], indirect=True)
 def test_secret_absent_idempotency(kubernetes, secret):
     """
     Test kubernetes.secret_absent is idempotent
@@ -810,14 +760,6 @@ def test_secret_absent_idempotency(kubernetes, secret):
     assert ret.result is True
     assert "does not exist" in ret.comment
     assert not ret.changes
-
-
-@pytest.fixture
-def service_name():
-    """
-    Fixture providing a service name for testing
-    """
-    return random_string("service-", uppercase=False)
 
 
 @pytest.fixture
@@ -867,11 +809,11 @@ def service_template(state_tree):
 
 
 @pytest.fixture(params=[True])
-def service(kubernetes, service_name, _service_spec, request):
+def service(kubernetes, _service_spec, request):
     """
     Fixture providing a service for testing
     """
-    name = service_name
+    name = random_string("service-", uppercase=False)
     namespace = "default"
 
     # Only create the service if requested
@@ -910,7 +852,6 @@ def test_service_present(kubernetes, service, _service_spec):
     # TODO: The state module needs fixed to handle proper present functionality
 
 
-# @pytest.mark.parametrize("service", [True], indirect=True)
 # def test_service_present_idempotency(kubernetes, service, _service_spec):
 #     """
 #     Test kubernetes.service_present is idempotent
@@ -926,7 +867,6 @@ def test_service_present(kubernetes, service, _service_spec):
 #     assert not ret.changes
 
 
-@pytest.mark.parametrize("service", [True], indirect=True)
 def test_service_present_test_mode(kubernetes, service, _service_spec):
     """
     Test kubernetes.service_present in test mode
@@ -942,7 +882,6 @@ def test_service_present_test_mode(kubernetes, service, _service_spec):
     assert not ret.changes
 
 
-@pytest.mark.parametrize("service", [True], indirect=True)
 def test_service_present_replace(kubernetes, service):
     """
     Test kubernetes.service_present replaces a service
@@ -997,7 +936,6 @@ def test_service_present_template_context(kubernetes, service, service_template)
     assert ret.changes
 
 
-@pytest.mark.parametrize("service", [True], indirect=True)
 def test_service_absent(kubernetes, service):
     """
     Test kubernetes.service_absent deletes a service
@@ -1012,7 +950,6 @@ def test_service_absent(kubernetes, service):
     assert ret.changes["kubernetes.service"]["new"] == "absent"
 
 
-@pytest.mark.parametrize("service", [True], indirect=True)
 def test_service_absent_test_mode(kubernetes, service):
     """
     Test kubernetes.service_absent in test mode
@@ -1027,7 +964,6 @@ def test_service_absent_test_mode(kubernetes, service):
     assert not ret.changes
 
 
-@pytest.mark.parametrize("service", [True], indirect=True)
 def test_service_absent_idempotency(kubernetes, service):
     """
     Test kubernetes.service_absent is idempotent
@@ -1040,14 +976,6 @@ def test_service_absent_idempotency(kubernetes, service):
     assert ret.result is True
     assert "does not exist" in ret.comment
     assert not ret.changes
-
-
-@pytest.fixture
-def configmap_name():
-    """
-    Fixture providing a configmap name for testing
-    """
-    return random_string("configmap-", uppercase=False)
 
 
 @pytest.fixture
@@ -1088,11 +1016,11 @@ def configmap_template(state_tree):
 
 
 @pytest.fixture(params=[True])
-def configmap(kubernetes, configmap_name, configmap_data, request):
+def configmap(kubernetes, configmap_data, request):
     """
     Fixture to create a test configmap for state tests
     """
-    name = configmap_name
+    name = random_string("configmap-", uppercase=False)
     namespace = "default"
 
     # Only create the configmap if requested
@@ -1132,7 +1060,6 @@ def test_configmap_present(kubernetes, configmap):
     # TODO: The state module needs fixed to handle proper present functionality
 
 
-# @pytest.mark.parametrize("configmap", [True], indirect=True)
 # def test_configmap_present_idempotency(kubernetes, configmap):
 #     """
 #     Test kubernetes.configmap_present is idempotent
@@ -1150,7 +1077,6 @@ def test_configmap_present(kubernetes, configmap):
 #     assert not ret.changes
 
 
-@pytest.mark.parametrize("configmap", [True], indirect=True)
 def test_configmap_replace(kubernetes, configmap):
     """
     Test kubernetes.configmap_present replaces a configmap
@@ -1171,7 +1097,6 @@ def test_configmap_replace(kubernetes, configmap):
     assert ret.changes["data"] == new_data
 
 
-@pytest.mark.parametrize("configmap", [True], indirect=True)
 def test_configmap_present_test_mode(kubernetes, configmap):
     """
     Test kubernetes.configmap_present in test mode
@@ -1187,7 +1112,6 @@ def test_configmap_present_test_mode(kubernetes, configmap):
     assert not ret.changes
 
 
-@pytest.mark.parametrize("configmap", [True], indirect=True)
 def test_configmap_present_test_changes(kubernetes, configmap):
     """
     Test kubernetes.configmap_present with changes=True
@@ -1235,7 +1159,6 @@ def test_configmap_present_template_context(kubernetes, configmap, configmap_tem
     assert ret.changes
 
 
-@pytest.mark.parametrize("configmap", [True], indirect=True)
 def test_configmap_absent(kubernetes, configmap):
     """
     Test kubernetes.configmap_absent deletes a configmap
@@ -1251,7 +1174,6 @@ def test_configmap_absent(kubernetes, configmap):
     assert ret.changes["kubernetes.configmap"]["old"] == "present"
 
 
-@pytest.mark.parametrize("configmap", [True], indirect=True)
 def test_configmap_absent_test_mode(kubernetes, configmap):
     """
     Test kubernetes.configmap_absent in test mode
@@ -1266,7 +1188,6 @@ def test_configmap_absent_test_mode(kubernetes, configmap):
     assert not ret.changes
 
 
-@pytest.mark.parametrize("configmap", [True], indirect=True)
 def test_configmap_absent_idempotency(kubernetes, configmap):
     """
     Test kubernetes.configmap_absent is idempotent
@@ -1289,7 +1210,7 @@ def test_configmap_absent_idempotency(kubernetes, configmap):
     assert not ret.changes
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def node_name(loaders):
     """
     Fixture providing a node name for testing
@@ -1343,7 +1264,6 @@ def test_node_label_present(kubernetes, node_label):
     )
 
 
-@pytest.mark.parametrize("node_label", [True], indirect=True)
 def test_node_label_present_idempotency(kubernetes, node_label):
     """
     Test kubernetes.node_label_present is idempotent
@@ -1359,7 +1279,6 @@ def test_node_label_present_idempotency(kubernetes, node_label):
     assert not ret.changes
 
 
-@pytest.mark.parametrize("node_label", [True], indirect=True)
 def test_node_label_present_test_mode(kubernetes, node_label):
     """
     Test kubernetes.node_label_present in test mode
@@ -1376,7 +1295,6 @@ def test_node_label_present_test_mode(kubernetes, node_label):
     assert not ret.changes
 
 
-@pytest.mark.parametrize("node_label", [True], indirect=True)
 def test_node_label_present_replace(kubernetes, node_label):
     """
     Test kubernetes.node_label_present replaces a label
@@ -1396,7 +1314,6 @@ def test_node_label_present_replace(kubernetes, node_label):
     )
 
 
-@pytest.mark.parametrize("node_label", [True], indirect=True)
 def test_node_label_present_test_changes(kubernetes, node_label):
     """
     Test kubernetes.node_label_present with changes=True
@@ -1413,7 +1330,6 @@ def test_node_label_present_test_changes(kubernetes, node_label):
     assert not ret.changes
 
 
-@pytest.mark.parametrize("node_label", [True], indirect=True)
 def test_node_label_absent(kubernetes, node_label):
     """
     Test kubernetes.node_label_absent deletes a label
@@ -1427,7 +1343,6 @@ def test_node_label_absent(kubernetes, node_label):
     assert ret.changes["kubernetes.node_label"]["new"] == "absent"
 
 
-@pytest.mark.parametrize("node_label", [True], indirect=True)
 def test_node_label_absent_test_mode(kubernetes, node_label):
     """
     Test kubernetes.node_label_absent in test mode
@@ -1442,7 +1357,6 @@ def test_node_label_absent_test_mode(kubernetes, node_label):
     assert not ret.changes
 
 
-@pytest.mark.parametrize("node_label", [True], indirect=True)
 def test_node_label_absent_idempotency(kubernetes, node_label):
     """
     Test kubernetes.node_label_absent is idempotent
@@ -1464,7 +1378,6 @@ def test_node_label_absent_idempotency(kubernetes, node_label):
     assert not ret.changes
 
 
-@pytest.mark.parametrize("node_label", [True], indirect=True)
 def test_node_label_folder_absent(kubernetes, node_label):
     """
     Test kubernetes.node_label_folder_absent deletes all labels with prefix
