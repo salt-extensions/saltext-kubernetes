@@ -18,6 +18,7 @@ nox.options.reuse_existing_virtualenvs = True
 nox.options.error_on_missing_interpreters = False
 # Speed up all sessions by using uv if possible
 if tuple(map(int, metadata.version("nox").split("."))) >= (2024, 3):
+    os.environ["VIRTUALENV_UV_VERSION"] = "<0.6"
     nox.options.default_venv_backend = "uv|virtualenv"
 
 # Python versions to test against
