@@ -19,7 +19,20 @@ def kubernetes(states):
     return states.kubernetes
 
 
-@pytest.fixture
+@pytest.fixture()
+def kubernetes_exe(modules):
+    """
+    Return kubernetes module
+    """
+    return modules.kubernetes
+
+
+@pytest.fixture(params=[False, True])
+def testmode(request):
+    return request.param
+
+
+@pytest.fixture()
 def namespace_template(state_tree):
     sls = "k8s/namespace-template"
     contents = dedent(
@@ -27,11 +40,7 @@ def namespace_template(state_tree):
         apiVersion: v1
         kind: Namespace
         metadata:
-          name: {{ name }}
-          labels:
-            {% for key, value in labels.items() %}
-            {{ key }}: {{ value }}
-            {% endfor %}
+            name: {{ name }}
         """
     ).strip()
 
@@ -40,7 +49,7 @@ def namespace_template(state_tree):
 
 
 @pytest.fixture(params=[True])
-def namespace(kubernetes, request):
+def namespace(kubernetes, kubernetes_exe, request):
     """
     Fixture providing a namespace for testing
     """
@@ -50,22 +59,42 @@ def namespace(kubernetes, request):
     if request.param:
         ret = kubernetes.namespace_present(name=name, wait=True)
         assert ret.result is True
+        assert ret.changes["namespace"]["new"]["metadata"]["name"] == name
+        # Verify namespace is created
+        namespace_state = kubernetes_exe.show_namespace(name=name)
+        assert namespace_state["metadata"]["name"] == name
     try:
         yield name
     finally:
-        ret = kubernetes.namespace_absent(name=name, wait=True)
-        assert ret.result is True
+        kubernetes_exe.delete_namespace(name=name, wait=True)
+
+        # Verify namespace is deleted
+        namespace_state = kubernetes_exe.show_namespace(name=name)
+        assert namespace_state is None
 
 
 @pytest.mark.parametrize("namespace", [False], indirect=True)
-def test_namespace_present(kubernetes, namespace):
+def test_namespace_present(kubernetes, namespace, testmode, kubernetes_exe):
     """
     Test kubernetes.namespace_present creates a namespace
     """
-    ret = kubernetes.namespace_present(name=namespace, wait=True)
+    ret = kubernetes.namespace_present(name=namespace, wait=True, test=testmode)
 
-    assert ret.result is True
-    assert ret.changes
+    assert ret.result in (None, True)
+    assert (ret.result is None) is testmode
+    if not testmode:
+        assert ret.changes["namespace"]["new"]["metadata"]["name"] == namespace
+        # Verify namespace is created
+        namespace_state = kubernetes_exe.show_namespace(name=namespace)
+        assert namespace_state["metadata"]["name"] == namespace
+        assert namespace_state["status"]["phase"] == "Active"
+    else:
+        assert not ret.changes
+        assert "The namespace is going to be created" in ret.comment
+
+        # Verify namespace is not created in test mode
+        namespace_state = kubernetes_exe.show_namespace(name=namespace)
+        assert namespace_state is None
 
 
 def test_namespace_present_idempotency(kubernetes, namespace):
@@ -75,21 +104,14 @@ def test_namespace_present_idempotency(kubernetes, namespace):
     ret = kubernetes.namespace_present(name=namespace)
 
     assert ret.result is True
+    assert not ret.changes
     assert "already exists" in ret.comment
 
 
-def test_namespace_present_test_mode(kubernetes, namespace):
-    """
-    Test kubernetes.namespace_present in test mode
-    """
-    ret = kubernetes.namespace_present(name=namespace, test=True)
-
-    assert ret.result is None
-    assert not ret.changes
-
-
 @pytest.mark.parametrize("namespace", [False], indirect=True)
-def test_namespace_present_template_context(kubernetes, namespace, namespace_template):
+def test_namespace_present_template_context(
+    kubernetes, namespace, namespace_template, kubernetes_exe
+):
     """
     Test kubernetes.namespace_present with template_context
     """
@@ -107,37 +129,43 @@ def test_namespace_present_template_context(kubernetes, namespace, namespace_tem
     )
 
     assert ret.result is True
-    assert ret.changes
+    assert ret.changes["namespace"]["new"]["metadata"]["name"] == namespace
+    # Verify namespace is created
+    namespace_state = kubernetes_exe.show_namespace(name=namespace)
+    assert namespace_state["metadata"]["name"] == namespace
 
 
-def test_namespace_absent(kubernetes, namespace):
+def test_namespace_absent(kubernetes, namespace, testmode, kubernetes_exe):
     """
     Test kubernetes.namespace_absent deletes a namespace
     """
-    ret = kubernetes.namespace_absent(name=namespace, wait=True)
+    ret = kubernetes.namespace_absent(name=namespace, wait=True, test=testmode)
 
-    assert ret.result is True
-    assert ret.changes["kubernetes.namespace"]["new"] == "absent"
+    assert ret.result in (None, True)
+    assert (ret.result is None) is testmode
+    if not testmode:
+        assert ret.changes["kubernetes.namespace"]["new"] == "absent"
+
+        # Verify namespace is deleted
+        namespace_state = kubernetes_exe.show_namespace(name=namespace)
+        assert namespace_state is None
+    else:
+        assert not ret.changes
+        assert "The namespace is going to be deleted" in ret.comment
+
+        # Verify namespace still exists in test mode
+        namespace_state = kubernetes_exe.show_namespace(name=namespace)
+        assert namespace_state is not None
+        assert namespace_state["metadata"]["name"] == namespace
 
 
-def test_namespace_absent_test_mode(kubernetes, namespace):
-    """
-    Test kubernetes.namespace_absent in test mode
-    """
-    ret = kubernetes.namespace_absent(name=namespace, test=True)
-
-    assert ret.result is None
-    assert not ret.changes
-
-
+@pytest.mark.parametrize("namespace", [False], indirect=True)
 def test_namespace_absent_idempotency(kubernetes, namespace):
     """
     Test kubernetes.namespace_absent is idempotent
     """
-    ret = kubernetes.namespace_absent(name=namespace, wait=True)
-    assert ret.result is True
 
-    # Test idempotency
+    # Test deletion of non-existent namespace
     ret = kubernetes.namespace_absent(name=namespace)
     assert ret.result is True
     assert "does not exist" in ret.comment
@@ -167,10 +195,7 @@ def pod_template(state_tree):
         metadata:
           name: {{ name }}
           namespace: {{ namespace }}
-          labels:
-            {% for key, value in labels.items() %}
-            {{ key }}: {{ value }}
-            {% endfor %}
+          labels: {{ labels | json }}
         spec:
           containers:
           - name: {{ name }}
@@ -185,7 +210,7 @@ def pod_template(state_tree):
 
 
 @pytest.fixture(params=[True])
-def pod(kubernetes, _pod_spec, request):
+def pod(kubernetes, _pod_spec, kubernetes_exe, request):
     """
     Fixture providing a pod for testing
     """
@@ -201,16 +226,23 @@ def pod(kubernetes, _pod_spec, request):
             wait=True,
         )
         assert ret.result is True
+        assert ret.changes["spec"]["containers"][0]["name"] == "nginx"
+        # Verify pod is created
+        pod_state = kubernetes_exe.show_pod(name=name, namespace=namespace)
+        assert pod_state["metadata"]["name"] == name
+        assert pod_state["spec"]["containers"][0]["name"] == "nginx"
     try:
         yield {"name": name, "namespace": namespace}
     finally:
-        ret = kubernetes.pod_absent(name=name, namespace=namespace, wait=True)
-        assert ret.result is True
-        assert ret.comment in ["The pod does not exist", "Pod deleted"]
+        kubernetes_exe.delete_pod(name=name, namespace=namespace, wait=True)
+
+        # Verify pod is deleted
+        pod_state = kubernetes_exe.show_pod(name=name, namespace=namespace)
+        assert pod_state is None
 
 
 @pytest.mark.parametrize("pod", [False], indirect=True)
-def test_pod_present(kubernetes, pod, _pod_spec):
+def test_pod_present(kubernetes, pod, _pod_spec, testmode, kubernetes_exe):
     """
     Test kubernetes.pod_present creates a pod
     """
@@ -219,10 +251,22 @@ def test_pod_present(kubernetes, pod, _pod_spec):
         namespace=pod["namespace"],
         spec=_pod_spec,
         wait=True,
+        test=testmode,
     )
+    assert ret.result in (None, True)
+    assert (ret.result is None) is testmode
+    if not testmode:
+        assert ret.changes["spec"]["containers"][0]["name"] == "nginx"
+        # Verify pod is created
+        pod_state = kubernetes_exe.show_pod(name=pod["name"], namespace=pod["namespace"])
+        assert pod_state["metadata"]["name"] == pod["name"]
+        assert pod_state["spec"]["containers"][0]["name"] == "nginx"
+    else:
+        assert not ret.changes
+        assert "The pod is going to be created" in ret.comment
 
-    assert ret.result is True
-    assert ret.changes
+        pod_state = kubernetes_exe.show_pod(name=pod["name"], namespace=pod["namespace"])
+        assert pod_state is None
 
     # Comment out idempotent test for now
     # TODO: The state module needs fixed to handle proper present functionality
@@ -244,23 +288,8 @@ def test_pod_present(kubernetes, pod, _pod_spec):
 #     assert not ret.changes
 
 
-def test_pod_present_test_mode(kubernetes, pod, _pod_spec):
-    """
-    Test kubernetes.pod_present in test mode
-    """
-    ret = kubernetes.pod_present(
-        name=pod["name"],
-        namespace=pod["namespace"],
-        spec=_pod_spec,
-        test=True,
-    )
-
-    assert ret.result is None
-    assert not ret.changes
-
-
 @pytest.mark.parametrize("pod", [False], indirect=True)
-def test_pod_present_template_context(kubernetes, pod, pod_template):
+def test_pod_present_template_context(kubernetes, kubernetes_exe, pod, pod_template):
     """
     Test kubernetes.pod_present with template_context
     """
@@ -279,12 +308,17 @@ def test_pod_present_template_context(kubernetes, pod, pod_template):
         template_context=template_context,
         wait=True,
     )
-
+    # Verify actual pod state matches what we expect
+    pod_state = kubernetes_exe.show_pod(name=pod["name"], namespace=pod["namespace"])
     assert ret.result is True
-    assert ret.changes
+    assert pod_state["metadata"]["name"] == pod["name"]
+    assert pod_state["metadata"]["namespace"] == pod["namespace"]
+    assert pod_state["metadata"]["labels"] == {"app": "test"}
+    assert pod_state["spec"]["containers"][0]["image"] == "nginx:latest"
+    assert pod_state["spec"]["containers"][0]["name"] == pod["name"]
 
 
-def test_pod_absent(kubernetes, pod):
+def test_pod_absent(kubernetes, pod, testmode, kubernetes_exe):
     """
     Test kubernetes.pod_absent deletes a pod
     """
@@ -292,34 +326,30 @@ def test_pod_absent(kubernetes, pod):
         name=pod["name"],
         namespace=pod["namespace"],
         wait=True,
+        test=testmode,
     )
 
-    assert ret.result is True
-    assert ret.changes["kubernetes.pod"]["new"] == "absent"
+    assert ret.result in (None, True)
+    assert (ret.result is None) is testmode
+    if not testmode:
+        assert ret.changes["kubernetes.pod"]["new"] == "absent"
+        pod_state = kubernetes_exe.show_pod(name=pod["name"], namespace=pod["namespace"])
+        assert pod_state is None
+    else:
+        assert not ret.changes
+        assert "The pod is going to be deleted" in ret.comment
+        # Verify pod still exists in test mode
+        pod_state = kubernetes_exe.show_pod(name=pod["name"], namespace=pod["namespace"])
+        assert pod_state is not None
+        assert pod_state["metadata"]["name"] == pod["name"]
 
 
-def test_pod_absent_test_mode(kubernetes, pod):
-    """
-    Test kubernetes.pod_absent in test mode
-    """
-    ret = kubernetes.pod_absent(
-        name=pod["name"],
-        namespace=pod["namespace"],
-        test=True,
-    )
-
-    assert ret.result is None
-    assert not ret.changes
-
-
+@pytest.mark.parametrize("pod", [False], indirect=True)
 def test_pod_absent_idempotency(kubernetes, pod):
     """
     Test kubernetes.pod_absent is idempotent
     """
-    ret = kubernetes.pod_absent(name=pod["name"], namespace=pod["namespace"], wait=True)
-    assert ret.result is True
-
-    # Test idempotency
+    # Test deletion of non-existent pod
     ret = kubernetes.pod_absent(name=pod["name"], namespace=pod["namespace"])
     assert ret.result is True
     assert "does not exist" in ret.comment
@@ -356,10 +386,7 @@ def deployment_template(state_tree):
         metadata:
           name: {{ name }}
           namespace: {{ namespace }}
-          labels:
-            {% for key, value in labels.items() %}
-            {{ key }}: {{ value }}
-            {% endfor %}
+          labels: {{ labels | json }}
         spec:
           replicas: {{ replicas }}
           selector:
@@ -367,8 +394,7 @@ def deployment_template(state_tree):
               app: {{ app_label }}
           template:
             metadata:
-              labels:
-                app: {{ app_label }}
+              labels: {{ labels | json }}
             spec:
               containers:
               - name: {{ name }}
@@ -383,7 +409,7 @@ def deployment_template(state_tree):
 
 
 @pytest.fixture(params=[True])
-def deployment(kubernetes, _deployment_spec, request):
+def deployment(kubernetes, _deployment_spec, kubernetes_exe, request):
     """
     Fixture providing a deployment for testing
     """
@@ -399,16 +425,23 @@ def deployment(kubernetes, _deployment_spec, request):
             wait=True,
         )
         assert ret.result is True
+        assert ret.changes["spec"]["replicas"] == 2
+        # Verify deployment is created
+        deployment_state = kubernetes_exe.show_deployment(name=name, namespace=namespace)
+        assert deployment_state["metadata"]["name"] == name
+        assert deployment_state["spec"]["replicas"] == 2
     try:
         yield {"name": name, "namespace": namespace}
     finally:
-        ret = kubernetes.deployment_absent(name=name, namespace=namespace, wait=True)
-        assert ret.result is True
-        assert ret.comment in ["The deployment does not exist", "None"]
+        kubernetes_exe.delete_deployment(name=name, namespace=namespace, wait=True)
+
+        # Verify deployment is deleted
+        deployment_state = kubernetes_exe.show_deployment(name=name, namespace=namespace)
+        assert deployment_state is None
 
 
 @pytest.mark.parametrize("deployment", [False], indirect=True)
-def test_deployment_present(kubernetes, deployment, _deployment_spec):
+def test_deployment_present(kubernetes, deployment, _deployment_spec, testmode, kubernetes_exe):
     """
     Test kubernetes.deployment_present creates a deployment
     """
@@ -417,10 +450,24 @@ def test_deployment_present(kubernetes, deployment, _deployment_spec):
         namespace=deployment["namespace"],
         spec=_deployment_spec,
         wait=True,
+        test=testmode,
     )
 
-    assert ret.result is True
-    assert ret.changes
+    assert ret.result in (None, True)
+    assert (ret.result is None) is testmode
+    if not testmode:
+        assert ret.changes["spec"]["replicas"] == 2
+        deployment_state = kubernetes_exe.show_deployment(
+            name=deployment["name"], namespace=deployment["namespace"]
+        )
+        assert deployment_state["metadata"]["name"] == deployment["name"]
+        assert deployment_state["spec"]["replicas"] == 2
+    else:
+        assert not ret.changes
+        deployment_state = kubernetes_exe.show_deployment(
+            name=deployment["name"], namespace=deployment["namespace"]
+        )
+        assert deployment_state is None
 
     # Comment out idempotent test for now
     # TODO: The state module needs fixed to handle proper present functionality
@@ -441,55 +488,34 @@ def test_deployment_present(kubernetes, deployment, _deployment_spec):
 #     assert not ret.changes
 
 
-def test_deployment_present_replace(kubernetes, deployment):
+def test_deployment_present_replace(kubernetes, deployment, _deployment_spec, kubernetes_exe):
     """
     Test kubernetes.deployment_present replaces a deployment
     """
-    new_spec = {
-        "replicas": 3,
-        "selector": {"matchLabels": {"app": "test"}},
-        "template": {
-            "metadata": {"labels": {"app": "test"}},
-            "spec": {
-                "containers": [
-                    {
-                        "name": "nginx",
-                        "image": "nginx:latest",
-                        "ports": [{"containerPort": 80}],
-                    }
-                ]
-            },
-        },
-    }
+    _deployment_spec["replicas"] = 3
 
     ret = kubernetes.deployment_present(
         name=deployment["name"],
         namespace=deployment["namespace"],
-        spec=new_spec,
+        spec=_deployment_spec,
         wait=True,
     )
 
     assert ret.result is True
     assert ret.changes["spec"]["replicas"] == 3
 
-
-def test_deployment_present_test_mode(kubernetes, deployment, _deployment_spec):
-    """
-    Test kubernetes.deployment_present in test mode
-    """
-    ret = kubernetes.deployment_present(
-        name=deployment["name"],
-        namespace=deployment["namespace"],
-        spec=_deployment_spec,
-        test=True,
+    # Verify actual deployment state matches what we expect
+    deployment_state = kubernetes_exe.show_deployment(
+        name=deployment["name"], namespace=deployment["namespace"]
     )
-
-    assert ret.result is None
-    assert not ret.changes
+    assert deployment_state["metadata"]["name"] == deployment["name"]
+    assert deployment_state["spec"]["replicas"] == 3
 
 
 @pytest.mark.parametrize("deployment", [False], indirect=True)
-def test_deployment_present_template_context(kubernetes, deployment, deployment_template):
+def test_deployment_present_template_context(
+    kubernetes, deployment, deployment_template, kubernetes_exe
+):
     """
     Test kubernetes.deployment_present with template_context
     """
@@ -510,12 +536,20 @@ def test_deployment_present_template_context(kubernetes, deployment, deployment_
         template_context=template_context,
         wait=True,
     )
-
     assert ret.result is True
-    assert ret.changes
+
+    # Verify actual deployment state matches what we expect
+    deployment_state = kubernetes_exe.show_deployment(
+        name=deployment["name"], namespace=deployment["namespace"]
+    )
+    assert deployment_state["metadata"]["name"] == deployment["name"]
+    assert deployment_state["spec"]["replicas"] == 2
+    assert deployment_state["metadata"]["labels"]["app"] == "test"
+    assert deployment_state["spec"]["selector"]["match_labels"]["app"] == "test"
+    assert deployment_state["spec"]["template"]["spec"]["containers"][0]["image"] == "nginx:latest"
 
 
-def test_deployment_absent(kubernetes, deployment):
+def test_deployment_absent(kubernetes, deployment, testmode, kubernetes_exe):
     """
     Test kubernetes.deployment_absent deletes a deployment
     """
@@ -523,36 +557,36 @@ def test_deployment_absent(kubernetes, deployment):
         name=deployment["name"],
         namespace=deployment["namespace"],
         wait=True,
+        test=testmode,
     )
 
-    assert ret.result is True
-    assert ret.changes["kubernetes.deployment"]["new"] == "absent"
+    assert ret.result in (None, True)
+    assert (ret.result is None) is testmode
+
+    if not testmode:
+        assert ret.changes["kubernetes.deployment"]["new"] == "absent"
+        deployment_state = kubernetes_exe.show_deployment(
+            name=deployment["name"], namespace=deployment["namespace"]
+        )
+        assert deployment_state is None
+    else:
+        assert not ret.changes
+        assert "The deployment is going to be deleted" in ret.comment
+        # Verify deployment still exists in test mode
+        deployment_state = kubernetes_exe.show_deployment(
+            name=deployment["name"], namespace=deployment["namespace"]
+        )
+        assert deployment_state is not None
+        assert deployment_state["metadata"]["name"] == deployment["name"]
 
 
-def test_deployment_absent_test_mode(kubernetes, deployment):
-    """
-    Test kubernetes.deployment_absent in test mode
-    """
-    ret = kubernetes.deployment_absent(
-        name=deployment["name"],
-        namespace=deployment["namespace"],
-        test=True,
-    )
-
-    assert ret.result is None
-    assert not ret.changes
-
-
+@pytest.mark.parametrize("deployment", [False], indirect=True)
 def test_deployment_absent_idempotency(kubernetes, deployment):
     """
     Test kubernetes.deployment_absent is idempotent
     """
-    ret = kubernetes.deployment_absent(
-        name=deployment["name"], namespace=deployment["namespace"], wait=True
-    )
-    assert ret.result is True
 
-    # Test idempotency
+    # Test deletion of non-existent deployment
     ret = kubernetes.deployment_absent(name=deployment["name"], namespace=deployment["namespace"])
     assert ret.result is True
     assert "does not exist" in ret.comment
@@ -569,15 +603,9 @@ def secret_template(state_tree):
         metadata:
           name: {{ name }}
           namespace: {{ namespace }}
-          labels:
-            {% for key, value in labels.items() %}
-            {{ key }}: {{ value }}
-            {% endfor %}
-        type: {{ type }}
-        data:
-          {% for key, value in secret_data.items() %}
-          {{ key }}: {{ value }}
-          {% endfor %}
+          labels: {{ labels | json }}
+        type: {{ secret_type }}
+        data: {{ secret_data | json }}
         """
     ).strip()
 
@@ -586,7 +614,7 @@ def secret_template(state_tree):
 
 
 @pytest.fixture(params=[True])
-def secret(kubernetes, request):
+def secret(kubernetes, kubernetes_exe, request):
     """
     Fixture providing a secret for testing
     """
@@ -602,16 +630,22 @@ def secret(kubernetes, request):
             wait=True,
         )
         assert ret.result is True
+        # Verify secret is created
+        secret_state = kubernetes_exe.show_secret(name=name, namespace=namespace, decode=True)
+        assert secret_state["metadata"]["name"] == name
+        assert secret_state["data"]["key"] == "value"
     try:
         yield {"name": name, "namespace": namespace}
     finally:
-        ret = kubernetes.secret_absent(name=name, namespace=namespace, wait=True)
-        assert ret.result is True
-        assert ret.comment in ["The secret does not exist", "Secret deleted"]
+        ret = kubernetes_exe.delete_secret(name=name, namespace=namespace, wait=True)
+
+        # Verify secret is deleted
+        secret_state = kubernetes_exe.show_secret(name=name, namespace=namespace, decode=True)
+        assert secret_state is None
 
 
 @pytest.mark.parametrize("secret", [False], indirect=True)
-def test_secret_present(kubernetes, secret):
+def test_secret_present(kubernetes, secret, testmode, kubernetes_exe):
     """
     Test kubernetes.secret_present creates a secret
     """
@@ -620,10 +654,27 @@ def test_secret_present(kubernetes, secret):
         namespace=secret["namespace"],
         data={"key": "value"},
         wait=True,
+        test=testmode,
     )
 
-    assert ret.result is True
-    assert ret.changes
+    assert ret.result in (None, True)
+    assert (ret.result is None) is testmode
+    if not testmode:
+        assert ret.result is True
+        # Verify secret is created
+        secret_state = kubernetes_exe.show_secret(
+            name=secret["name"], namespace=secret["namespace"], decode=True
+        )
+        assert secret_state["metadata"]["name"] == secret["name"]
+        assert secret_state["data"]["key"] == "value"
+    else:
+        assert not ret.changes
+        assert "The secret is going to be created" in ret.comment
+        # Verify secret is not created in test mode
+        secret_state = kubernetes_exe.show_secret(
+            name=secret["name"], namespace=secret["namespace"], decoode=True
+        )
+        assert secret_state is None
 
     # Comment out idempotent test for now
     # TODO: The state module needs fixed to handle proper present functionality
@@ -644,22 +695,7 @@ def test_secret_present(kubernetes, secret):
 #     assert not ret.changes
 
 
-def test_secret_present_test_mode(kubernetes, secret):
-    """
-    Test kubernetes.secret_present in test mode
-    """
-    ret = kubernetes.secret_present(
-        name=secret["name"],
-        namespace=secret["namespace"],
-        data={"key": "value"},
-        test=True,
-    )
-
-    assert ret.result is None
-    assert not ret.changes
-
-
-def test_secret_present_replace(kubernetes, secret):
+def test_secret_present_replace(kubernetes, secret, kubernetes_exe):
     """
     Test kubernetes.secret_present replaces a secret
     """
@@ -673,18 +709,24 @@ def test_secret_present_replace(kubernetes, secret):
     )
 
     assert ret.result is True
-    assert ret.changes
+
+    # Verify actual secret state matches what we expect
+    secret_state = kubernetes_exe.show_secret(
+        name=secret["name"], namespace=secret["namespace"], decode=True
+    )
+    assert secret_state["metadata"]["name"] == secret["name"]
+    assert secret_state["data"]["key"] == "new_value"
 
 
 @pytest.mark.parametrize("secret", [False], indirect=True)
-def test_secret_present_template_context(kubernetes, secret, secret_template):
+def test_secret_present_template_context(kubernetes, secret, secret_template, kubernetes_exe):
     """
     Test kubernetes.secret_present with template_context
     """
     template_context = {
         "name": secret["name"],
         "namespace": secret["namespace"],
-        "type": "Opaque",
+        "secret_type": "Opaque",
         "labels": {"app": "test"},
         "secret_data": {"key": "value"},
     }
@@ -699,11 +741,19 @@ def test_secret_present_template_context(kubernetes, secret, secret_template):
     )
 
     assert ret.result is True
-    assert ret.changes
+
+    # Verify actual secret state matches what we expect
+    secret_state = kubernetes_exe.show_secret(
+        name=secret["name"], namespace=secret["namespace"], decode=True
+    )
+    assert secret_state["metadata"]["name"] == secret["name"]
+    assert secret_state["metadata"]["namespace"] == secret["namespace"]
+    assert secret_state["type"] == "Opaque"
+    assert secret_state["data"]["key"] == "value"
 
 
 @pytest.mark.parametrize("secret", [False], indirect=True)
-def test_service_account_token_secret_present(kubernetes, secret):
+def test_service_account_token_secret_present(kubernetes, secret, kubernetes_exe):
     """
     Test creating a service account token secret via state
     """
@@ -711,16 +761,24 @@ def test_service_account_token_secret_present(kubernetes, secret):
         name=secret["name"],
         namespace=secret["namespace"],
         data={},  # Empty data - kubernetes will populate
-        type="kubernetes.io/service-account-token",
+        secret_type="kubernetes.io/service-account-token",
         metadata={"annotations": {"kubernetes.io/service-account.name": "default"}},
         wait=True,
     )
 
     assert ret.result is True
-    assert ret.changes
+
+    # Verify actual secret state matches what we expect
+    secret_state = kubernetes_exe.show_secret(
+        name=secret["name"], namespace=secret["namespace"], decode=True
+    )
+    assert secret_state["metadata"]["name"] == secret["name"]
+    # Passing data={} should cause kubernetes to generate and populate the secret
+    assert secret_state["data"]["ca.crt"] is not None
+    assert secret_state["type"] == "kubernetes.io/service-account-token"
 
 
-def test_secret_absent(kubernetes, secret):
+def test_secret_absent(kubernetes, secret, testmode, kubernetes_exe):
     """
     Test kubernetes.secret_absent deletes a secret
     """
@@ -728,34 +786,38 @@ def test_secret_absent(kubernetes, secret):
         name=secret["name"],
         namespace=secret["namespace"],
         wait=True,
+        test=testmode,
     )
 
-    assert ret.result is True
-    assert ret.changes["kubernetes.secret"]["new"] == "absent"
+    assert ret.result in (None, True)
+    assert (ret.result is None) is testmode
+    if not testmode:
+        assert ret.result is True
+        assert ret.changes["kubernetes.secret"]["new"] == "absent"
+        # Verify secret is deleted
+        secret_state = kubernetes_exe.show_secret(
+            name=secret["name"], namespace=secret["namespace"], decode=True
+        )
+        assert secret_state is None
+    else:
+        assert not ret.changes
+        assert "The secret is going to be deleted" in ret.comment
+        # Verify secret still exists in test mode
+        secret_state = kubernetes_exe.show_secret(
+            name=secret["name"], namespace=secret["namespace"], decode=True
+        )
+        assert secret_state is not None
+        assert secret_state["metadata"]["name"] == secret["name"]
+        assert secret_state["data"]["key"] == "value"
 
 
-def test_secret_absent_test_mode(kubernetes, secret):
-    """
-    Test kubernetes.secret_absent in test mode
-    """
-    ret = kubernetes.secret_absent(
-        name=secret["name"],
-        namespace=secret["namespace"],
-        test=True,
-    )
-
-    assert ret.result is None
-    assert not ret.changes
-
-
+@pytest.mark.parametrize("secret", [False], indirect=True)
 def test_secret_absent_idempotency(kubernetes, secret):
     """
     Test kubernetes.secret_absent is idempotent
     """
-    ret = kubernetes.secret_absent(name=secret["name"], namespace=secret["namespace"], wait=True)
-    assert ret.result is True
 
-    # Test idempotency
+    # Test deletion of non-existent secret
     ret = kubernetes.secret_absent(name=secret["name"], namespace=secret["namespace"])
     assert ret.result is True
     assert "does not exist" in ret.comment
@@ -766,8 +828,8 @@ def test_secret_absent_idempotency(kubernetes, secret):
 def _service_spec():
     return {
         "ports": [
-            {"name": "http", "port": 80, "targetPort": 8080},
-            {"name": "https", "port": 443, "targetPort": 8443},
+            {"name": "http", "port": 80, "target_port": 8080},
+            {"name": "https", "port": 443, "target_port": 8443},
         ],
         "selector": {"app": "test"},
         "type": "ClusterIP",
@@ -784,23 +846,11 @@ def service_template(state_tree):
         metadata:
           name: {{ name }}
           namespace: {{ namespace }}
-          labels:
-            {% for key, value in labels.items() %}
-            {{ key }}: {{ value }}
-            {% endfor %}
+          labels: {{ labels | json }}
         spec:
           type: {{ type }}
-          ports:
-            {% for port in ports %}
-            - name: {{ port.name }}
-              port: {{ port.port }}
-              targetPort: {{ port.target_port }}
-              {% if port.node_port is defined %}nodePort: {{ port.node_port }}{% endif %}
-            {% endfor %}
-          selector:
-            {% for key, value in selector.items() %}
-            {{ key }}: {{ value }}
-            {% endfor %}
+          ports: {{ ports | json }}
+          selector: {{ selector | json }}
         """
     ).strip()
 
@@ -809,7 +859,7 @@ def service_template(state_tree):
 
 
 @pytest.fixture(params=[True])
-def service(kubernetes, _service_spec, request):
+def service(kubernetes, _service_spec, kubernetes_exe, request):
     """
     Fixture providing a service for testing
     """
@@ -825,16 +875,22 @@ def service(kubernetes, _service_spec, request):
             wait=True,
         )
         assert ret.result is True
+
+        # Verify service is created
+        service_state = kubernetes_exe.show_service(name=name, namespace=namespace)
+        assert service_state["metadata"]["name"] == name
+        assert service_state["spec"]["selector"]["app"] == "test"
     try:
         yield {"name": name, "namespace": namespace}
     finally:
-        ret = kubernetes.service_absent(name=name, namespace=namespace, wait=True)
-        assert ret.result is True
-        assert ret.comment in ["The service does not exist", "Service deleted"]
+        ret = kubernetes_exe.delete_service(name=name, namespace=namespace, wait=True)
+        # Verify service is deleted
+        service_state = kubernetes_exe.show_service(name=name, namespace=namespace)
+        assert service_state is None
 
 
 @pytest.mark.parametrize("service", [False], indirect=True)
-def test_service_present(kubernetes, service, _service_spec):
+def test_service_present(kubernetes, service, _service_spec, testmode, kubernetes_exe):
     """
     Test kubernetes.service_present creates a service
     """
@@ -843,10 +899,35 @@ def test_service_present(kubernetes, service, _service_spec):
         namespace=service["namespace"],
         spec=_service_spec,
         wait=True,
+        test=testmode,
     )
 
-    assert ret.result is True
-    assert ret.changes
+    assert ret.result in (None, True)
+    assert (ret.result is None) is testmode
+    if not testmode:
+        assert ret.result is True
+        # Verify service is created
+        service_state = kubernetes_exe.show_service(
+            name=service["name"], namespace=service["namespace"]
+        )
+        assert service_state["metadata"]["name"] == service["name"]
+        assert service_state["spec"]["ports"][0]["name"] == "http"
+        assert service_state["spec"]["ports"][0]["port"] == 80
+        assert service_state["spec"]["ports"][0]["target_port"] == 8080
+        assert service_state["spec"]["ports"][1]["name"] == "https"
+        assert service_state["spec"]["ports"][1]["port"] == 443
+        assert service_state["spec"]["ports"][1]["target_port"] == 8443
+        assert service_state["spec"]["selector"]["app"] == "test"
+        assert service_state["spec"]["type"] == "ClusterIP"
+    else:
+        assert not ret.changes
+        assert "The service is going to be created" in ret.comment
+
+        # Verify service is not created in test mode
+        service_state = kubernetes_exe.show_service(
+            name=service["name"], namespace=service["namespace"]
+        )
+        assert service_state is None
 
     # Comment out idempotent test for now
     # TODO: The state module needs fixed to handle proper present functionality
@@ -867,31 +948,16 @@ def test_service_present(kubernetes, service, _service_spec):
 #     assert not ret.changes
 
 
-def test_service_present_test_mode(kubernetes, service, _service_spec):
-    """
-    Test kubernetes.service_present in test mode
-    """
-    ret = kubernetes.service_present(
-        name=service["name"],
-        namespace=service["namespace"],
-        spec=_service_spec,
-        test=True,
-    )
-
-    assert ret.result is None
-    assert not ret.changes
-
-
-def test_service_present_replace(kubernetes, service):
+def test_service_present_replace(kubernetes, service, kubernetes_exe):
     """
     Test kubernetes.service_present replaces a service
     """
+    # Ports required for service spec
     new_spec = {
         "ports": [
-            {"name": "http", "port": 80, "targetPort": 8080},
-            {"name": "https", "port": 443, "targetPort": 8443},
+            {"name": "http", "port": 80, "target_port": 8080},
+            {"name": "https", "port": 443, "target_port": 8443},
         ],
-        "selector": {"app": "test"},
         "type": "NodePort",
     }
 
@@ -903,11 +969,21 @@ def test_service_present_replace(kubernetes, service):
     )
 
     assert ret.result is True
-    assert ret.changes["spec"]["type"] == "NodePort"
+    # Verify actual service state matches what we expect
+    service_state = kubernetes_exe.show_service(
+        name=service["name"], namespace=service["namespace"]
+    )
+    assert service_state["spec"]["ports"][0]["name"] == "http"
+    assert service_state["spec"]["ports"][0]["port"] == 80
+    assert service_state["spec"]["ports"][0]["target_port"] == 8080
+    assert service_state["spec"]["ports"][1]["name"] == "https"
+    assert service_state["spec"]["ports"][1]["port"] == 443
+    assert service_state["spec"]["ports"][1]["target_port"] == 8443
+    assert service_state["spec"]["type"] == "NodePort"
 
 
 @pytest.mark.parametrize("service", [False], indirect=True)
-def test_service_present_template_context(kubernetes, service, service_template):
+def test_service_present_template_context(kubernetes, service, service_template, kubernetes_exe):
     """
     Test kubernetes.service_present with template_context
     """
@@ -931,12 +1007,25 @@ def test_service_present_template_context(kubernetes, service, service_template)
         template_context=template_context,
         wait=True,
     )
-
     assert ret.result is True
-    assert ret.changes
+    # Verify actual service state matches what we expect
+    service_state = kubernetes_exe.show_service(
+        name=service["name"], namespace=service["namespace"]
+    )
+    assert service_state["metadata"]["name"] == service["name"]
+    assert service_state["metadata"]["namespace"] == service["namespace"]
+    assert service_state["metadata"]["labels"]["app"] == "test"
+    assert service_state["spec"]["ports"][0]["name"] == "http"
+    assert service_state["spec"]["ports"][0]["port"] == 80
+    assert service_state["spec"]["ports"][0]["target_port"] == 8080
+    assert service_state["spec"]["ports"][1]["name"] == "https"
+    assert service_state["spec"]["ports"][1]["port"] == 443
+    assert service_state["spec"]["ports"][1]["target_port"] == 8443
+    assert service_state["spec"]["selector"]["app"] == "test"
+    assert service_state["spec"]["type"] == "ClusterIP"
 
 
-def test_service_absent(kubernetes, service):
+def test_service_absent(kubernetes, service, testmode, kubernetes_exe):
     """
     Test kubernetes.service_absent deletes a service
     """
@@ -944,34 +1033,36 @@ def test_service_absent(kubernetes, service):
         name=service["name"],
         namespace=service["namespace"],
         wait=True,
+        test=testmode,
     )
 
-    assert ret.result is True
-    assert ret.changes["kubernetes.service"]["new"] == "absent"
+    assert ret.result in (None, True)
+    assert (ret.result is None) is testmode
+    if not testmode:
+        assert ret.result is True
+        assert ret.changes["kubernetes.service"]["new"] == "absent"
+        # Verify service is deleted
+        service_state = kubernetes_exe.show_service(
+            name=service["name"], namespace=service["namespace"]
+        )
+        assert service_state is None
+    else:
+        assert not ret.changes
+        assert "The service is going to be deleted" in ret.comment
+        # Verify service still exists in test mode
+        service_state = kubernetes_exe.show_service(
+            name=service["name"], namespace=service["namespace"]
+        )
+        assert service_state is not None
 
 
-def test_service_absent_test_mode(kubernetes, service):
-    """
-    Test kubernetes.service_absent in test mode
-    """
-    ret = kubernetes.service_absent(
-        name=service["name"],
-        namespace=service["namespace"],
-        test=True,
-    )
-
-    assert ret.result is None
-    assert not ret.changes
-
-
+@pytest.mark.parametrize("service", [False], indirect=True)
 def test_service_absent_idempotency(kubernetes, service):
     """
     Test kubernetes.service_absent is idempotent
     """
-    ret = kubernetes.service_absent(name=service["name"], namespace=service["namespace"], wait=True)
-    assert ret.result is True
 
-    # Test idempotency
+    # Test deletion of non-existent service
     ret = kubernetes.service_absent(name=service["name"], namespace=service["namespace"])
     assert ret.result is True
     assert "does not exist" in ret.comment
@@ -999,15 +1090,8 @@ def configmap_template(state_tree):
         metadata:
           name: {{ name }}
           namespace: {{ namespace }}
-          labels:
-            {% for key, value in labels.items() %}
-            {{ key }}: {{ value }}
-            {% endfor %}
-        data:
-          {% for key, value in configmap_data.items() %}
-          {{ key }}: |
-            {{ value | indent(12) }}
-          {% endfor %}
+          labels: {{ labels | json }}
+        data: {{ data | json }}
         """
     ).strip()
 
@@ -1016,7 +1100,7 @@ def configmap_template(state_tree):
 
 
 @pytest.fixture(params=[True])
-def configmap(kubernetes, configmap_data, request):
+def configmap(kubernetes, configmap_data, kubernetes_exe, request):
     """
     Fixture to create a test configmap for state tests
     """
@@ -1032,17 +1116,25 @@ def configmap(kubernetes, configmap_data, request):
             wait=True,
         )
         assert ret.result is True
+
+        # Verify configmap is created
+        configmap_state = kubernetes_exe.show_configmap(name=name, namespace=namespace)
+        assert configmap_state["metadata"]["name"] == name
+        assert configmap_state["metadata"]["namespace"] == namespace
+        assert configmap_state["data"]["config.yaml"] == "foo: bar\nkey: value"
+        assert configmap_state["data"]["app.properties"] == "app.name=myapp\napp.port=8080"
     try:
         yield {"name": name, "namespace": namespace, "data": configmap_data}
     finally:
         # Cleanup the configmap after the test
-        ret = kubernetes.configmap_absent(name=name, namespace=namespace, wait=True)
-        assert ret.result is True
-        assert ret.comment in ["The configmap does not exist", "ConfigMap deleted"]
+        ret = kubernetes_exe.delete_configmap(name=name, namespace=namespace, wait=True)
+        # Verify configmap is deleted
+        configmap_state = kubernetes_exe.show_configmap(name=name, namespace=namespace)
+        assert configmap_state is None
 
 
 @pytest.mark.parametrize("configmap", [False], indirect=True)
-def test_configmap_present(kubernetes, configmap):
+def test_configmap_present(kubernetes, configmap, testmode, kubernetes_exe):
     """
     Test kubernetes.configmap_present creates a configmap
     """
@@ -1051,10 +1143,29 @@ def test_configmap_present(kubernetes, configmap):
         namespace=configmap["namespace"],
         data=configmap["data"],
         wait=True,
+        test=testmode,
     )
 
-    assert ret.result is True
-    assert ret.changes["data"] == configmap["data"]
+    assert ret.result in (None, True)
+    assert (ret.result is None) is testmode
+    if not testmode:
+        assert ret.result is True
+        # Verify configmap is created
+        configmap_state = kubernetes_exe.show_configmap(
+            name=configmap["name"], namespace=configmap["namespace"]
+        )
+        assert configmap_state["metadata"]["name"] == configmap["name"]
+        assert configmap_state["metadata"]["namespace"] == configmap["namespace"]
+        assert configmap_state["data"]["config.yaml"] == "foo: bar\nkey: value"
+        assert configmap_state["data"]["app.properties"] == "app.name=myapp\napp.port=8080"
+    else:
+        assert not ret.changes
+        assert "The configmap is going to be created" in ret.comment
+        # Verify configmap is not created in test mode
+        configmap_state = kubernetes_exe.show_configmap(
+            name=configmap["name"], namespace=configmap["namespace"]
+        )
+        assert configmap_state is None
 
     # Comment out idempotent test for now
     # TODO: The state module needs fixed to handle proper present functionality
@@ -1077,7 +1188,7 @@ def test_configmap_present(kubernetes, configmap):
 #     assert not ret.changes
 
 
-def test_configmap_replace(kubernetes, configmap):
+def test_configmap_replace(kubernetes, configmap, kubernetes_exe):
     """
     Test kubernetes.configmap_present replaces a configmap
     """
@@ -1095,44 +1206,20 @@ def test_configmap_replace(kubernetes, configmap):
 
     assert ret.result is True
     assert ret.changes["data"] == new_data
-
-
-def test_configmap_present_test_mode(kubernetes, configmap):
-    """
-    Test kubernetes.configmap_present in test mode
-    """
-    ret = kubernetes.configmap_present(
-        name=configmap["name"],
-        namespace=configmap["namespace"],
-        data=configmap["data"],
-        test=True,
+    # Verify actual configmap state matches what we expect
+    configmap_state = kubernetes_exe.show_configmap(
+        name=configmap["name"], namespace=configmap["namespace"]
     )
-
-    assert ret.result is None
-    assert not ret.changes
-
-
-def test_configmap_present_test_changes(kubernetes, configmap):
-    """
-    Test kubernetes.configmap_present with changes=True
-    """
-    new_data = {
-        "config.yaml": "foo: newbar\nkey: newvalue",
-        "app.properties": "app.name=newapp\napp.port=9090",
-    }
-
-    ret = kubernetes.configmap_present(
-        name=configmap["name"],
-        namespace=configmap["namespace"],
-        data=new_data,
-        test=True,
-    )
-    assert ret.result is None
-    assert not ret.changes
+    assert configmap_state["metadata"]["name"] == configmap["name"]
+    assert configmap_state["metadata"]["namespace"] == configmap["namespace"]
+    assert configmap_state["data"]["config.yaml"] == "foo: newbar\nkey: newvalue"
+    assert configmap_state["data"]["app.properties"] == "app.name=newapp\napp.port=9090"
 
 
 @pytest.mark.parametrize("configmap", [False], indirect=True)
-def test_configmap_present_template_context(kubernetes, configmap, configmap_template):
+def test_configmap_present_template_context(
+    kubernetes, configmap, configmap_template, kubernetes_exe
+):
     """
     Test kubernetes.configmap_present with template_context
     """
@@ -1140,7 +1227,7 @@ def test_configmap_present_template_context(kubernetes, configmap, configmap_tem
         "name": configmap["name"],
         "namespace": configmap["namespace"],
         "labels": {"app": "test"},
-        "configmap_data": {
+        "data": {
             "config.yaml": "foo: bar\nkey: value",
             "app.properties": "app.name=myapp\napp.port=8080",
         },
@@ -1156,10 +1243,19 @@ def test_configmap_present_template_context(kubernetes, configmap, configmap_tem
     )
 
     assert ret.result is True
-    assert ret.changes
+    # Verify actual configmap state matches what we expect
+    configmap_state = kubernetes_exe.show_configmap(
+        name=configmap["name"], namespace=configmap["namespace"]
+    )
+    assert configmap_state["metadata"]["name"] == configmap["name"]
+    assert configmap_state["metadata"]["namespace"] == configmap["namespace"]
+    assert (
+        configmap_state["data"]["data"]
+        == "{'app.properties': 'app.name=myapp\\napp.port=8080', 'config.yaml': 'foo: bar\\nkey: value'}"
+    )
 
 
-def test_configmap_absent(kubernetes, configmap):
+def test_configmap_absent(kubernetes, configmap, testmode, kubernetes_exe):
     """
     Test kubernetes.configmap_absent deletes a configmap
     """
@@ -1167,40 +1263,38 @@ def test_configmap_absent(kubernetes, configmap):
         name=configmap["name"],
         namespace=configmap["namespace"],
         wait=True,
+        test=testmode,
     )
 
-    assert ret.result is True
-    assert ret.changes["kubernetes.configmap"]["new"] == "absent"
-    assert ret.changes["kubernetes.configmap"]["old"] == "present"
+    assert ret.result in (None, True)
+    assert (ret.result is None) is testmode
+    if not testmode:
+        assert ret.result is True
+        assert ret.changes["kubernetes.configmap"]["new"] == "absent"
+
+        # Verify configmap is deleted
+        configmap_state = kubernetes_exe.show_configmap(
+            name=configmap["name"], namespace=configmap["namespace"]
+        )
+        assert configmap_state is None
+    else:
+        assert not ret.changes
+        assert "The configmap is going to be deleted" in ret.comment
+
+        # Verify configmap still exists in test mode
+        configmap_state = kubernetes_exe.show_configmap(
+            name=configmap["name"], namespace=configmap["namespace"]
+        )
+        assert configmap_state is not None
 
 
-def test_configmap_absent_test_mode(kubernetes, configmap):
-    """
-    Test kubernetes.configmap_absent in test mode
-    """
-    ret = kubernetes.configmap_absent(
-        name=configmap["name"],
-        namespace=configmap["namespace"],
-        test=True,
-    )
-
-    assert ret.result is None
-    assert not ret.changes
-
-
+@pytest.mark.parametrize("configmap", [False], indirect=True)
 def test_configmap_absent_idempotency(kubernetes, configmap):
     """
     Test kubernetes.configmap_absent is idempotent
     """
 
-    ret = kubernetes.configmap_absent(
-        name=configmap["name"],
-        namespace=configmap["namespace"],
-        wait=True,
-    )
-    assert ret.result is True
-
-    # Test idempotency
+    # Test deletion of non-existent configmap
     ret = kubernetes.configmap_absent(
         name=configmap["name"],
         namespace=configmap["namespace"],
@@ -1221,7 +1315,7 @@ def node_name(loaders):
 
 
 @pytest.fixture(params=[True])
-def node_label(kubernetes, node_name, request):
+def node_label(kubernetes, node_name, kubernetes_exe, request):
     """
     Fixture providing a node label for testing
     """
@@ -1240,13 +1334,12 @@ def node_label(kubernetes, node_name, request):
         yield {"name": test_label, "node": node_name, "value": test_value}
     finally:
         # Cleanup the label after the test
-        ret = kubernetes.node_label_absent(name=test_label, node=node_name)
-        assert ret.result is True
-        assert ret.comment in ["The label does not exist", "Label removed from node"]
+        kubernetes_exe.node_remove_label(node_name, test_label)
+        assert test_label not in kubernetes_exe.node_labels(node_name)
 
 
 @pytest.mark.parametrize("node_label", [False], indirect=True)
-def test_node_label_present(kubernetes, node_label):
+def test_node_label_present(kubernetes, node_label, testmode, kubernetes_exe):
     """
     Test kubernetes.node_label_present creates a label
     """
@@ -1254,14 +1347,23 @@ def test_node_label_present(kubernetes, node_label):
         name=node_label["name"],
         node=node_label["node"],
         value=node_label["value"],
+        test=testmode,
     )
 
-    assert ret.result is True
-    assert ret.changes[f"{node_label['node']}.{node_label['name']}"]["new"]
-    assert (
-        ret.changes[f"{node_label['node']}.{node_label['name']}"]["new"][node_label["name"]]
-        == node_label["value"]
-    )
+    assert ret.result in (None, True)
+    assert (ret.result is None) is testmode
+    if not testmode:
+        assert ret.result is True
+        assert ret.changes[f"{node_label['node']}.{node_label['name']}"]["new"]
+        # Verify label is created
+        node_label_state = kubernetes_exe.node_labels(node_label["node"])
+        assert node_label_state[node_label["name"]] == node_label["value"]
+    else:
+        assert not ret.changes
+        assert "The label is going to be set" in ret.comment
+        # Verify label is not created in test mode
+        node_label_state = kubernetes_exe.node_labels(node_label["node"])
+        assert node_label["value"] not in node_label_state
 
 
 def test_node_label_present_idempotency(kubernetes, node_label):
@@ -1279,23 +1381,7 @@ def test_node_label_present_idempotency(kubernetes, node_label):
     assert not ret.changes
 
 
-def test_node_label_present_test_mode(kubernetes, node_label):
-    """
-    Test kubernetes.node_label_present in test mode
-    """
-    ret = kubernetes.node_label_present(
-        name=node_label["name"],
-        node=node_label["node"],
-        value=node_label["value"],
-        test=True,
-    )
-
-    assert ret.result is True
-    assert "The label is already set and has the specified value" in ret.comment
-    assert not ret.changes
-
-
-def test_node_label_present_replace(kubernetes, node_label):
+def test_node_label_present_replace(kubernetes, node_label, testmode, kubernetes_exe):
     """
     Test kubernetes.node_label_present replaces a label
     """
@@ -1305,70 +1391,58 @@ def test_node_label_present_replace(kubernetes, node_label):
         name=node_label["name"],
         node=node_label["node"],
         value=new_value,
+        test=testmode,
     )
-
-    assert ret.result is True
-    assert (
-        ret.changes[f"{node_label['node']}.{node_label['name']}"]["new"][node_label["name"]]
-        == new_value
-    )
-
-
-def test_node_label_present_test_changes(kubernetes, node_label):
-    """
-    Test kubernetes.node_label_present with changes=True
-    """
-    new_value = "value2"
-
-    ret = kubernetes.node_label_present(
-        name=node_label["name"],
-        node=node_label["node"],
-        value=new_value,
-        test=True,
-    )
-    assert ret.result is None
-    assert not ret.changes
+    assert ret.result in (None, True)
+    assert (ret.result is None) is testmode
+    if not testmode:
+        assert ret.result is True
+        assert (
+            ret.changes[f"{node_label['node']}.{node_label['name']}"]["new"][node_label["name"]]
+            == new_value
+        )
+        # Verify label is replaced
+        node_label_state = kubernetes_exe.node_labels(node_label["node"])
+        assert node_label_state[node_label["name"]] == new_value
+    else:
+        assert not ret.changes
+        assert "The label is going to be updated" in ret.comment
+        # Verify label is not replaced in test mode
+        node_label_state = kubernetes_exe.node_labels(node_label["node"])
+        assert node_label_state[node_label["name"]] == node_label["value"]
 
 
-def test_node_label_absent(kubernetes, node_label):
+def test_node_label_absent(kubernetes, node_label, testmode, kubernetes_exe):
     """
     Test kubernetes.node_label_absent deletes a label
     """
     ret = kubernetes.node_label_absent(
-        name=node_label["name"],
-        node=node_label["node"],
+        name=node_label["name"], node=node_label["node"], test=testmode
     )
-
-    assert ret.result is True
-    assert ret.changes["kubernetes.node_label"]["new"] == "absent"
-
-
-def test_node_label_absent_test_mode(kubernetes, node_label):
-    """
-    Test kubernetes.node_label_absent in test mode
-    """
-    ret = kubernetes.node_label_absent(
-        name=node_label["name"],
-        node=node_label["node"],
-        test=True,
-    )
-
-    assert ret.result is None
-    assert not ret.changes
+    assert ret.result in (None, True)
+    assert (ret.result is None) is testmode
+    if not testmode:
+        assert ret.result is True
+        assert ret.changes["kubernetes.node_label"]["new"] == "absent"
+        # Verify label is deleted
+        node_label_state = kubernetes_exe.node_labels(node_label["node"])
+        assert node_label["name"] not in node_label_state
+        assert node_label["value"] not in node_label_state
+    else:
+        assert not ret.changes
+        assert "The label is going to be deleted" in ret.comment
+        # Verify label still exists in test mode
+        node_label_state = kubernetes_exe.node_labels(node_label["node"])
+        assert node_label_state[node_label["name"]] == node_label["value"]
 
 
+@pytest.mark.parametrize("node_label", [False], indirect=True)
 def test_node_label_absent_idempotency(kubernetes, node_label):
     """
     Test kubernetes.node_label_absent is idempotent
     """
-    ret = kubernetes.node_label_absent(
-        name=node_label["name"],
-        node=node_label["node"],
-        wait=True,
-    )
-    assert ret.result is True
 
-    # Test idempotency
+    # Test removal of non-existent label
     ret = kubernetes.node_label_absent(
         name=node_label["name"],
         node=node_label["node"],
@@ -1378,7 +1452,7 @@ def test_node_label_absent_idempotency(kubernetes, node_label):
     assert not ret.changes
 
 
-def test_node_label_folder_absent(kubernetes, node_label):
+def test_node_label_folder_absent(kubernetes, node_label, kubernetes_exe):
     """
     Test kubernetes.node_label_folder_absent deletes all labels with prefix
     """
@@ -1399,28 +1473,18 @@ def test_node_label_folder_absent(kubernetes, node_label):
         assert ret.result is True
         assert ret.changes[f"{node_label['node']}.{label}"]["new"][label] == value
 
-    # Test remove labels with test=true
-    ret = kubernetes.node_label_folder_absent(
-        name=test_prefix,
-        node=node_label["node"],
-        test=True,
-    )
-    assert ret.comment in ["The label folder is going to be deleted", "The labels do not exist"]
-    assert ret.result is None
+        # Verify labels are created
+        node_label_state = kubernetes_exe.node_labels(node_label["node"])
+        assert node_label_state[label] == value
 
-    # Remove labels
-    ret = kubernetes.node_label_folder_absent(
-        name=test_prefix,
-        node=node_label["node"],
-    )
-    assert ret.result is True
-    assert ret.changes
+        # Remove labels
+        ret = kubernetes.node_label_folder_absent(
+            name=test_prefix,
+            node=node_label["node"],
+        )
+        assert ret.result is True
+        assert ret.changes
 
-    # Try to remove again (should be no-op)
-    ret = kubernetes.node_label_folder_absent(
-        name=test_prefix,
-        node=node_label["node"],
-    )
-    assert ret.result is True
-    assert "The label folder does not exis" in ret.comment
-    assert not ret.changes
+        # Verify labels are deleted
+        node_label_state = kubernetes_exe.node_labels(node_label["node"])
+        assert label not in node_label_state

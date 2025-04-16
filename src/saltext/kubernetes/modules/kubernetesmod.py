@@ -2067,7 +2067,7 @@ def __is_base64(value):
     value = "".join(value.split())
     try:
         # Try decoding with validation
-        base64.b64decode(value, validate=True)
+        base64.b64decode(value, validate=True).decode("utf-8")
         return True
     except ValueError:
         return False

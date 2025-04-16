@@ -209,6 +209,8 @@ def secret_data(request):
 
     if typ == "opaque":
         return {"key": "value"}, "Opaque"
+    if typ == "opaque_base64":
+        return {"key": "dmFsdWU="}, "Opaque"
     if typ == "dockerconfigjson":
         return {
             ".dockerconfigjson": '{"auths":{"registry.example.com":{"username":"user","password":"pass"}}}'
@@ -237,8 +239,6 @@ def secret_data(request):
                 "eWQ5UmRnNTRZRlhMZ1FKV0"
             ),
         }, "kubernetes.io/tls"
-    if typ is None:
-        return {"key": "value"}, "Opaque"
     raise ValueError(f"Unknown secret type: {typ}")
 
 
@@ -248,8 +248,7 @@ def secret(kubernetes, secret_data, request):
     Fixture to create a test secret.
 
     If request.param is True, secret is created before the test.
-    If
-    request.param is False, secret is not created.
+    If request.param is False, secret is not created.
     """
     name = random_string("secret-", uppercase=False)
     namespace = "default"
@@ -281,8 +280,9 @@ def test_create_secret(kubernetes, secret):
         wait=True,
     )
     assert isinstance(res, dict)
-    assert res["metadata"]["name"] == secret["name"]
-    assert res["metadata"]["namespace"] == secret["namespace"]
+
+    sec = kubernetes.show_secret(secret["name"], secret["namespace"], decode=True)
+    assert sec["data"]["key"] == "value"
 
 
 def test_create_existing_secret(kubernetes, secret, secret_data):
@@ -307,19 +307,16 @@ def test_delete_existing_secret(kubernetes, secret):
     assert deleted_secret is None
 
 
-def test_secret_type_preservation(kubernetes, secret, secret_data):
+def test_secret_type_preservation(kubernetes, secret):
     """
     Test creating a secret with a specific type preserves the type
     """
     secret_type = kubernetes.show_secret(secret["name"], secret["namespace"])["type"]
 
-    # Extract just the data from the secret_data tuple
-    data_dict, _ = secret_data
-
     res = kubernetes.replace_secret(
         secret["name"],
         namespace=secret["namespace"],
-        data=data_dict,
+        data=secret["data"],
         secret_type=None,
         wait=True,
     )
@@ -354,7 +351,7 @@ def test_list_secrets_in_nonexistent_namespace(kubernetes, namespace):
             "value",
         ),
         (
-            "opaque",
+            "opaque_base64",
             "value",
         ),
     ],
@@ -372,70 +369,76 @@ def test_create_secret_inputs(secret, expected, kubernetes):
 
 @pytest.mark.usefixtures("secret_data")
 @pytest.mark.parametrize(
-    "secret_type,secret_data,replace",
+    "secret_data,replace,expected",
     [
         (
-            "Opaque",
-            "opaque",  # This will be passed to secret_data fixture
+            "opaque",
+            {"new_key": "new_value"},
             {"new_key": "new_value"},
         ),
         (
-            "kubernetes.io/dockerconfigjson",
-            "dockerconfigjson",  # This will be passed to secret_data fixture
+            "dockerconfigjson",
+            {
+                ".dockerconfigjson": '{"auths":{"registry.example.com":{"username":"new_user","password":"new_pass"}}}'
+            },
             {
                 ".dockerconfigjson": '{"auths":{"registry.example.com":{"username":"new_user","password":"new_pass"}}}'
             },
         ),
         (
-            "kubernetes.io/basic-auth",
-            "basic_auth",  # This will be passed to secret_data fixture
+            "basic_auth",
+            {"username": "new_user", "password": "new_pass"},
             {"username": "new_user", "password": "new_pass"},
         ),
         (
-            "kubernetes.io/tls",
-            "tls_pem",  # This will be passed to secret_data fixture
+            "tls_pem",
+            {
+                "tls.crt": "-----BEGIN CERTIFICATE-----\nNEW_CERTIFICATE\n-----END CERTIFICATE-----",
+                "tls.key": "-----BEGIN PRIVATE KEY-----\nNEW_PRIVATE_KEY\n-----END PRIVATE KEY-----",
+            },
             {
                 "tls.crt": "-----BEGIN CERTIFICATE-----\nNEW_CERTIFICATE\n-----END CERTIFICATE-----",
                 "tls.key": "-----BEGIN PRIVATE KEY-----\nNEW_PRIVATE_KEY\n-----END PRIVATE KEY-----",
             },
         ),
         (
-            "kubernetes.io/tls",
-            "tls_base64",  # This will be passed to secret_data fixture
+            "tls_base64",
             {
                 "tls.crt": "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk5FVyBURVNUIENFUlQKLS0tLS1FTkQgQ0VSVElGSUNBVEUtLS0tLQo=",
                 "tls.key": "LS0tLS1CRUdJTiBQUklWQVRFIEtFWS0tLS0tCk5FVyBURVNUIEtFWQotLS0tLUVORCBQUklWQVRFIEtFWS0tLS0tCg==",
+            },
+            {
+                "tls.crt": "-----BEGIN CERTIFICATE-----\nNEW TEST CERT\n-----END CERTIFICATE-----\n",
+                "tls.key": "-----BEGIN PRIVATE KEY-----\nNEW TEST KEY\n-----END PRIVATE KEY-----\n",
             },
         ),
     ],
     indirect=["secret_data"],
 )
-def test_secret_types(kubernetes, secret, secret_data, secret_type, replace):
+def test_secret_types(kubernetes, secret, replace, expected):
     """
     Test creating and replacing secrets with different types
     """
-    typ = secret_data[1]
-    secret_name = secret["name"]
-    secret_namespace = secret["namespace"]
-
     # Get initial secret state
-    initial_secret = kubernetes.show_secret(secret_name, secret_namespace)
+    initial_secret = kubernetes.show_secret(secret["name"], secret["namespace"], decode=True)
     assert initial_secret is not None
-    assert initial_secret["type"] == typ
+    assert initial_secret["type"] == secret["type"]
+    assert initial_secret["data"] == secret["data"]
 
     # Replace with new data
     kubernetes.replace_secret(
-        name=secret_name,
-        namespace=secret_namespace,
+        name=secret["name"],
+        namespace=secret["namespace"],
         data=replace,
-        secret_type=secret_type,
+        secret_type=secret["type"],
         wait=True,
     )
 
-    # Verify type was preserved
-    updated_secret = kubernetes.show_secret(secret_name, secret_namespace)
+    # Verify type was preserved and data was updated
+    updated_secret = kubernetes.show_secret(secret["name"], secret["namespace"], decode=True)
     assert updated_secret is not None
-    assert updated_secret["type"] == secret_type
+    assert updated_secret["type"] == secret["type"]
+    assert updated_secret["data"] == expected
 
 
 @pytest.fixture
@@ -543,24 +546,17 @@ def test_delete_nonexistent_deployment(kubernetes, deployment):
     assert res is None
 
 
-def test_deployment_replacement(kubernetes, deployment):
+def test_deployment_replacement(kubernetes, deployment, deployment_spec):
     """
     Test replacing a deployment with new spec
     """
-    new_spec = {
-        "replicas": 2,
-        "selector": {"matchLabels": {"app": "nginx"}},
-        "template": {
-            "metadata": {"labels": {"app": "nginx"}},
-            "spec": {"containers": [{"name": "nginx", "image": "nginx:latest"}]},
-        },
-    }
+    deployment_spec["replicas"] = 2
 
     res = kubernetes.replace_deployment(
         name=deployment["name"],
         namespace=deployment["namespace"],
         metadata={},
-        spec=new_spec,
+        spec=deployment_spec,
         source=None,
         template=None,
         saltenv="base",
@@ -580,19 +576,7 @@ def test_list_deployments_in_nonexistent_namespace(kubernetes, namespace):
 
 
 @pytest.fixture
-def service_spec():
-    """
-    Fixture providing a basic service spec
-    """
-    return {
-        "ports": [{"port": 80}],
-        "selector": {"app": "nginx"},
-        "type": "ClusterIP",
-    }
-
-
-@pytest.fixture
-def service_data(request):
+def service_spec(request):
     """
     Fixture providing service data based on type
     """
@@ -608,13 +592,11 @@ def service_data(request):
         }
     if typ == "LoadBalancer":
         return {"ports": [{"port": 80}], "selector": {"app": "nginx"}, "type": "LoadBalancer"}
-    if typ is None:
-        return {"ports": [{"port": 80}], "selector": {"app": "nginx"}, "type": "ClusterIP"}
     raise ValueError(f"Unknown service type: {typ}")
 
 
 @pytest.fixture(params=[True])
-def service(kubernetes, service_data, request):
+def service(kubernetes, service_spec, request):
     """
     Fixture to create a test service with different types.
 
@@ -624,16 +606,13 @@ def service(kubernetes, service_data, request):
     name = random_string("service-", uppercase=False)
     namespace = "default"
 
-    # Get the service spec from service_data
-    spec = service_data
-
     # Only create the service if requested
     if request.param:
         res = kubernetes.create_service(
             name=name,
             namespace=namespace,
             metadata={},
-            spec=spec,
+            spec=service_spec,
             source=None,
             template=None,
             saltenv="base",
@@ -646,15 +625,15 @@ def service(kubernetes, service_data, request):
         yield {
             "name": name,
             "namespace": namespace,
-            "spec": spec,
-            "type": spec.get("type", "ClusterIP"),
+            "spec": service_spec,
+            "type": service_spec.get("type", "ClusterIP"),
         }
     finally:
         kubernetes.delete_service(name, namespace, wait=True)
 
 
 @pytest.mark.parametrize("service", [False], indirect=True)
-def test_create_service(kubernetes, service, service_spec):
+def test_create_service(kubernetes, service):
     """
     Test creating a service returns expected result
     """
@@ -662,7 +641,7 @@ def test_create_service(kubernetes, service, service_spec):
         name=service["name"],
         namespace=service["namespace"],
         metadata={},
-        spec=service_spec,
+        spec=service["spec"],
         source=None,
         template=None,
         saltenv="base",
@@ -673,7 +652,7 @@ def test_create_service(kubernetes, service, service_spec):
     assert res["metadata"]["namespace"] == service["namespace"]
 
 
-def test_create_existing_service(kubernetes, service, service_spec):
+def test_create_existing_service(kubernetes, service):
     """
     Test creating a service that already exists raises appropriate error
     """
@@ -682,7 +661,7 @@ def test_create_existing_service(kubernetes, service, service_spec):
             name=service["name"],
             namespace=service["namespace"],
             metadata={},
-            spec=service_spec,
+            spec=service["spec"],
             source=None,
             template=None,
             saltenv="base",
@@ -720,67 +699,73 @@ def test_list_services_in_nonexistent_namespace(kubernetes, namespace):
     assert res == []
 
 
-@pytest.mark.usefixtures("service_data")
+@pytest.mark.usefixtures("service_spec")
 @pytest.mark.parametrize(
-    "service_type,service_data,replace",
+    "service_spec,replace",
     [
         (
             "ClusterIP",
-            "ClusterIP",
-            {"ports": [{"port": 8080}], "selector": {"app": "nginx"}, "type": "ClusterIP"},
+            {"ports": [{"port": 8080}]},
         ),
         (
             "NodePort",
-            "NodePort",
-            {
-                "ports": [{"port": 8080, "nodePort": 30081}],
-                "selector": {"app": "nginx"},
-                "type": "NodePort",
-            },
+            {"ports": [{"port": 8080, "nodePort": 30081}]},
         ),
         (
             "LoadBalancer",
-            "LoadBalancer",
-            {"ports": [{"port": 8080}], "selector": {"app": "nginx"}, "type": "LoadBalancer"},
+            {"ports": [{"port": 8080}]},
         ),
     ],
-    indirect=["service_data"],
+    indirect=["service_spec"],
 )
-def test_service_different_types(kubernetes, service, service_data, service_type, replace):
+def test_service_different_types(kubernetes, service, replace):
     """
     Test creating and replacing services with different types
     """
     # Get initial service state
     old_service = kubernetes.show_service(service["name"], service["namespace"])
     assert old_service is not None
-    assert old_service["spec"]["type"] == service_type
+    assert old_service["spec"]["type"] == service["type"]
 
+    service["spec"].update(replace)
     # Replace with new data
     kubernetes.replace_service(
         name=service["name"],
         namespace=service["namespace"],
         metadata={},
-        spec=replace,
+        spec=service["spec"],
+        old_service=old_service,
         source=None,
         template=None,
-        old_service=old_service,
         saltenv="base",
         wait=True,
     )
 
-    # Verify type was preserved
     updated_service = kubernetes.show_service(service["name"], service["namespace"])
     assert updated_service is not None
-    assert updated_service["spec"]["type"] == service_type
+    assert updated_service["spec"]["type"] == service["type"]
     assert updated_service["spec"]["ports"][0]["port"] == replace["ports"][0]["port"]
 
 
 @pytest.fixture
-def configmap_data():
+def configmap_data(request):
     """
     Fixture providing a basic configmap data
     """
-    return {"key": "value"}
+    data = getattr(request, "param", "default")
+    if data == "default":
+        return {"key": "value"}
+    if data == "config.yaml":
+        return {"config.yaml": "foo: bar\nkey: value"}
+    if data == "special.data":
+        return {"special.data": "!@#$%^&*()\n\t\r\n"}
+    if data == "unicode.txt":
+        return {"unicode.txt": "Hello 世界"}
+    if data == "large.data":
+        return {"large.data": "x" * 900000}
+    if data == "special.conf":
+        return {"special.conf": "key=value\n#comment\n$VAR=${OTHER_VAR}\nspecial_chars=!@#$%^&*()"}
+    raise ValueError(f"Unknown configmap data type: {data}")
 
 
 @pytest.fixture(params=[True])
@@ -789,8 +774,7 @@ def configmap(kubernetes, configmap_data, request):
     Fixture to create a test configmap.
 
     If request.param is True, configmap is created before the test.
-    If
-    request.param is False, configmap is not created.
+    If request.param is False, configmap is not created.
     """
     name = random_string("configmap-", uppercase=False)
     namespace = "default"
@@ -807,20 +791,44 @@ def configmap(kubernetes, configmap_data, request):
         kubernetes.delete_configmap(name, namespace, wait=True)
 
 
-@pytest.mark.parametrize("configmap", [False], indirect=True)
-def test_create_configmap(kubernetes, configmap):
+@pytest.mark.usefixtures("configmap_data")
+@pytest.mark.parametrize(
+    "configmap_data,expected",
+    [
+        (
+            "default",
+            {"key": "value"},
+        ),
+        (
+            "config.yaml",
+            {"config.yaml": "foo: bar\nkey: value"},
+        ),
+        (
+            "special.data",
+            {"special.data": "!@#$%^&*()\n\t\r\n"},
+        ),
+        (
+            "unicode.txt",
+            {"unicode.txt": "Hello 世界"},
+        ),
+        (
+            "large.data",
+            {"large.data": "x" * 900000},
+        ),
+        (
+            "special.conf",
+            {"special.conf": "key=value\n#comment\n$VAR=${OTHER_VAR}\nspecial_chars=!@#$%^&*()"},
+        ),
+    ],
+    indirect=["configmap_data"],
+)
+def test_create_configmap(kubernetes, configmap, expected):
     """
     Test creating a configmap returns expected result
     """
-    res = kubernetes.create_configmap(
-        name=configmap["name"],
-        namespace=configmap["namespace"],
-        data={"key": "value"},
-        wait=True,
-    )
+    res = kubernetes.show_configmap(configmap["name"], configmap["namespace"])
     assert isinstance(res, dict)
-    assert res["metadata"]["name"] == configmap["name"]
-    assert res["metadata"]["namespace"] == configmap["namespace"]
+    assert res["data"] == expected
 
 
 def test_create_existing_configmap(kubernetes, configmap, configmap_data):
@@ -854,55 +862,6 @@ def test_delete_nonexistent_configmap(kubernetes, configmap):
     assert res is None
 
 
-def test_configmap_special_data(kubernetes, configmap):
-    """
-    Test configmap with special data types and characters
-    """
-    special_data = {
-        "config.yaml": "foo: bar\nkey: value",
-        "special.data": "!@#$%^&*()\n\t\r\n",
-        "unicode.txt": "Hello 世界",
-    }
-
-    # Create configmap
-    res = kubernetes.replace_configmap(
-        configmap["name"], namespace=configmap["namespace"], data=special_data, wait=True
-    )
-    assert isinstance(res, dict)
-    assert res["data"] == special_data
-
-
-def test_configmap_large_data(kubernetes, configmap):
-    """
-    Test configmap with data approaching size limits
-    """
-    large_data = {"large-file.txt": "x" * 900000}  # 900KB of data
-
-    # Create configmap
-    res = kubernetes.replace_configmap(
-        configmap["name"], namespace=configmap["namespace"], data=large_data, wait=True
-    )
-    assert isinstance(res, dict)
-    assert res["data"] == large_data
-
-
-def test_configmap_with_special_characters(kubernetes, configmap):
-    """
-    Test configmap with special characters in data
-    """
-    special_data = {
-        "special.conf": "key=value\n#comment\n$VAR=${OTHER_VAR}\nspecial_chars=!@#$%^&*()",
-        "unicode.txt": "Hello 世界",
-    }
-
-    # Create configmap
-    res = kubernetes.replace_configmap(
-        configmap["name"], namespace=configmap["namespace"], data=special_data, wait=True
-    )
-    assert isinstance(res, dict)
-    assert res["data"] == special_data
-
-
 @pytest.fixture(scope="module")
 def node_name(kubernetes):
     """
@@ -920,8 +879,7 @@ def node(kubernetes, request, node_name):
     Fixture to create a test node.
 
     If request.param is True, node is created before the test.
-    If
-    request.param is False, node is not created.
+    If request.param is False, node is not created.
     """
 
     label_key = "test.salt.label"
@@ -944,9 +902,12 @@ def node(kubernetes, request, node_name):
     try:
         yield node_name
     finally:
-        # Cleanup - remove test label if it was created
-        if request.param:
-            kubernetes.node_remove_label(node_name, label_key)
+        # cleanup labels created in the test
+        final_labels = set(kubernetes.node_labels(node_name))
+        labels_to_remove = final_labels - set(initial_labels)
+        for remove_key in labels_to_remove:
+            kubernetes.node_remove_label(node_name, remove_key)
+            assert remove_key not in kubernetes.node_labels(node_name)
 
 
 def test_node_add_label(kubernetes, node):
@@ -977,14 +938,10 @@ def test_node_multi_label_operations(kubernetes, node):
         "salt.test/label3": "value3",
     }
 
-    try:
-        # Add multiple labels
-        for label, value in test_labels.items():
-            kubernetes.node_add_label(node, label, value)
+    # Add multiple labels
+    for label, value in test_labels.items():
+        kubernetes.node_add_label(node, label, value)
 
-            # Verify all labels were added
-            current_labels = kubernetes.node_labels(node)
-            assert value in current_labels[label]
-    finally:
-        for label, value in test_labels.items():
-            kubernetes.node_remove_label(node, label)
+        # Verify all labels were added
+        current_labels = kubernetes.node_labels(node)
+        assert value in current_labels[label]

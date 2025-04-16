@@ -1173,7 +1173,9 @@ def pod_present(
     """
     Ensures that the named pod is present inside of the specified
     namespace with the given metadata and spec.
-    If the pod exists it will be replaced.
+    salt is currently unable to replace a pod without
+    deleting it. Please perform the removal of the pod requiring
+    the 'pod_absent' state if this is the desired behaviour.
 
     name
         The name of the pod.
