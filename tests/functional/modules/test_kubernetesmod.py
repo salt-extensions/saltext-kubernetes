@@ -882,17 +882,15 @@ def node(kubernetes, request, node_name):
     If request.param is False, node is not created.
     """
 
-    label_key = "test.salt.label"
-    label_value = "value"
+    initial_labels = kubernetes.node_labels(node_name)
+    assert isinstance(initial_labels, dict)
+    assert "kubernetes.io/hostname" in initial_labels
 
     # Only create the node if requested
     if request.param:
-        # check node labels
-        initial_labels = kubernetes.node_labels(node_name)
-        assert isinstance(initial_labels, dict)
-        assert "kubernetes.io/hostname" in initial_labels
-
         # Add new label
+        label_key = "test.salt.label"
+        label_value = "value"
         kubernetes.node_add_label(node_name, label_key, label_value)
 
         # Verify label was added
@@ -907,7 +905,9 @@ def node(kubernetes, request, node_name):
         labels_to_remove = final_labels - set(initial_labels)
         for remove_key in labels_to_remove:
             kubernetes.node_remove_label(node_name, remove_key)
-            assert remove_key not in kubernetes.node_labels(node_name)
+
+        cleaned_labels = set(kubernetes.node_labels(node_name))
+        assert not cleaned_labels - set(initial_labels)
 
 
 def test_node_add_label(kubernetes, node):
@@ -942,6 +942,8 @@ def test_node_multi_label_operations(kubernetes, node):
     for label, value in test_labels.items():
         kubernetes.node_add_label(node, label, value)
 
-        # Verify all labels were added
-        current_labels = kubernetes.node_labels(node)
-        assert value in current_labels[label]
+    # Verify all labels were added
+    current_labels = kubernetes.node_labels(node)
+    for label, value in test_labels.items():
+        assert label in current_labels
+        assert current_labels[label] == value
