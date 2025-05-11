@@ -2,7 +2,6 @@ import logging
 
 import pytest
 from salt.exceptions import CommandExecutionError
-from saltfactories.utils import random_string
 
 log = logging.getLogger(__name__)
 
@@ -17,24 +16,6 @@ def kubernetes(modules):
     Return the kubernetes execution module
     """
     return modules.kubernetes
-
-
-@pytest.fixture(params=[True])
-def namespace(kubernetes, request):
-    """
-    Fixture to create a test namespace.
-    """
-    name = random_string("namespace-", uppercase=False)
-
-    # Only create the namespace if requested
-    if request.param:
-        res = kubernetes.create_namespace(name)
-        assert isinstance(res, dict)
-        assert res["metadata"]["name"] == name
-    try:
-        yield name
-    finally:
-        kubernetes.delete_namespace(name, wait=True)
 
 
 @pytest.mark.parametrize("namespace", [False], indirect=True)
@@ -102,39 +83,8 @@ def pod_spec():
     return {"containers": [{"name": "nginx", "image": "nginx:latest"}]}
 
 
-@pytest.fixture(params=[True])
-def pod(kubernetes, pod_spec, request):
-    """
-    Fixture to create a test pod.
-
-    If request.param is True, pod is created before the test.
-    If request.param is False, pod is not created.
-    """
-    name = random_string("pod-", uppercase=False)
-    namespace = "default"
-
-    # Only create the pod if requested
-    if request.param:
-        res = kubernetes.create_pod(
-            name=name,
-            namespace=namespace,
-            metadata={"labels": {"test": "true"}},
-            spec=pod_spec,
-            source=None,
-            template=None,
-            saltenv="base",
-            wait=True,
-        )
-        assert isinstance(res, dict)
-        assert res["metadata"]["name"] == name
-    try:
-        yield {"name": name, "namespace": namespace}
-    finally:
-        kubernetes.delete_pod(name, namespace, wait=True)
-
-
 @pytest.mark.parametrize("pod", [False], indirect=True)
-def test_create_pod(kubernetes, pod, pod_spec):
+def test_create_pod(kubernetes, pod):
     """
     Test creating a pod returns expected result
     """
@@ -142,7 +92,7 @@ def test_create_pod(kubernetes, pod, pod_spec):
         name=pod["name"],
         namespace=pod["namespace"],
         metadata={},
-        spec=pod_spec,
+        spec=pod["spec"],
         source=None,
         template=None,
         saltenv="base",
@@ -240,32 +190,6 @@ def secret_data(request):
             ),
         }, "kubernetes.io/tls"
     raise ValueError(f"Unknown secret type: {typ}")
-
-
-@pytest.fixture(params=[True])
-def secret(kubernetes, secret_data, request):
-    """
-    Fixture to create a test secret.
-
-    If request.param is True, secret is created before the test.
-    If request.param is False, secret is not created.
-    """
-    name = random_string("secret-", uppercase=False)
-    namespace = "default"
-    data, typ = secret_data
-
-    # Only create the secret if requested
-    if request.param:
-        res = kubernetes.create_secret(
-            name, namespace=namespace, data=data, secret_type=typ, wait=True
-        )
-        assert isinstance(res, dict)
-        assert res["metadata"]["name"] == name
-
-    try:
-        yield {"name": name, "namespace": namespace, "data": data, "type": typ}
-    finally:
-        kubernetes.delete_secret(name, namespace, wait=True)
 
 
 @pytest.mark.parametrize("secret", [False], indirect=True)
@@ -456,40 +380,8 @@ def deployment_spec():
     }
 
 
-@pytest.fixture(params=[True])
-def deployment(kubernetes, deployment_spec, request):
-    """
-    Fixture to create a test deployment.
-
-    If request.param is True, deployment is created before the test.
-    If request.param is False, deployment is not created.
-    """
-    name = random_string("deployment-", uppercase=False)
-    namespace = "default"
-
-    # Only create the deployment if requested
-    if request.param:
-        res = kubernetes.create_deployment(
-            name=name,
-            namespace=namespace,
-            metadata={},
-            spec=deployment_spec,
-            source=None,
-            template=None,
-            saltenv="base",
-            wait=True,
-        )
-        assert isinstance(res, dict)
-        assert res["metadata"]["name"] == name
-
-    try:
-        yield {"name": name, "namespace": namespace}
-    finally:
-        kubernetes.delete_deployment(name, namespace, wait=True)
-
-
 @pytest.mark.parametrize("deployment", [False], indirect=True)
-def test_create_deployment(kubernetes, deployment, deployment_spec):
+def test_create_deployment(kubernetes, deployment):
     """
     Test creating a deployment returns expected result
     """
@@ -497,7 +389,7 @@ def test_create_deployment(kubernetes, deployment, deployment_spec):
         name=deployment["name"],
         namespace=deployment["namespace"],
         metadata={},
-        spec=deployment_spec,
+        spec=deployment["spec"],
         source=None,
         template=None,
         saltenv="base",
@@ -508,7 +400,7 @@ def test_create_deployment(kubernetes, deployment, deployment_spec):
     assert res["metadata"]["namespace"] == deployment["namespace"]
 
 
-def test_create_existing_deployment(kubernetes, deployment, deployment_spec):
+def test_create_existing_deployment(kubernetes, deployment):
     """
     Test creating a deployment that already exists raises appropriate error
     """
@@ -517,7 +409,7 @@ def test_create_existing_deployment(kubernetes, deployment, deployment_spec):
             name=deployment["name"],
             namespace=deployment["namespace"],
             metadata={},
-            spec=deployment_spec,
+            spec=deployment["spec"],
             source=None,
             template=None,
             saltenv="base",
@@ -546,17 +438,17 @@ def test_delete_nonexistent_deployment(kubernetes, deployment):
     assert res is None
 
 
-def test_deployment_replacement(kubernetes, deployment, deployment_spec):
+def test_deployment_replacement(kubernetes, deployment):
     """
     Test replacing a deployment with new spec
     """
-    deployment_spec["replicas"] = 2
+    deployment["spec"]["replicas"] = 2
 
     res = kubernetes.replace_deployment(
         name=deployment["name"],
         namespace=deployment["namespace"],
         metadata={},
-        spec=deployment_spec,
+        spec=deployment["spec"],
         source=None,
         template=None,
         saltenv="base",
@@ -593,43 +485,6 @@ def service_spec(request):
     if typ == "LoadBalancer":
         return {"ports": [{"port": 80}], "selector": {"app": "nginx"}, "type": "LoadBalancer"}
     raise ValueError(f"Unknown service type: {typ}")
-
-
-@pytest.fixture(params=[True])
-def service(kubernetes, service_spec, request):
-    """
-    Fixture to create a test service with different types.
-
-    If request.param is True, service is created before the test.
-    If request.param is False, service is not created.
-    """
-    name = random_string("service-", uppercase=False)
-    namespace = "default"
-
-    # Only create the service if requested
-    if request.param:
-        res = kubernetes.create_service(
-            name=name,
-            namespace=namespace,
-            metadata={},
-            spec=service_spec,
-            source=None,
-            template=None,
-            saltenv="base",
-            wait=True,
-        )
-        assert isinstance(res, dict)
-        assert res["metadata"]["name"] == name
-
-    try:
-        yield {
-            "name": name,
-            "namespace": namespace,
-            "spec": service_spec,
-            "type": service_spec.get("type", "ClusterIP"),
-        }
-    finally:
-        kubernetes.delete_service(name, namespace, wait=True)
 
 
 @pytest.mark.parametrize("service", [False], indirect=True)
@@ -768,29 +623,6 @@ def configmap_data(request):
     raise ValueError(f"Unknown configmap data type: {data}")
 
 
-@pytest.fixture(params=[True])
-def configmap(kubernetes, configmap_data, request):
-    """
-    Fixture to create a test configmap.
-
-    If request.param is True, configmap is created before the test.
-    If request.param is False, configmap is not created.
-    """
-    name = random_string("configmap-", uppercase=False)
-    namespace = "default"
-
-    # Only create the configmap if requested
-    if request.param:
-        res = kubernetes.create_configmap(name, namespace=namespace, data=configmap_data, wait=True)
-        assert isinstance(res, dict)
-        assert res["metadata"]["name"] == name
-
-    try:
-        yield {"name": name, "namespace": namespace}
-    finally:
-        kubernetes.delete_configmap(name, namespace, wait=True)
-
-
 @pytest.mark.usefixtures("configmap_data")
 @pytest.mark.parametrize(
     "configmap_data,expected",
@@ -831,13 +663,13 @@ def test_create_configmap(kubernetes, configmap, expected):
     assert res["data"] == expected
 
 
-def test_create_existing_configmap(kubernetes, configmap, configmap_data):
+def test_create_existing_configmap(kubernetes, configmap):
     """
     Test creating a configmap that already exists raises appropriate error
     """
     with pytest.raises(CommandExecutionError, match=".*already exists.*"):
         kubernetes.create_configmap(
-            configmap["name"], configmap["namespace"], data=configmap_data, wait=True
+            configmap["name"], configmap["namespace"], data=configmap["data"], wait=True
         )
 
 
@@ -862,73 +694,29 @@ def test_delete_nonexistent_configmap(kubernetes, configmap):
     assert res is None
 
 
-@pytest.fixture(scope="module")
-def node_name(kubernetes):
-    """
-    Fixture providing a node name for testing
-    """
-    nodes = kubernetes.nodes()
-    assert nodes, "No nodes found in cluster"
-    node_name = next(node for node in nodes if "control-plane" in node)
-    return node_name
-
-
-@pytest.fixture(params=[True])
-def node(kubernetes, request, node_name):
-    """
-    Fixture to create a test node.
-
-    If request.param is True, node is created before the test.
-    If request.param is False, node is not created.
-    """
-
-    initial_labels = kubernetes.node_labels(node_name)
-    assert isinstance(initial_labels, dict)
-    assert "kubernetes.io/hostname" in initial_labels
-
-    # Only create the node if requested
-    if request.param:
-        # Add new label
-        label_key = "test.salt.label"
-        label_value = "value"
-        kubernetes.node_add_label(node_name, label_key, label_value)
-
-        # Verify label was added
-        updated_labels = kubernetes.node_labels(node_name)
-        assert label_key in updated_labels
-        assert updated_labels[label_key] == label_value
-    try:
-        yield node_name
-    finally:
-        # cleanup labels created in the test
-        final_labels = set(kubernetes.node_labels(node_name))
-        labels_to_remove = final_labels - set(initial_labels)
-        for remove_key in labels_to_remove:
-            kubernetes.node_remove_label(node_name, remove_key)
-
-        cleaned_labels = set(kubernetes.node_labels(node_name))
-        assert not cleaned_labels - set(initial_labels)
-
-
-def test_node_add_label(kubernetes, node):
+@pytest.mark.parametrize("labeled_node", [False], indirect=True)
+def test_node_add_label(kubernetes, labeled_node):
     """
     Test adding a label to a node returns expected result
     """
-    res = kubernetes.node_labels(node)
+    kubernetes.node_add_label(labeled_node["name"], "test.salt.label", "value")
+    res = kubernetes.node_labels(labeled_node["name"])
     assert res["test.salt.label"] == "value"
 
 
-def test_node_remove_label(kubernetes, node):
+def test_node_remove_label(kubernetes, labeled_node):
     """
     Test removing a label from a node returns expected result
     """
-    kubernetes.node_remove_label(node, "test.salt.label")
+    label_to_delete = next(iter(labeled_node["labels"]))
+    kubernetes.node_remove_label(labeled_node["name"], label_to_delete)
     # Verify the label was removed by checking the node's labels
-    updated_labels = kubernetes.node_labels(node)
-    assert "test.salt.label" not in updated_labels
+    updated_labels = kubernetes.node_labels(labeled_node["name"])
+    assert label_to_delete not in updated_labels
 
 
-def test_node_multi_label_operations(kubernetes, node):
+@pytest.mark.parametrize("labeled_node", [False], indirect=True)
+def test_node_multi_label_operations(kubernetes, labeled_node):
     """
     Test multiple label operations on nodes
     """
@@ -940,10 +728,10 @@ def test_node_multi_label_operations(kubernetes, node):
 
     # Add multiple labels
     for label, value in test_labels.items():
-        kubernetes.node_add_label(node, label, value)
+        kubernetes.node_add_label(labeled_node["name"], label, value)
 
     # Verify all labels were added
-    current_labels = kubernetes.node_labels(node)
+    current_labels = kubernetes.node_labels(labeled_node["name"])
     for label, value in test_labels.items():
         assert label in current_labels
         assert current_labels[label] == value
