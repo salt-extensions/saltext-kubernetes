@@ -227,6 +227,7 @@ def deployment(kubernetes_exe, deployment_spec, request):
         res = kubernetes_exe.create_deployment(
             name=name,
             namespace=namespace,
+            metadata={},
             spec=deployment_spec,
             wait=True,
         )
@@ -284,6 +285,7 @@ def service(kubernetes_exe, service_spec, request):
         res = kubernetes_exe.create_service(
             name=name,
             namespace=namespace,
+            metadata={},
             spec=service_spec,
             wait=True,
         )
@@ -353,7 +355,7 @@ def labeled_node(kubernetes_exe, request, node_name):
 
     initial_labels = kubernetes_exe.node_labels(node_name)
     assert isinstance(initial_labels, dict)
-    assert "kubernetes_exe.io/hostname" in initial_labels
+    assert "kubernetes.io/hostname" in initial_labels
     labels = None
 
     # Only create the node if requested

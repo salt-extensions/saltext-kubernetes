@@ -1015,9 +1015,9 @@ def create_deployment(
     namespace,
     metadata,
     spec,
-    source,
-    template,
-    saltenv,
+    source=None,
+    template=None,
+    saltenv=None,
     template_context=None,
     wait=False,
     timeout=60,
@@ -1046,6 +1046,9 @@ def create_deployment(
 
     saltenv
         Salt environment to pull the source file from
+
+        .. versionchanged:: 2.0.0
+            Defaults to the value of the :conf_minion:`saltenv` minion option or ``base``.
 
     template_context
         .. versionadded:: 2.0.0
@@ -1114,9 +1117,9 @@ def create_pod(
     namespace,
     metadata,
     spec,
-    source,
-    template,
-    saltenv,
+    source=None,
+    template=None,
+    saltenv=None,
     template_context=None,
     wait=False,
     timeout=60,
@@ -1145,6 +1148,9 @@ def create_pod(
 
     saltenv
         Salt environment to pull the source file from
+
+        .. versionchanged:: 2.0.0
+            Defaults to the value of the :conf_minion:`saltenv` minion option or ``base``.
 
     template_context
         .. versionadded:: 2.0.0
@@ -1221,9 +1227,9 @@ def create_service(
     namespace,
     metadata,
     spec,
-    source,
-    template,
-    saltenv,
+    source=None,
+    template=None,
+    saltenv=None,
     template_context=None,
     wait=False,
     timeout=60,
@@ -1252,6 +1258,9 @@ def create_service(
 
     saltenv
         Salt environment to pull the source file from
+
+        .. versionchanged:: 2.0.0
+            Defaults to the value of the :conf_minion:`saltenv` minion option or ``base``.
 
     template_context
         .. versionadded:: 2.0.0
@@ -1343,7 +1352,7 @@ def create_secret(
     data=None,
     source=None,
     template=None,
-    saltenv="base",
+    saltenv=None,
     template_context=None,
     secret_type=None,
     metadata=None,
@@ -1376,6 +1385,9 @@ def create_secret(
 
     saltenv
         Salt environment to pull the source file from
+
+        .. versionchanged:: 2.0.0
+            Defaults to the value of the :conf_minion:`saltenv` minion option or ``base``.
 
     template_context
         .. versionadded:: 2.0.0
@@ -1484,7 +1496,7 @@ def create_configmap(
     data,
     source=None,
     template=None,
-    saltenv="base",
+    saltenv=None,
     template_context=None,
     wait=False,
     timeout=60,
@@ -1510,6 +1522,9 @@ def create_configmap(
 
     saltenv
         Salt environment to pull the source file from
+
+        .. versionchanged:: 2.0.0
+            Defaults to the value of the :conf_minion:`saltenv` minion option or ``base``.
 
     template_context
         .. versionadded:: 2.0.0
@@ -1617,9 +1632,9 @@ def replace_deployment(
     name,
     metadata,
     spec,
-    source,
-    template,
-    saltenv,
+    source=None,
+    template=None,
+    saltenv=None,
     namespace="default",
     template_context=None,
     wait=False,
@@ -1647,6 +1662,9 @@ def replace_deployment(
 
     saltenv
         Salt environment to pull the source file from
+
+        .. versionchanged:: 2.0.0
+            Defaults to the value of the :conf_minion:`saltenv` minion option or ``base``.
 
     namespace
         The namespace to replace the deployment in. Defaults to ``default``.
@@ -1712,12 +1730,12 @@ def replace_deployment(
 
 def replace_service(
     name,
+    old_service,
     metadata,
     spec,
-    source,
-    template,
-    old_service,
-    saltenv,
+    source=None,
+    template=None,
+    saltenv=None,
     namespace="default",
     template_context=None,
     wait=False,
@@ -1725,11 +1743,19 @@ def replace_service(
     **kwargs,
 ):
     """
+    .. versionchanged:: 2.0.0
+        The `old_service` parameter was moved to the second position,
+        which pushes `metadata`, `spec`, `source` and `template` one position
+        further down the parameter list.
+
     Replaces an existing service with a new one defined by name and namespace,
     having the specified metadata and spec.
 
     name
         The name of the service
+
+    old_service
+        The existing service to replace
 
     metadata
         Service metadata dict
@@ -1743,11 +1769,11 @@ def replace_service(
     template
         Template engine to use to render the source file
 
-    old_service
-        The existing service to replace
-
     saltenv
         Salt environment to pull the source file from
+
+        .. versionchanged:: 2.0.0
+            Defaults to the value of the :conf_minion:`saltenv` minion option or ``base``.
 
     namespace
         The namespace to replace the service in. Defaults to ``default``.
@@ -1772,11 +1798,11 @@ def replace_service(
     .. code-block:: bash
 
         salt '*' kubernetes.replace_service name=my-service \
+            old_service='{"metadata": {"resource_version": "12345"}, "spec": {"cluster_ip": "10.0.0.1"}}' \
             metadata='{"labels": {"app": "my-app"}}' \
             spec='{"ports": [{"port": 80, "targetPort": 8080}], "selector": {"app": "my-app"}}' \
             source=/path/to/service.yaml \
             template=jinja \
-            old_service='{"metadata": {"resource_version": "12345"}, "spec": {"cluster_ip": "10.0.0.1"}}' \
             saltenv=base \
             namespace=default \
             template_context='{"var1": "value1"}'
@@ -1827,7 +1853,7 @@ def replace_secret(
     data,
     source=None,
     template=None,
-    saltenv="base",
+    saltenv=None,
     namespace="default",
     template_context=None,
     secret_type=None,
@@ -1859,6 +1885,9 @@ def replace_secret(
 
     saltenv
         Salt environment to pull the source file from
+
+        .. versionchanged:: 2.0.0
+            Defaults to the value of the :conf_minion:`saltenv` minion option or ``base``.
 
     namespace
         The namespace to replace the secret in. Defaults to ``default``.
@@ -1970,7 +1999,7 @@ def replace_configmap(
     data,
     source=None,
     template=None,
-    saltenv="base",
+    saltenv=None,
     namespace="default",
     template_context=None,
     wait=False,
@@ -1995,6 +2024,9 @@ def replace_configmap(
 
     saltenv
         Salt environment to pull the source file from
+
+        .. versionchanged:: 2.0.0
+            Defaults to the value of the :conf_minion:`saltenv` minion option or ``base``.
 
     namespace
         The namespace to replace the configmap in. Defaults to ``default``.
@@ -2120,6 +2152,7 @@ def __read_and_render_yaml_file(source, template, saltenv, template_context=None
     Read a yaml file and, if needed, renders that using the specified
     templating. Returns the python objects defined inside of the file.
     """
+    saltenv = saltenv or __opts__["saltenv"] or "base"
     sfn = __salt__["cp.cache_file"](source, saltenv)
     if not sfn:
         raise CommandExecutionError(f"Source file '{source}' not found")
@@ -2128,32 +2161,31 @@ def __read_and_render_yaml_file(source, template, saltenv, template_context=None
         contents = src.read()
 
         if template:
-            if template in salt.utils.templates.TEMPLATE_REGISTRY:
-                # Apply templating with template_context
-                if template_context is None:
-                    template_context = {}
+            if template not in salt.utils.templates.TEMPLATE_REGISTRY:
+                raise CommandExecutionError(f"Unknown template specified: {template}")
+            # Apply templating with template_context
+            if template_context is None:
+                template_context = {}
 
-                data = salt.utils.templates.TEMPLATE_REGISTRY[template](
-                    contents,
-                    from_str=True,
-                    to_str=True,
-                    saltenv=saltenv,
-                    grains=__grains__,
-                    pillar=__pillar__,
-                    salt=__salt__,
-                    opts=__opts__,
-                    context=template_context,
+            data = salt.utils.templates.TEMPLATE_REGISTRY[template](
+                contents,
+                from_str=True,
+                to_str=True,
+                saltenv=saltenv,
+                grains=__grains__,
+                pillar=__pillar__,
+                salt=__salt__,
+                opts=__opts__,
+                context=template_context,
+            )
+
+            if not data["result"]:
+                # Failed to render the template
+                raise CommandExecutionError(
+                    f'Failed to render file path with error: {data["data"]}'
                 )
 
-                if not data["result"]:
-                    # Failed to render the template
-                    raise CommandExecutionError(
-                        f'Failed to render file path with error: {data["data"]}'
-                    )
-
-                contents = data["data"].encode("utf-8")
-            else:
-                raise CommandExecutionError(f"Unknown template specified: {template}")
+            contents = data["data"].encode("utf-8")
 
         return salt.utils.yaml.safe_load(contents)
 
