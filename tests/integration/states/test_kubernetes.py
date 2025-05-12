@@ -916,10 +916,8 @@ def test_configmap_present(
     )
     assert ret.returncode == 0
     assert ret.data["metadata"]["name"] == configmap["name"]
-    assert (
-        ret.data["data"]["data"]
-        == "{'config.yaml': 'foo: bar\\nkey: value\\n', 'app.properties': 'app.name=myapp\\napp.port=8080'}"
-    )
+    assert ret.data["data"]["config.yaml"] == "foo: bar\nkey: value\n"
+    assert ret.data["data"]["app.properties"] == "app.name=myapp\napp.port=8080"
 
 
 def test_configmap_absent(kind_cluster, salt_call_cli, configmap, configmap_absent_state):
@@ -932,10 +930,8 @@ def test_configmap_absent(kind_cluster, salt_call_cli, configmap, configmap_abse
     )
     assert ret.returncode == 0
     assert ret.data["metadata"]["name"] == configmap["name"]
-    assert (
-        ret.data["data"]["data"]
-        == "{'config.yaml': 'foo: bar\\nkey: value\\n', 'app.properties': 'app.name=myapp\\napp.port=8080'}"
-    )
+    assert ret.data["data"]["config.yaml"] == "foo: bar\nkey: value\n"
+    assert ret.data["data"]["app.properties"] == "app.name=myapp\napp.port=8080"
 
     # Delete the configmap using the state
     ret = salt_call_cli.run(

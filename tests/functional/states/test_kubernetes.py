@@ -1066,10 +1066,8 @@ def test_configmap_present_template_context(
     )
     assert configmap_state["metadata"]["name"] == configmap["name"]
     assert configmap_state["metadata"]["namespace"] == configmap["namespace"]
-    assert (
-        configmap_state["data"]["data"]
-        == "{'app.properties': 'app.name=myapp\\napp.port=8080', 'config.yaml': 'foo: bar\\nkey: value'}"
-    )
+    assert configmap_state["data"]["config.yaml"] == "foo: bar\nkey: value"
+    assert configmap_state["data"]["app.properties"] == "app.name=myapp\napp.port=8080"
 
 
 def test_configmap_absent(kubernetes, configmap, testmode, kubernetes_exe):

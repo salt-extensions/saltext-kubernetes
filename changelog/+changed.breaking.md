@@ -1,0 +1,1 @@
+Changed the behavior in the `create_<resource>` functions to support template_context for jinja templating. This change effects backwards compatability and may not work on older verions of kubernetes.

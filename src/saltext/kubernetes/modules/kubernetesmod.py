@@ -1552,7 +1552,17 @@ def create_configmap(
             name=settings namespace=default data='{"example.conf": "# example file"}'
     """
     if source:
-        data = __read_and_render_yaml_file(source, template, saltenv, template_context)
+        rendered = __read_and_render_yaml_file(source, template, saltenv, template_context)
+        try:
+            data = rendered["data"]
+        except KeyError as err:
+            raise CommandExecutionError(
+                "The template for configmap [...] did not render to a spec: Missing `data` key."
+            ) from err
+        except TypeError as err:
+            raise CommandExecutionError(
+                f"The template for configmap [...] did not render to a spec: Expected mapping, got '{type(rendered).__name__}'."
+            ) from err
     elif data is None:
         data = {}
 
