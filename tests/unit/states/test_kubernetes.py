@@ -11,7 +11,7 @@ import pytest
 import salt.utils.stringutils
 
 from saltext.kubernetes.modules import kubernetesmod
-from saltext.kubernetes.states import kubernetesmod as kubernetes
+from saltext.kubernetes.states import kubernetes
 
 pytestmark = [
     pytest.mark.skipif(
@@ -33,10 +33,14 @@ def mock_func(func_name, return_value, test=False):
     the test options.
     """
     name = f"kubernetes.{func_name}"
-    mocked = {name: MagicMock(return_value=return_value)}
-    with patch.dict(kubernetes.__salt__, mocked) as patched:
+    mock_obj = MagicMock(return_value=return_value)
+
+    # Create a new dictionary for each mock to avoid conflicts
+    mocked = {name: mock_obj}
+
+    with patch.dict(kubernetes.__salt__, mocked):
         with patch.dict(kubernetes.__opts__, {"test": test}):
-            yield patched
+            yield mock_obj
 
 
 def make_configmap(name, namespace="default", data=None):
@@ -745,7 +749,7 @@ def test_namespace_absent__delete_status_terminating():
         {
             "code": None,
             "status": "Terminating namespace",
-            "message": "Terminating this shizzzle yo",
+            "message": "Terminating",
         }
     )
     with mock_func("show_namespace", return_value=namespace_data):
@@ -755,7 +759,7 @@ def test_namespace_absent__delete_status_terminating():
                 "changes": {"kubernetes.namespace": {"new": "absent", "old": "present"}},
                 "result": True,
                 "name": "salt",
-                "comment": "Terminating this shizzzle yo",
+                "comment": "Terminating",
             }
 
 
@@ -788,3 +792,56 @@ def test_namespace_absent__delete_error():
                 "name": "salt",
                 "comment": f"Something went wrong, response: {deleted}",
             }
+
+
+def test_deployment_present_with_metadata_validation():
+    """
+    Test deployment_present metadata validation
+    """
+    metadata = {"labels": {"app": "nginx"}, "annotations": {"description": "test deployment"}}
+    spec = {"replicas": 3}
+
+    with mock_func("show_deployment", return_value=None):
+        with mock_func("create_deployment", return_value={}) as create_mock:
+            ret = kubernetes.deployment_present(name="test-deploy", metadata=metadata, spec=spec)
+            assert ret["result"] is True
+            create_mock.assert_called_with(
+                name="test-deploy",
+                namespace="default",
+                metadata=metadata,
+                spec=spec,
+                source="",
+                template="",
+                saltenv="base",
+                template_context=None,
+                wait=False,
+                timeout=60,
+            )
+
+
+def test_service_present_with_spec_validation():
+    """
+    Test service_present spec validation
+    """
+    spec = {
+        "ports": [{"port": 80, "targetPort": 8080}],
+        "selector": {"app": "nginx"},
+        "type": "ClusterIP",
+    }
+
+    with mock_func("show_service", return_value=None):
+        with mock_func("create_service", return_value={}) as create_mock:
+            ret = kubernetes.service_present(name="test-svc", spec=spec)
+            assert ret["result"] is True
+            create_mock.assert_called_with(
+                name="test-svc",
+                namespace="default",
+                metadata={},
+                spec=spec,
+                source="",
+                template="",
+                saltenv="base",
+                template_context=None,
+                wait=False,
+                timeout=60,
+            )
