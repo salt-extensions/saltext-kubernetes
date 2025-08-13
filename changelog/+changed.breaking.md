@@ -1,1 +1,1 @@
-Changed the behavior in the `create_<resource>` functions to support template_context for jinja templating. This change effects backwards compatability and may not work on older verions of kubernetes.
+Dropped legacy connection setup. Either `kubeconfig` or `kubeconfig-data` and (always) `context` configuration is required now. This change affects backwards compatibility and may not work on very old versions of kubernetes.

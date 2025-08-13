@@ -995,6 +995,11 @@ def configmap_present(
     source
         A file containing the data of the configmap in plain format.
 
+        .. versionchanged:: 2.0.0
+            The configmap definition must be a proper spec with the configmap data in
+            the ``data`` key. In previous versions, the rendered output was used as the
+            data directly.
+
     template
         Template engine to be used to render the source file.
 

@@ -1517,6 +1517,11 @@ def create_configmap(
     source
         File path to configmap definition
 
+        .. versionchanged:: 2.0.0
+            The configmap definition must be a proper spec with the configmap data in
+            the ``data`` key. In previous versions, the rendered output was used as the
+            data directly.
+
     template
         Template engine to use to render the source file
 
@@ -1557,11 +1562,11 @@ def create_configmap(
             data = rendered["data"]
         except KeyError as err:
             raise CommandExecutionError(
-                "The template for configmap [...] did not render to a spec: Missing `data` key."
+                f"The template for configmap '{name}' (at '{source}') did not render to a spec: Missing `data` key."
             ) from err
         except TypeError as err:
             raise CommandExecutionError(
-                f"The template for configmap [...] did not render to a spec: Expected mapping, got '{type(rendered).__name__}'."
+                f"The template for configmap '{name}' (at '{source}') did not render to a spec: Expected mapping, got '{type(rendered).__name__}'."
             ) from err
     elif data is None:
         data = {}
