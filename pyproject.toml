@@ -88,7 +88,6 @@ tests = [
     "pytest-subtests",
     "pytest-timeout",
     "pytest-kind>=22.8.0",
-    "cryptography>=42.0.0",
 ]
 
 [project.entry-points."salt.loader"]

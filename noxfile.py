@@ -113,7 +113,6 @@ def _install_requirements(
             finally:
                 os.unlink(constraints_file.name)
 
-
         if install_test_requirements:
             install_extras.append("tests")
 
