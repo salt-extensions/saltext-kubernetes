@@ -1,5 +1,5 @@
 """
-    Test cases for salt.modules.kubeadm
+Test cases for salt.modules.kubeadm
 """
 
 from unittest.mock import MagicMock

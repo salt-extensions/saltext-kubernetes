@@ -1,5 +1,5 @@
 """
-    :codeauthor: :email:`Jeff Schroeder <jeffschroeder@computer.org>`
+:codeauthor: :email:`Jeff Schroeder <jeffschroeder@computer.org>`
 """
 
 import base64
