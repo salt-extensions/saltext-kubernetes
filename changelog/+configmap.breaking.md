@@ -1,1 +1,0 @@
-`kubernetes.create_configmap` with `source` parameter now expects to receive a properly formatted spec with the configmap data in the `data` key. Previously, the loaded data was used as the data directly.

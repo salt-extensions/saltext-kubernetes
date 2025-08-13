@@ -1,1 +1,0 @@
-Dropped legacy connection setup. Either `kubeconfig` or `kubeconfig-data` and (always) `context` configuration is required now. This change affects backwards compatibility and may not work on very old versions of kubernetes.
