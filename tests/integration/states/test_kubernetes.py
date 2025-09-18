@@ -260,7 +260,7 @@ def deployment_template(state_tree):
           name: {{ name }}
           namespace: default
         spec:
-          replicas: 2
+          replicas: {{ replicas }}
           selector:
             matchLabels:
               app: test
@@ -288,6 +288,7 @@ def deployment_present_state(state_tree):
     contents = dedent("""
         {%- set source = salt['pillar.get']('source') %}
         {%- set name = salt['pillar.get']('name') %}
+        {%- set replicas = salt['pillar.get']('replicas', 2) %}
 
         create_deployment:
           kubernetes.deployment_present:
@@ -297,6 +298,7 @@ def deployment_present_state(state_tree):
             - template: jinja
             - template_context:
                 name: {{ name }}
+                replicas: {{ replicas }}
             - wait: True
         """).strip()
 
@@ -336,6 +338,7 @@ def test_deployment_present(
         pillar={
             "name": deployment["name"],
             "source": deployment_template,
+            "replicas": 2,
         },
     )
     # Verify deployment exists
@@ -347,6 +350,36 @@ def test_deployment_present(
     assert ret.data["status"]["replicas"] == 2
     assert ret.data["spec"]["template"]["metadata"]["labels"]["app"] == "test"
     assert ret.data["spec"]["template"]["spec"]["containers"][0]["name"] == "nginx"
+
+
+def test_deployment_present_with_patch(
+    salt_call_cli, deployment, deployment_template, deployment_present_state
+):
+    """
+    Test deployment creation via states with a patch to modify the number of replicas
+    """
+    ret = salt_call_cli.run(
+        "kubernetes.show_deployment", name=deployment["name"], namespace=deployment["namespace"]
+    )
+    assert ret.returncode == 0
+    assert ret.data["spec"]["replicas"] == 2
+
+    ret = salt_call_cli.run(
+        "state.apply",
+        deployment_present_state,
+        pillar={
+            "name": deployment["name"],
+            "source": deployment_template,
+            "replicas": 3,
+        },
+    )
+    assert ret.returncode == 0
+
+    ret = salt_call_cli.run(
+        "kubernetes.show_deployment", name=deployment["name"], namespace=deployment["namespace"]
+    )
+    assert ret.returncode == 0
+    assert ret.data["spec"]["replicas"] == 3
 
 
 def test_deployment_absent(salt_call_cli, deployment, deployment_absent_state):

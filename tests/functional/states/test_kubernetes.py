@@ -357,37 +357,33 @@ def test_deployment_present(kubernetes, deployment, testmode, kubernetes_exe):
     assert ret.result in (None, True)
     assert (ret.result is None) is testmode
     if not testmode:
-        assert ret.changes["spec"]["replicas"] == 2
+        assert ret.changes["new"]["spec"]["replicas"] == 2
         deployment_state = kubernetes_exe.show_deployment(
             name=deployment["name"], namespace=deployment["namespace"]
         )
         assert deployment_state["metadata"]["name"] == deployment["name"]
         assert deployment_state["spec"]["replicas"] == 2
     else:
-        # FIXME: Changes should be reported in test mode
-        assert not ret.changes
+        assert ret.changes["new"]["spec"]["replicas"] == 2
         deployment_state = kubernetes_exe.show_deployment(
             name=deployment["name"], namespace=deployment["namespace"]
         )
         assert deployment_state is None
 
-    # Comment out idempotent test for now
-    # TODO: The state module needs fixed to handle proper present functionality
 
-
-# def test_deployment_present_idempotency(kubernetes, deployment):
-#     """
-#     Test kubernetes.deployment_present is idempotent
-#     """
-#     ret = kubernetes.deployment_present(
-#         name=deployment["name"],
-#         namespace=deployment["namespace"],
-#         spec=deployment["spec"],
-#         wait=True,
-#     )
-#     assert ret.result is True
-#     assert "already exists" in ret.comment
-#     assert not ret.changes
+def test_deployment_present_idempotency(kubernetes, deployment):
+    """
+    Test kubernetes.deployment_present is idempotent
+    """
+    ret = kubernetes.deployment_present(
+        name=deployment["name"],
+        namespace=deployment["namespace"],
+        spec=deployment["spec"],
+        wait=True,
+    )
+    assert ret.result is True
+    assert "The deployment is already present and matches the desired state" in ret.comment
+    assert not ret.changes
 
 
 def test_deployment_present_replace(kubernetes, deployment, kubernetes_exe):
@@ -400,11 +396,11 @@ def test_deployment_present_replace(kubernetes, deployment, kubernetes_exe):
         name=deployment["name"],
         namespace=deployment["namespace"],
         spec=deployment["spec"],
+        replace=True,
         wait=True,
     )
-
     assert ret.result is True
-    assert ret.changes["spec"]["replicas"] == 3
+    assert ret.changes["new"]["spec"]["replicas"] == 3
 
     # Verify actual deployment state matches what we expect
     deployment_state = kubernetes_exe.show_deployment(
@@ -412,6 +408,65 @@ def test_deployment_present_replace(kubernetes, deployment, kubernetes_exe):
     )
     assert deployment_state["metadata"]["name"] == deployment["name"]
     assert deployment_state["spec"]["replicas"] == 3
+
+
+def test_deployment_present_patch(kubernetes, deployment, kubernetes_exe):
+    """
+    Test kubernetes.deployment_present patches a deployment
+    """
+    deployment["spec"]["replicas"] = 4
+
+    ret = kubernetes.deployment_present(
+        name=deployment["name"],
+        namespace=deployment["namespace"],
+        spec=deployment["spec"],
+        replace=False,
+        wait=True,
+    )
+    assert ret.result is True
+    assert ret.changes["new"]["spec"]["replicas"] == 4
+
+    # Verify actual deployment state matches what we expect
+    deployment_state = kubernetes_exe.show_deployment(
+        name=deployment["name"], namespace=deployment["namespace"]
+    )
+    assert deployment_state["metadata"]["name"] == deployment["name"]
+    assert deployment_state["spec"]["replicas"] == 4
+
+
+def test_deployment_present_patch_source(
+    kubernetes, deployment, deployment_template, kubernetes_exe
+):
+    """
+    Test kubernetes.deployment_present patches a deployment using source/template
+    """
+    template_context = {
+        "name": deployment["name"],
+        "namespace": deployment["namespace"],
+        "replicas": 4,
+        "app_label": "test",
+        "image": "nginx:latest",
+        "labels": {"app": "test"},
+    }
+
+    ret = kubernetes.deployment_present(
+        name=deployment["name"],
+        namespace=deployment["namespace"],
+        source=deployment_template,
+        template="jinja",
+        template_context=template_context,
+        replace=False,
+        wait=True,
+    )
+    assert ret.result is True
+    assert ret.changes["new"]["spec"]["replicas"] == 4
+
+    # Verify actual deployment state matches what we expect
+    deployment_state = kubernetes_exe.show_deployment(
+        name=deployment["name"], namespace=deployment["namespace"]
+    )
+    assert deployment_state["metadata"]["name"] == deployment["name"]
+    assert deployment_state["spec"]["replicas"] == 4
 
 
 @pytest.mark.parametrize("deployment", [False], indirect=True)
@@ -447,7 +502,7 @@ def test_deployment_present_template_context(
     assert deployment_state["metadata"]["name"] == deployment["name"]
     assert deployment_state["spec"]["replicas"] == 2
     assert deployment_state["metadata"]["labels"]["app"] == "test"
-    assert deployment_state["spec"]["selector"]["match_labels"]["app"] == "test"
+    assert deployment_state["spec"]["selector"]["matchLabels"]["app"] == "test"
     assert deployment_state["spec"]["template"]["spec"]["containers"][0]["image"] == "nginx:latest"
 
 
@@ -466,14 +521,13 @@ def test_deployment_absent(kubernetes, deployment, testmode, kubernetes_exe):
     assert (ret.result is None) is testmode
 
     if not testmode:
-        assert ret.changes["kubernetes.deployment"]["new"] == "absent"
+        assert ret.changes["new"] == "absent"
         deployment_state = kubernetes_exe.show_deployment(
             name=deployment["name"], namespace=deployment["namespace"]
         )
         assert deployment_state is None
     else:
-        # FIXME: Changes should be reported in test mode
-        assert not ret.changes
+        assert ret.changes["new"] == "absent"
         assert "The deployment is going to be deleted" in ret.comment
         # Verify deployment still exists in test mode
         deployment_state = kubernetes_exe.show_deployment(
