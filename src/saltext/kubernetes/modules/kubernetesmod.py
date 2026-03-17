@@ -47,6 +47,7 @@ CLI Example:
     - kubernetes.context
 
 """
+
 import base64
 import errno
 import logging

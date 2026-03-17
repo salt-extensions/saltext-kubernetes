@@ -21,14 +21,12 @@ def namespace_template(state_tree):
     Create the template file to be used by the state
     """
     sls = "k8s/namespace-template"
-    contents = dedent(
-        """
+    contents = dedent("""
         apiVersion: v1
         kind: Namespace
         metadata:
           name: {{ name }}
-        """
-    ).strip()
+        """).strip()
 
     with state_tree.temp_file(f"{sls}.yml.jinja", contents, state_tree):
         yield f"salt://{sls}.yml.jinja"
@@ -39,8 +37,7 @@ def namespace_present_state(state_tree):
     """
     Create the .sls state file that uses the template
     """
-    contents = dedent(
-        """
+    contents = dedent("""
         {%- set source = salt['pillar.get']('source') %}
         {%- set name = salt['pillar.get']('name') %}
 
@@ -52,8 +49,7 @@ def namespace_present_state(state_tree):
             - template_context:
                 name: {{ name }}
             - wait: True
-        """
-    ).strip()
+        """).strip()
 
     sls = "namespace_present"
     with state_tree.temp_file(f"{sls}.sls", contents):
@@ -65,16 +61,14 @@ def namespace_absent_state(state_tree):
     """
     Create the .sls state file that uses the template
     """
-    contents = dedent(
-        """
+    contents = dedent("""
         {%- set name = salt['pillar.get']('name') %}
 
         delete_namespace:
           kubernetes.namespace_absent:
             - name: {{ name }}
             - wait: True
-        """
-    ).strip()
+        """).strip()
 
     sls = "namespace_absent"
     with state_tree.temp_file(f"{sls}.sls", contents):
@@ -129,8 +123,7 @@ def pod_template(state_tree):
     Create the template file to be used by the state
     """
     sls = "k8s/pod-template"
-    contents = dedent(
-        """
+    contents = dedent("""
         apiVersion: v1
         kind: Pod
         metadata:
@@ -142,8 +135,7 @@ def pod_template(state_tree):
               image: nginx:latest
               ports:
                 - containerPort: 80
-        """
-    ).strip()
+        """).strip()
 
     with state_tree.temp_file(f"{sls}.yml.jinja", contents, state_tree):
         yield f"salt://{sls}.yml.jinja"
@@ -154,8 +146,7 @@ def pod_present_state(state_tree):
     """
     Create the .sls state file that uses the template
     """
-    contents = dedent(
-        """
+    contents = dedent("""
         {%- set source = salt['pillar.get']('source') %}
         {%- set name = salt['pillar.get']('name') %}
 
@@ -168,8 +159,7 @@ def pod_present_state(state_tree):
             - template_context:
                 name: {{ name }}
             - wait: True
-        """
-    ).strip()
+        """).strip()
 
     with state_tree.temp_file("pod_present.sls", contents):
         yield "pod_present"
@@ -180,8 +170,7 @@ def pod_absent_state(state_tree):
     """
     Create the .sls state file that uses the template
     """
-    contents = dedent(
-        """
+    contents = dedent("""
         {%- set name = salt['pillar.get']('name') %}
 
         delete_pod:
@@ -189,8 +178,7 @@ def pod_absent_state(state_tree):
             - name: {{ name }}
             - namespace: default
             - wait: True
-        """
-    ).strip()
+        """).strip()
 
     with state_tree.temp_file("pod_absent.sls", contents):
         yield "pod_absent"
@@ -265,8 +253,7 @@ def deployment_template(state_tree):
     Create the template file to be used by the state
     """
     sls = "k8s/deployment-template"
-    contents = dedent(
-        """
+    contents = dedent("""
         apiVersion: apps/v1
         kind: Deployment
         metadata:
@@ -287,8 +274,7 @@ def deployment_template(state_tree):
                   image: nginx:latest
                   ports:
                     - containerPort: 80
-        """
-    ).strip()
+        """).strip()
 
     with state_tree.temp_file(f"{sls}.yml.jinja", contents, state_tree):
         yield f"salt://{sls}.yml.jinja"
@@ -299,8 +285,7 @@ def deployment_present_state(state_tree):
     """
     Create the .sls state file that uses the template
     """
-    contents = dedent(
-        """
+    contents = dedent("""
         {%- set source = salt['pillar.get']('source') %}
         {%- set name = salt['pillar.get']('name') %}
 
@@ -313,8 +298,7 @@ def deployment_present_state(state_tree):
             - template_context:
                 name: {{ name }}
             - wait: True
-        """
-    ).strip()
+        """).strip()
 
     with state_tree.temp_file("deployment_present.sls", contents):
         yield "deployment_present"
@@ -325,8 +309,7 @@ def deployment_absent_state(state_tree):
     """
     Create the .sls state file that uses the template
     """
-    contents = dedent(
-        """
+    contents = dedent("""
         {%- set name = salt['pillar.get']('name') %}
 
         delete_deployment:
@@ -334,8 +317,7 @@ def deployment_absent_state(state_tree):
             - name: {{ name }}
             - namespace: default
             - wait: True
-        """
-    ).strip()
+        """).strip()
 
     with state_tree.temp_file("deployment_absent.sls", contents):
         yield "deployment_absent"
@@ -398,8 +380,7 @@ def secret_template(state_tree):
     Create the template file to be used by the state
     """
     sls = "k8s/secret-template"
-    contents = dedent(
-        """
+    contents = dedent("""
         apiVersion: v1
         kind: Secret
         metadata:
@@ -409,8 +390,7 @@ def secret_template(state_tree):
         data:
           username: YWRtaW4=  # base64 encoded "admin"
           password: YWRtaW4xMjM=  # base64 encoded "admin123"
-        """
-    ).strip()
+        """).strip()
 
     with state_tree.temp_file(f"{sls}.yml.jinja", contents, state_tree):
         yield f"salt://{sls}.yml.jinja"
@@ -421,8 +401,7 @@ def secret_present_state(state_tree):
     """
     Create the actual .sls state file that uses the template
     """
-    contents = dedent(
-        """
+    contents = dedent("""
         {%- set source = salt['pillar.get']('source') %}
         {%- set name = salt['pillar.get']('name') %}
 
@@ -435,8 +414,7 @@ def secret_present_state(state_tree):
             - template_context:
                 name: {{ name }}
             - wait: True
-        """
-    ).strip()
+        """).strip()
 
     with state_tree.temp_file("secret_present.sls", contents):
         yield "secret_present"
@@ -447,8 +425,7 @@ def secret_absent_state(state_tree):
     """
     Create the .sls state file that uses the template
     """
-    contents = dedent(
-        """
+    contents = dedent("""
         {%- set name = salt['pillar.get']('name') %}
 
         delete_secret:
@@ -456,8 +433,7 @@ def secret_absent_state(state_tree):
             - name: {{ name }}
             - namespace: default
             - wait: True
-        """
-    ).strip()
+        """).strip()
 
     with state_tree.temp_file("secret_absent.sls", contents):
         yield "secret_absent"
@@ -535,8 +511,7 @@ def service_template(state_tree):
     Create the template file to be used by the state
     """
     sls = "k8s/service-template"
-    contents = dedent(
-        """
+    contents = dedent("""
         apiVersion: v1
         kind: Service
         metadata:
@@ -555,8 +530,7 @@ def service_template(state_tree):
               targetPort: 8443
               name: https
           type: ClusterIP
-        """
-    ).strip()
+        """).strip()
 
     with state_tree.temp_file(f"{sls}.yml.jinja", contents, state_tree):
         yield f"salt://{sls}.yml.jinja"
@@ -567,8 +541,7 @@ def service_present_state(state_tree):
     """
     Create the .sls state file that uses the template
     """
-    contents = dedent(
-        """
+    contents = dedent("""
         {%- set source = salt['pillar.get']('source') %}
         {%- set name = salt['pillar.get']('name') %}
 
@@ -581,8 +554,7 @@ def service_present_state(state_tree):
             - template_context:
                 name: {{ name }}
             - wait: True
-        """
-    ).strip()
+        """).strip()
 
     with state_tree.temp_file("service_present.sls", contents):
         yield "service_present"
@@ -593,8 +565,7 @@ def service_absent_state(state_tree):
     """
     Create the .sls state file that uses the template
     """
-    contents = dedent(
-        """
+    contents = dedent("""
         {%- set name = salt['pillar.get']('name') %}
 
         delete_service:
@@ -602,8 +573,7 @@ def service_absent_state(state_tree):
             - name: {{ name }}
             - namespace: default
             - wait: True
-        """
-    ).strip()
+        """).strip()
 
     with state_tree.temp_file("service_absent.sls", contents):
         yield "service_absent"
@@ -675,8 +645,7 @@ def configmap_template(state_tree):
     Create the .sls state file that uses the template
     """
     sls = "k8s/configmap-template"
-    contents = dedent(
-        """
+    contents = dedent("""
         apiVersion: v1
         kind: ConfigMap
         metadata:
@@ -689,8 +658,7 @@ def configmap_template(state_tree):
           app.properties: |
             app.name=myapp
             app.port=8080
-        """
-    ).strip()
+        """).strip()
 
     with state_tree.temp_file(f"{sls}.yml.jinja", contents, state_tree):
         yield f"salt://{sls}.yml.jinja"
@@ -701,8 +669,7 @@ def configmap_present_state(state_tree):
     """
     Create the .sls state file that uses the template
     """
-    contents = dedent(
-        """
+    contents = dedent("""
         {%- set source = salt['pillar.get']('source') %}
         {%- set name = salt['pillar.get']('name') %}
 
@@ -715,8 +682,7 @@ def configmap_present_state(state_tree):
             - template_context:
                 name: {{ name }}
             - wait: True
-        """
-    ).strip()
+        """).strip()
 
     with state_tree.temp_file("configmap_present.sls", contents):
         yield "configmap_present"
@@ -727,8 +693,7 @@ def configmap_absent_state(state_tree):
     """
     Create the .sls state file that uses the template
     """
-    contents = dedent(
-        """
+    contents = dedent("""
         {%- set name = salt['pillar.get']('name') %}
 
         delete_configmap:
@@ -736,8 +701,7 @@ def configmap_absent_state(state_tree):
             - name: {{ name }}
             - namespace: default
             - wait: True
-        """
-    ).strip()
+        """).strip()
 
     with state_tree.temp_file("configmap_absent.sls", contents):
         yield "configmap_absent"
