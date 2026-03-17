@@ -62,15 +62,13 @@ def test_namespace_present_idempotency(kubernetes, namespace):
 @pytest.fixture
 def namespace_template(state_tree):
     sls = "k8s/namespace-template"
-    contents = dedent(
-        """
+    contents = dedent("""
         apiVersion: v1
         kind: Namespace
         metadata:
             name: {{ name }}
             labels: {{ labels | json }}
-        """
-    ).strip()
+        """).strip()
 
     with pytest.helpers.temp_file(f"{sls}.yml.jinja", contents, state_tree):
         yield f"salt://{sls}.yml.jinja"
@@ -144,8 +142,7 @@ def test_namespace_absent_idempotency(kubernetes, namespace):
 @pytest.fixture
 def pod_template(state_tree):
     sls = "k8s/pod-template"
-    contents = dedent(
-        """
+    contents = dedent("""
         apiVersion: v1
         kind: Pod
         metadata:
@@ -158,8 +155,7 @@ def pod_template(state_tree):
             image: {{ image }}
             ports:
             - containerPort: 80
-        """
-    ).strip()
+        """).strip()
 
     with pytest.helpers.temp_file(f"{sls}.yml.jinja", contents, state_tree):
         yield f"salt://{sls}.yml.jinja"
@@ -298,8 +294,7 @@ def test_pod_absent_idempotency(kubernetes, pod):
 @pytest.fixture
 def deployment_template(state_tree):
     sls = "k8s/deployment-template"
-    contents = dedent(
-        """
+    contents = dedent("""
         apiVersion: apps/v1
         kind: Deployment
         metadata:
@@ -320,8 +315,7 @@ def deployment_template(state_tree):
                 image: {{ image }}
                 ports:
                 - containerPort: 80
-        """
-    ).strip()
+        """).strip()
 
     with pytest.helpers.temp_file(f"{sls}.yml.jinja", contents, state_tree):
         yield f"salt://{sls}.yml.jinja"
@@ -585,8 +579,7 @@ def test_secret_present_replace(kubernetes, secret, kubernetes_exe):
 @pytest.fixture
 def secret_template(state_tree):
     sls = "k8s/secret-template"
-    contents = dedent(
-        """
+    contents = dedent("""
         apiVersion: v1
         kind: Secret
         metadata:
@@ -595,8 +588,7 @@ def secret_template(state_tree):
           labels: {{ labels | json }}
         type: {{ secret_type }}
         data: {{ secret_data | json }}
-        """
-    ).strip()
+        """).strip()
 
     with pytest.helpers.temp_file(f"{sls}.yml.jinja", contents, state_tree):
         yield f"salt://{sls}.yml.jinja"
@@ -812,8 +804,7 @@ def test_service_present_replace(kubernetes, service, kubernetes_exe):
 @pytest.fixture
 def service_template(state_tree):
     sls = "k8s/service-template"
-    contents = dedent(
-        """
+    contents = dedent("""
         apiVersion: v1
         kind: Service
         metadata:
@@ -824,8 +815,7 @@ def service_template(state_tree):
           type: {{ type }}
           ports: {{ ports | json }}
           selector: {{ selector | json }}
-        """
-    ).strip()
+        """).strip()
 
     with pytest.helpers.temp_file(f"{sls}.yml.jinja", contents, state_tree):
         yield f"salt://{sls}.yml.jinja"
@@ -1017,8 +1007,7 @@ def test_configmap_replace(kubernetes, configmap, kubernetes_exe):
 @pytest.fixture
 def configmap_template(state_tree):
     sls = "k8s/configmap-template"
-    contents = dedent(
-        """
+    contents = dedent("""
         apiVersion: v1
         kind: ConfigMap
         metadata:
@@ -1026,8 +1015,7 @@ def configmap_template(state_tree):
           namespace: {{ namespace }}
           labels: {{ labels | json }}
         data: {{ data | json }}
-        """
-    ).strip()
+        """).strip()
 
     with pytest.helpers.temp_file(f"{sls}.yml.jinja", contents, state_tree):
         yield f"salt://{sls}.yml.jinja"
