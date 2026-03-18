@@ -845,3 +845,32 @@ def test_service_present_with_spec_validation():
                 wait=False,
                 timeout=60,
             )
+
+
+def test_deployment_present_with_patch():
+    """
+    Test deployment_present with patching an existing deployment
+    """
+    existing_deployment = {
+        "metadata": {"name": "test-deploy", "namespace": "default"},
+        "spec": {"replicas": 2, "template": {"metadata": {"labels": {"app": "nginx"}}}},
+    }
+    updated_deployment = existing_deployment.copy()
+    updated_deployment["spec"]["replicas"] = 3
+
+    with mock_func("show_deployment", return_value=existing_deployment):
+        with mock_func("patch_deployment", return_value=updated_deployment) as patch_mock:
+            ret = kubernetes.deployment_present(
+                "test-deploy",
+                namespace="default",
+                spec={"replicas": 3, "template": {"metadata": {"labels": {"app": "nginx"}}}},
+            )
+            assert ret["result"] is True
+            patch_mock.assert_called_with(
+                "test-deploy",
+                "default",
+                patch={
+                    "spec": {"replicas": 3, "template": {"metadata": {"labels": {"app": "nginx"}}}}
+                },
+                dry_run=True,
+            )

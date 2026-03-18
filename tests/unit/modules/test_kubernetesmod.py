@@ -84,15 +84,24 @@ def test_deployments(mock_kubernetes_lib):
     Tests deployment listing.
     :return:
     """
+    mock_api_client_instance = Mock()
+    mock_api_client_instance.sanitize_for_serialization.return_value = {
+        "items": [{"metadata": {"name": "mock_deployment_name"}}]
+    }
+    mock_kubernetes_lib.client.ApiClient.return_value = mock_api_client_instance
+
+    # Create a mock response object
+    mock_response = Mock()
+    mock_response.openapi_types = {}
+    mock_response.attribute_map = {}
+
     mock_kubernetes_lib.client.AppsV1Api.return_value = Mock(
-        **{
-            "list_namespaced_deployment.return_value.to_dict.return_value": {
-                "items": [{"metadata": {"name": "mock_deployment_name"}}]
-            }
-        }
+        **{"list_namespaced_deployment.return_value": mock_response}
     )
-    assert kubernetes.deployments() == ["mock_deployment_name"]
-    assert kubernetes.kubernetes.client.AppsV1Api().list_namespaced_deployment().to_dict.called
+
+    result = kubernetes.deployments()
+    assert result == ["mock_deployment_name"]
+    assert kubernetes.kubernetes.client.AppsV1Api().list_namespaced_deployment.called
 
 
 def test_services(mock_kubernetes_lib):
@@ -133,14 +142,19 @@ def test_delete_deployments(mock_kubernetes_lib):
     :return:
     """
     with patch("saltext.kubernetes.modules.kubernetesmod.show_deployment", Mock(return_value=None)):
-        mock_kubernetes_lib.client.V1DeleteOptions = Mock(return_value="")
-        mock_kubernetes_lib.client.AppsV1Api.return_value = Mock(
-            **{"delete_namespaced_deployment.return_value.to_dict.return_value": {"code": 200}}
-        )
-        assert kubernetes.delete_deployment("test") == {"code": 200}
-        assert (
-            kubernetes.kubernetes.client.AppsV1Api().delete_namespaced_deployment().to_dict.called
-        )
+        with patch("saltext.kubernetes.modules.kubernetesmod.ApiClient") as mock_api_client_class:
+            mock_api_client_instance = Mock()
+            mock_api_client_instance.sanitize_for_serialization.return_value = {"code": 200}
+            mock_api_client_class.return_value = mock_api_client_instance
+
+            mock_kubernetes_lib.client.V1DeleteOptions = Mock(return_value="")
+            mock_kubernetes_lib.client.AppsV1Api.return_value = Mock(
+                **{"delete_namespaced_deployment.return_value": Mock()}
+            )
+
+            result = kubernetes.delete_deployment("test")
+            assert result == {"code": 200}
+            assert kubernetes.kubernetes.client.AppsV1Api().delete_namespaced_deployment.called
 
 
 def test_create_deployments(mock_kubernetes_lib):
@@ -148,22 +162,29 @@ def test_create_deployments(mock_kubernetes_lib):
     Tests deployment creation.
     :return:
     """
-    mock_kubernetes_lib.client.V1DeploymentSpec = V1DeploymentSpec
-    mock_kubernetes_lib.client.V1PodTemplateSpec = V1PodTemplateSpec
-    mock_kubernetes_lib.client.V1PodSpec = V1PodSpec
-    mock_kubernetes_lib.client.V1Container = V1Container
-    mock_kubernetes_lib.client.AppsV1Api.return_value = Mock(
-        **{"create_namespaced_deployment.return_value.to_dict.return_value": {}}
-    )
-    spec = {
-        "template": {
-            "metadata": {"labels": {"app": "test"}},
-            "spec": {"containers": [{"name": "test-container", "image": "nginx"}]},
-        },
-        "selector": {"matchLabels": {"app": "test"}},
-    }
-    assert kubernetes.create_deployment("test", "default", {}, spec, None, None, None) == {}
-    assert kubernetes.kubernetes.client.AppsV1Api().create_namespaced_deployment().to_dict.called
+    with patch("saltext.kubernetes.modules.kubernetesmod.ApiClient") as mock_api_client_class:
+        mock_api_client_instance = Mock()
+        mock_api_client_instance.sanitize_for_serialization.return_value = {}
+        mock_api_client_class.return_value = mock_api_client_instance
+
+        mock_kubernetes_lib.client.V1DeploymentSpec = V1DeploymentSpec
+        mock_kubernetes_lib.client.V1PodTemplateSpec = V1PodTemplateSpec
+        mock_kubernetes_lib.client.V1PodSpec = V1PodSpec
+        mock_kubernetes_lib.client.V1Container = V1Container
+        mock_kubernetes_lib.client.AppsV1Api.return_value = Mock(
+            **{"create_namespaced_deployment.return_value": Mock()}
+        )
+
+        spec = {
+            "template": {
+                "metadata": {"labels": {"app": "test"}},
+                "spec": {"containers": [{"name": "test-container", "image": "nginx"}]},
+            },
+            "selector": {"matchLabels": {"app": "test"}},
+        }
+        result = kubernetes.create_deployment("test", "default", {}, spec, None, None, None)
+        assert result == {}
+        assert kubernetes.kubernetes.client.AppsV1Api().create_namespaced_deployment.called
 
 
 def test_setup_kubeconfig_file(mock_kubernetes_lib):
@@ -392,3 +413,27 @@ def test_pod_with_invalid_spec(mock_kubernetes_lib, invalid_spec, expected_error
                 saltenv="base",
                 wait=True,
             )
+
+
+def test_patch_deployment(mock_kubernetes_lib):
+    """
+    Test patching a deployment.
+    :return:
+    """
+    with patch("saltext.kubernetes.modules.kubernetesmod.ApiClient") as mock_api_client_class:
+        mock_api_client_instance = Mock()
+        mock_api_client_instance.sanitize_for_serialization.return_value = {}
+        mock_api_client_class.return_value = mock_api_client_instance
+
+        mock_kubernetes_lib.client.V1DeploymentSpec = V1DeploymentSpec
+        mock_kubernetes_lib.client.V1PodTemplateSpec = V1PodTemplateSpec
+        mock_kubernetes_lib.client.V1PodSpec = V1PodSpec
+        mock_kubernetes_lib.client.V1Container = V1Container
+        mock_kubernetes_lib.client.AppsV1Api.return_value = Mock(
+            **{"patch_namespaced_deployment.return_value": Mock()}
+        )
+
+        patch_data = {"spec": {"replicas": 3}}
+        result = kubernetes.patch_deployment("test", "default", patch=patch_data)
+        assert result == {}
+        assert kubernetes.kubernetes.client.AppsV1Api().patch_namespaced_deployment.called

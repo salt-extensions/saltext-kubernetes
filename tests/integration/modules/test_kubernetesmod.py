@@ -37,11 +37,41 @@ def test_create_deployment(salt_call_cli, deployment):
     assert res.data["metadata"]["name"] == deployment["name"]
     assert res.data["metadata"]["namespace"] == deployment["namespace"]
     assert res.data["spec"]["replicas"] == 1
-    assert res.data["spec"]["selector"]["match_labels"]["app"] == "test-nginx"
+    assert res.data["spec"]["selector"]["matchLabels"]["app"] == "test-nginx"
     assert res.data["spec"]["template"]["metadata"]["labels"]["app"] == "test-nginx"
     assert res.data["spec"]["template"]["spec"]["containers"][0]["name"] == "nginx"
     assert res.data["spec"]["template"]["spec"]["containers"][0]["image"] == "nginx:latest"
-    assert res.data["spec"]["template"]["spec"]["containers"][0]["ports"][0]["container_port"] == 80
+    assert res.data["spec"]["template"]["spec"]["containers"][0]["ports"][0]["containerPort"] == 80
+
+
+def test_patch_deployment(salt_call_cli, deployment):
+    """
+    Test patching a deployment to change the number of replicas.
+    """
+    # Patch the deployment to change replicas from 1 to 3
+    patch = {
+        "spec": {
+            "replicas": 3,
+        }
+    }
+    res = salt_call_cli.run(
+        "kubernetes.patch_deployment",
+        deployment["name"],
+        deployment["namespace"],
+        patch,
+        wait=True,
+        timeout=120,
+    )
+    assert res.returncode == 0
+
+    # Verify the deployment is updated
+    res = salt_call_cli.run(
+        "kubernetes.show_deployment",
+        name=deployment["name"],
+        namespace=deployment["namespace"],
+    )
+    assert res.returncode == 0
+    assert res.data["spec"]["replicas"] == 3
 
 
 def test_delete_deployment(salt_call_cli, deployment):

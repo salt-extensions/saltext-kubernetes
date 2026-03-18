@@ -69,6 +69,7 @@ from salt.exceptions import TimeoutError
 try:
     import kubernetes  # pylint: disable=import-self
     import kubernetes.client
+    from kubernetes.client import ApiClient
     from kubernetes.client import V1Deployment
     from kubernetes.client import V1DeploymentSpec
     from kubernetes.client.rest import ApiException
@@ -368,7 +369,9 @@ def deployments(namespace="default", **kwargs):
         api_instance = kubernetes.client.AppsV1Api()
         api_response = api_instance.list_namespaced_deployment(namespace)
 
-        return [dep["metadata"]["name"] for dep in api_response.to_dict().get("items")]
+        serialized_response = kubernetes.client.ApiClient().sanitize_for_serialization(api_response)
+        items = serialized_response.get("items") or []
+        return [dep["metadata"]["name"] for dep in items]
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
             return []
@@ -517,7 +520,7 @@ def show_deployment(name, namespace="default", **kwargs):
         api_instance = kubernetes.client.AppsV1Api()
         api_response = api_instance.read_namespaced_deployment(name, namespace)
 
-        return api_response.to_dict()
+        return ApiClient().sanitize_for_serialization(api_response)
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
             return None
@@ -743,7 +746,7 @@ def delete_deployment(name, namespace="default", wait=False, timeout=60, **kwarg
             ):
                 raise CommandExecutionError(f"Timeout waiting for deployment {name} to be deleted")
 
-        return api_response.to_dict()
+        return ApiClient().sanitize_for_serialization(api_response)
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
             return None
@@ -1020,6 +1023,7 @@ def create_deployment(
     template=None,
     saltenv=None,
     template_context=None,
+    dry_run=False,
     wait=False,
     timeout=60,
     **kwargs,
@@ -1056,6 +1060,11 @@ def create_deployment(
 
         Variables to make available in templated files
 
+    dry_run
+        .. versionadded:: 2.0.0
+
+        If True, only simulates the creation of the deployment
+
     wait
         .. versionadded:: 2.0.0
 
@@ -1090,7 +1099,10 @@ def create_deployment(
 
     try:
         api_instance = kubernetes.client.AppsV1Api()
-        api_response = api_instance.create_namespaced_deployment(namespace, body)
+        if dry_run:
+            api_response = api_instance.create_namespaced_deployment(namespace, body, dry_run="All")
+        else:
+            api_response = api_instance.create_namespaced_deployment(namespace, body)
 
         if wait:
             if not _wait_for_resource_status(
@@ -1100,7 +1112,7 @@ def create_deployment(
                     f"Timeout waiting for deployment {name} to become ready"
                 )
 
-        return api_response.to_dict()
+        return ApiClient().sanitize_for_serialization(api_response)
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException):
             if exc.status == 404:
@@ -1734,7 +1746,7 @@ def replace_deployment(
                     f"Timeout waiting for deployment {name} to become ready"
                 )
 
-        return api_response.to_dict()
+        return ApiClient().sanitize_for_serialization(api_response)
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
             raise CommandExecutionError(f"Deployment {namespace}/{name} not found") from exc
@@ -2098,6 +2110,103 @@ def replace_configmap(
         if isinstance(exc, ApiException) and exc.status == 404:
             raise CommandExecutionError(f"ConfigMap {namespace}/{name} not found") from exc
         log.exception("Exception when calling CoreV1Api->replace_namespaced_configmap")
+        raise CommandExecutionError(exc)
+    finally:
+        _cleanup(**cfg)
+
+
+def patch_deployment(
+    name,
+    namespace,
+    patch,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    dry_run=False,
+    wait=False,
+    timeout=60,
+    **kwargs,
+):
+    """
+    .. versionadded:: 2.0.0
+
+    Patches an existing deployment with the provided patch dictionary.
+
+    name
+        The name of the deployment
+
+    namespace
+        The namespace of the deployment
+
+    patch
+        A dictionary representing the patch to apply to the deployment
+
+    source
+        File path to patch definition
+
+    template
+        Template engine to use to render the source file
+
+    saltenv
+        Salt environment to pull the source file from
+
+    template_context
+        Variables to make available in templated files
+
+    dry_run
+        If True, only simulates the patch without applying it (default: False)
+
+    wait
+        Wait for deployment to become ready (default: False)
+
+    timeout
+        Timeout in seconds to wait for deployment (default: 60)
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.patch_deployment \
+            name=my-deployment \
+            namespace=default \
+            patch='{"spec": {"replicas": 5}}'
+    """
+    if source:
+        rendered = __read_and_render_yaml_file(source, template, saltenv, template_context)
+        if not isinstance(rendered, dict):
+            raise CommandExecutionError("The source file did not render to a dictionary")
+        patch = rendered
+
+    if not isinstance(patch, dict):
+        raise CommandExecutionError("Patch must be a dictionary")
+
+    cfg = _setup_conn(**kwargs)
+
+    try:
+        api_instance = kubernetes.client.AppsV1Api()
+        if dry_run:
+            api_response = api_instance.patch_namespaced_deployment(
+                name, namespace, patch, dry_run="All"
+            )
+        else:
+            api_response = api_instance.patch_namespaced_deployment(name, namespace, patch)
+
+        if wait:
+            if not _wait_for_resource_status(
+                api_instance, "deployment", name, namespace, "ready", timeout
+            ):
+                raise CommandExecutionError(
+                    f"Timeout waiting for deployment {name} to become ready"
+                )
+
+        return ApiClient().sanitize_for_serialization(api_response)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            raise CommandExecutionError(f"Deployment {namespace}/{name} not found") from exc
+        if isinstance(exc, ApiException) and exc.status == 409:
+            raise CommandExecutionError(f"Conflict when patching deployment {name}") from exc
+        log.exception("Exception when calling AppsV1Api->patch_namespaced_deployment")
         raise CommandExecutionError(exc)
     finally:
         _cleanup(**cfg)

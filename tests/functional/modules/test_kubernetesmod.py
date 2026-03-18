@@ -458,6 +458,22 @@ def test_deployment_replacement(kubernetes, deployment):
     assert res["spec"]["replicas"] == 2
 
 
+def test_deployment_present_with_patch(kubernetes, deployment):
+    """
+    Test patching a deployment with new spec
+    """
+    patch = {"spec": {"replicas": 3}}
+
+    res = kubernetes.patch_deployment(
+        name=deployment["name"],
+        namespace=deployment["namespace"],
+        patch=patch,
+        wait=True,
+    )
+    assert isinstance(res, dict)
+    assert res["spec"]["replicas"] == 3
+
+
 @pytest.mark.parametrize("namespace", [False], indirect=True)
 def test_list_deployments_in_nonexistent_namespace(kubernetes, namespace):
     """

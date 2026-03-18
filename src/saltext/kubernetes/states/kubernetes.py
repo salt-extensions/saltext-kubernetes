@@ -179,23 +179,27 @@ def deployment_absent(name, namespace="default", wait=False, timeout=60, **kwarg
         return ret
 
     if __opts__["test"]:
-        ret["comment"] = "The deployment is going to be deleted"
         ret["result"] = None
+        ret["comment"] = "The deployment is going to be deleted"
+        ret["changes"] = {
+            "old": "present",
+            "new": "absent",
+        }
         return ret
 
     try:
-        res = __salt__["kubernetes.delete_deployment"](
+        __salt__["kubernetes.delete_deployment"](
             name, namespace, wait=wait, timeout=timeout, **kwargs
         )
     except CommandExecutionError as err:
-        log.exception(str(err), exc_info_on_loglevel=logging.DEBUG)
+        log.exception(str(err))
         ret["result"] = False
         ret["comment"] = str(err)
         return ret
 
     ret["result"] = True
-    ret["changes"] = {"kubernetes.deployment": {"new": "absent", "old": "present"}}
-    ret["comment"] = res["message"]
+    ret["changes"] = {"old": "present", "new": "absent"}
+    ret["comment"] = f"Deployment {name} deleted"
     return ret
 
 
@@ -207,6 +211,7 @@ def deployment_present(
     source="",
     template="",
     template_context=None,
+    replace=None,
     wait=False,
     timeout=60,
     **kwargs,
@@ -240,6 +245,11 @@ def deployment_present(
         .. versionadded:: 2.0.0
 
         Variables to be passed into the template.
+
+    replace
+        .. versionadded:: 2.0.0
+
+        If set to True, the function will force replace the existing deployment.
 
     wait
         .. versionadded:: 2.0.0
@@ -296,7 +306,29 @@ def deployment_present(
         if __opts__["test"]:
             ret["result"] = None
             ret["comment"] = "The deployment is going to be created"
+            # Simulate creation to show changes to account for using the source argument
+            try:
+                dry_run_result = __salt__["kubernetes.create_deployment"](
+                    name=name,
+                    namespace=namespace,
+                    metadata=metadata,
+                    spec=spec,
+                    source=source,
+                    template=template,
+                    saltenv=__env__,
+                    template_context=template_context,
+                    dry_run=True,
+                    **kwargs,
+                )
+                ret["changes"] = {"old": {}, "new": dry_run_result}
+            except CommandExecutionError as err:
+                log.debug("Dry run failed: %s", str(err))
+                ret["result"] = False
+                ret["comment"] = str(err)
+                return ret
+
             return ret
+
         try:
             res = __salt__["kubernetes.create_deployment"](
                 name=name,
@@ -312,17 +344,13 @@ def deployment_present(
                 **kwargs,
             )
         except CommandExecutionError as err:
-            log.exception(str(err), exc_info_on_loglevel=logging.DEBUG)
+            log.exception(str(err))
             ret["result"] = False
             ret["comment"] = str(err)
             return ret
-        ret["changes"][f"{namespace}.{name}"] = {"old": {}, "new": res}
-    else:
-        if __opts__["test"]:
-            ret["result"] = None
-            return ret
+        ret["changes"] = {"old": {}, "new": res}
 
-        # TODO: improve checks  # pylint: disable=fixme
+    if replace is True and deployment is not None:
         log.info("Forcing the recreation of the deployment")
         ret["comment"] = "The deployment is already present. Forcing recreation"
         try:
@@ -344,9 +372,80 @@ def deployment_present(
             ret["result"] = False
             ret["comment"] = str(err)
             return ret
+        ret["changes"] = {"old": deployment, "new": res}
+        ret["result"] = True
+        return ret
 
-    ret["changes"] = {"metadata": metadata, "spec": spec}
+    if deployment is not None:
+        try:
+            if source:
+                res = __salt__["kubernetes.patch_deployment"](
+                    name,
+                    namespace,
+                    patch="none",
+                    source=source,
+                    template=template,
+                    template_context=template_context,
+                    dry_run=True,
+                    **kwargs,
+                )
+            else:
+                patch_obj = {}
+                if metadata:
+                    patch_obj["metadata"] = metadata
+                if spec:
+                    patch_obj["spec"] = spec
+
+                res = __salt__["kubernetes.patch_deployment"](
+                    name,
+                    namespace,
+                    patch=patch_obj,
+                    dry_run=True,
+                    **kwargs,
+                )
+
+            if res == deployment:
+                ret["result"] = True
+                ret["comment"] = "The deployment is already present and matches the desired state"
+                return ret
+
+            if __opts__["test"]:
+                ret["result"] = None
+                ret["comment"] = "The deployment is going to be patched"
+                ret["changes"] = {"old": deployment, "new": res}
+                return ret
+
+            if source:
+                res = __salt__["kubernetes.patch_deployment"](
+                    name,
+                    namespace,
+                    patch=None,
+                    source=source,
+                    template=template,
+                    template_context=template_context,
+                    **kwargs,
+                )
+            else:
+                res = __salt__["kubernetes.patch_deployment"](
+                    name,
+                    namespace,
+                    patch=patch_obj,
+                    **kwargs,
+                )
+
+            ret["changes"] = {"old": deployment, "new": res}
+            ret["result"] = True
+            ret["comment"] = "Deployment updated"
+            return ret
+
+        except CommandExecutionError as err:
+            log.exception(str(err), exc_info_on_loglevel=logging.DEBUG)
+            ret["result"] = False
+            ret["comment"] = str(err)
+            return ret
+
     ret["result"] = True
+    ret["comment"] = "Deployment processed successfully"
     return ret
 
 
