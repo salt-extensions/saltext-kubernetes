@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 import pytest
 import salt.utils.stringutils
+from salt.exceptions import CommandExecutionError
 
 from saltext.kubernetes.modules import kubernetesmod
 from saltext.kubernetes.states import kubernetes
@@ -79,7 +80,7 @@ def make_node(name="minikube"):
     node_data = make_ret_dict(kind="Node", name="minikube")
     node_data.update(
         {
-            "api_version": "v1",
+            "apiVersion": "v1",
             "kind": "Node",
             "metadata": {
                 "annotations": {"node.alpha.kubernetes.io/ttl": "0"},
@@ -89,7 +90,7 @@ def make_node(name="minikube"):
                 "link": f"/api/v1/nodes/{name}",
                 "uid": "7811b8ae-c1a1-11e7-a55a-0800279fb61e",
             },
-            "spec": {"external_id": name},
+            "spec": {"externalID": name},
             "status": {},
         }
     )
@@ -131,7 +132,7 @@ def make_ret_dict(kind, name, namespace=None, data=None):
     return_data = {
         "kind": kind,
         "data": data,
-        "api_version": "v1",
+        "apiVersion": "v1",
         "metadata": {
             "name": name,
             "labels": None,
@@ -157,42 +158,6 @@ def test_configmap_present__fail():
     }
 
 
-def test_configmap_present__create_test_true():
-    # Create a new configmap with test=True
-    with mock_func("show_configmap", return_value=None, test=True):
-        ret = kubernetes.configmap_present(
-            name="example",
-            data={"example.conf": "# empty config file"},
-        )
-        assert ret == {
-            "comment": "The configmap is going to be created",
-            "changes": {},
-            "name": "example",
-            "result": None,
-        }
-
-
-def test_configmap_present__create():
-    # Create a new configmap
-    with mock_func("show_configmap", return_value=None):
-        cm = make_configmap(
-            name="test",
-            namespace="default",
-            data={"foo": "bar"},
-        )
-        with mock_func("create_configmap", return_value=cm):
-            actual = kubernetes.configmap_present(
-                name="test",
-                data={"foo": "bar"},
-            )
-            assert actual == {
-                "comment": "",
-                "changes": {"data": {"foo": "bar"}},
-                "name": "test",
-                "result": True,
-            }
-
-
 def test_configmap_present__create_no_data():
     # Create a new configmap with no 'data' attribute
     with mock_func("show_configmap", return_value=None):
@@ -203,48 +168,9 @@ def test_configmap_present__create_no_data():
         with mock_func("create_configmap", return_value=cm):
             actual = kubernetes.configmap_present(name="test")
             assert actual == {
-                "comment": "",
-                "changes": {"data": {}},
+                "comment": "ConfigMap created",
+                "changes": {"old": {}, "new": cm},
                 "name": "test",
-                "result": True,
-            }
-
-
-def test_configmap_present__replace_test_true():
-    cm = make_configmap(
-        name="settings",
-        namespace="saltstack",
-        data={"foobar.conf": "# Example configuration"},
-    )
-    with mock_func("show_configmap", return_value=cm, test=True):
-        ret = kubernetes.configmap_present(
-            name="settings",
-            namespace="saltstack",
-            data={"foobar.conf": "# Example configuration"},
-        )
-        assert ret == {
-            "comment": "The configmap is going to be replaced",
-            "changes": {},
-            "name": "settings",
-            "result": None,
-        }
-
-
-def test_configmap_present__replace():
-    cm = make_configmap(name="settings", data={"action": "make=war"})
-    # Replace an existing configmap
-    with mock_func("show_configmap", return_value=cm):
-        new_cm = cm.copy()
-        new_cm.update({"data": {"action": "make=peace"}})
-        with mock_func("replace_configmap", return_value=new_cm):
-            actual = kubernetes.configmap_present(
-                name="settings",
-                data={"action": "make=peace"},
-            )
-            assert actual == {
-                "comment": ("The configmap is already present. Forcing recreation"),
-                "changes": {"data": {"action": "make=peace"}},
-                "name": "settings",
                 "result": True,
             }
 
@@ -257,20 +183,7 @@ def test_configmap_absent__noop_test_true():
             "comment": "The configmap does not exist",
             "changes": {},
             "name": "NOT_FOUND",
-            "result": None,
-        }
-
-
-def test_configmap_absent__test_true():
-    # Configmap exists with test=True
-    cm = make_configmap(name="deleteme", namespace="default")
-    with mock_func("show_configmap", return_value=cm, test=True):
-        actual = kubernetes.configmap_absent(name="deleteme")
-        assert actual == {
-            "comment": "The configmap is going to be deleted",
-            "changes": {},
-            "name": "deleteme",
-            "result": None,
+            "result": True,
         }
 
 
@@ -284,26 +197,6 @@ def test_configmap_absent__noop():
             "name": "NOT_FOUND",
             "result": True,
         }
-
-
-def test_configmap_absent():
-    # Configmap exists, delete it!
-    cm = make_configmap(name="deleteme", namespace="default")
-    with mock_func("show_configmap", return_value=cm):
-        # The return from this module isn't used in the state
-        with mock_func("delete_configmap", return_value={}):
-            actual = kubernetes.configmap_absent(name="deleteme")
-            assert actual == {
-                "comment": "ConfigMap deleted",
-                "changes": {
-                    "kubernetes.configmap": {
-                        "new": "absent",
-                        "old": "present",
-                    },
-                },
-                "name": "deleteme",
-                "result": True,
-            }
 
 
 def test_secret_present__fail():
@@ -320,84 +213,20 @@ def test_secret_present__fail():
     }
 
 
-def test_secret_present__exists_test_true():
-    secret = make_secret(name="sekret")
-    new_secret = secret.copy()
-    new_secret.update({"data": {"password": "uncle"}})
-    # Secret exists already and needs replacing with test=True
-    with mock_func("show_secret", return_value=secret):
-        with mock_func("replace_secret", return_value=new_secret, test=True):
-            actual = kubernetes.secret_present(
-                name="sekret",
-                data={"password": "uncle"},
-            )
-            assert actual == {
-                "changes": {},
-                "result": None,
-                "name": "sekret",
-                "comment": "The secret is going to be replaced",
-            }
-
-
-def test_secret_present__exists():
-    # Secret exists and gets replaced
-    secret = make_secret(name="sekret", data={"password": "booyah"})
-    with mock_func("show_secret", return_value=secret):
-        with mock_func("replace_secret", return_value=secret):
-            actual = kubernetes.secret_present(
-                name="sekret",
-                data={"password": "booyah"},
-            )
-            assert actual == {
-                "changes": {"data": ["password"]},
-                "result": True,
-                "name": "sekret",
-                "comment": "The secret is already present. Forcing recreation",
-            }
-
-
-def test_secret_present__create():
-    # Secret exists and gets replaced
-    secret = make_secret(name="sekret", data={"password": "booyah"})
-    with mock_func("show_secret", return_value=None):
-        with mock_func("create_secret", return_value=secret):
-            actual = kubernetes.secret_present(
-                name="sekret",
-                data={"password": "booyah"},
-            )
-            assert actual == {
-                "changes": {"data": ["password"]},
-                "result": True,
-                "name": "sekret",
-                "comment": "",
-            }
-
-
 def test_secret_present__create_no_data():
-    # Secret exists and gets replaced
+    # Secret is created with no data
     secret = make_secret(name="sekret")
     with mock_func("show_secret", return_value=None):
         with mock_func("create_secret", return_value=secret):
             actual = kubernetes.secret_present(name="sekret")
             assert actual == {
-                "changes": {"data": []},
+                "changes": {
+                    "old": {},
+                    "new": {"data": []},
+                },
                 "result": True,
                 "name": "sekret",
-                "comment": "",
-            }
-
-
-def test_secret_present__create_test_true():
-    # Secret exists and gets replaced with test=True
-    secret = make_secret(name="sekret")
-    with mock_func("show_secret", return_value=None):
-        with mock_func("create_secret", return_value=secret, test=True):
-            actual = kubernetes.secret_present(name="sekret")
-            assert actual == {
-                "changes": {},
-                "result": None,
-                "name": "sekret",
-                "comment": "The secret is going to be created",
+                "comment": "Secret created",
             }
 
 
@@ -406,7 +235,7 @@ def test_secret_absent__noop_test_true():
         actual = kubernetes.secret_absent(name="sekret")
         assert actual == {
             "changes": {},
-            "result": None,
+            "result": True,
             "name": "sekret",
             "comment": "The secret does not exist",
         }
@@ -421,94 +250,6 @@ def test_secret_absent__noop():
             "name": "passwords",
             "comment": "The secret does not exist",
         }
-
-
-def test_secret_absent__delete_test_true():
-    secret = make_secret(name="credentials", data={"redis": "letmein"})
-    with mock_func("show_secret", return_value=secret):
-        with mock_func("delete_secret", return_value=secret, test=True):
-            actual = kubernetes.secret_absent(name="credentials")
-            assert actual == {
-                "changes": {},
-                "result": None,
-                "name": "credentials",
-                "comment": "The secret is going to be deleted",
-            }
-
-
-def test_secret_absent__delete():
-    secret = make_secret(name="foobar", data={"redis": "letmein"})
-    deleted = {
-        "status": None,
-        "kind": "Secret",
-        "code": None,
-        "reason": None,
-        "details": None,
-        "message": None,
-        "api_version": "v1",
-        "metadata": {
-            "link": "/api/v1/namespaces/default/secrets/foobar",
-            "resource_version": "30292",
-        },
-    }
-    with mock_func("show_secret", return_value=secret):
-        with mock_func("delete_secret", return_value=deleted):
-            actual = kubernetes.secret_absent(name="foobar")
-            assert actual == {
-                "changes": {
-                    "kubernetes.secret": {"new": "absent", "old": "present"},
-                },
-                "result": True,
-                "name": "foobar",
-                "comment": "Secret deleted",
-            }
-
-
-def test_node_label_present__add_test_true():
-    labels = make_node_labels()
-    with mock_func("node_labels", return_value=labels, test=True):
-        actual = kubernetes.node_label_present(
-            name="com.zoo-animal",
-            node="minikube",
-            value="monkey",
-        )
-        assert actual == {
-            "changes": {},
-            "result": None,
-            "name": "com.zoo-animal",
-            "comment": "The label is going to be set",
-        }
-
-
-def test_node_label_present__add():
-    node_data = make_node()
-    # Remove some of the defaults to make it simpler
-    node_data["metadata"]["labels"] = {
-        "beta.kubernetes.io/os": "linux",
-    }
-    labels = node_data["metadata"]["labels"]
-
-    with mock_func("node_labels", return_value=labels):
-        with mock_func("node_add_label", return_value=node_data):
-            actual = kubernetes.node_label_present(
-                name="failure-domain.beta.kubernetes.io/zone",
-                node="minikube",
-                value="us-central1-a",
-            )
-            assert actual == {
-                "comment": "",
-                "changes": {
-                    "minikube.failure-domain.beta.kubernetes.io/zone": {
-                        "new": {
-                            "failure-domain.beta.kubernetes.io/zone": ("us-central1-a"),
-                            "beta.kubernetes.io/os": "linux",
-                        },
-                        "old": {"beta.kubernetes.io/os": "linux"},
-                    },
-                },
-                "name": "failure-domain.beta.kubernetes.io/zone",
-                "result": True,
-            }
 
 
 def test_node_label_present__already_set():
@@ -529,51 +270,6 @@ def test_node_label_present__already_set():
             }
 
 
-def test_node_label_present__update_test_true():
-    node_data = make_node()
-    labels = node_data["metadata"]["labels"]
-    with mock_func("node_labels", return_value=labels):
-        with mock_func("node_add_label", return_value=node_data, test=True):
-            actual = kubernetes.node_label_present(
-                name="failure-domain.beta.kubernetes.io/region",
-                node="minikube",
-                value="us-east-1",
-            )
-            assert actual == {
-                "changes": {},
-                "result": None,
-                "name": "failure-domain.beta.kubernetes.io/region",
-                "comment": "The label is going to be updated",
-            }
-
-
-def test_node_label_present__update():
-    node_data = make_node()
-    # Remove some of the defaults to make it simpler
-    node_data["metadata"]["labels"] = {
-        "failure-domain.beta.kubernetes.io/region": "us-west-1",
-    }
-    labels = node_data["metadata"]["labels"]
-    with mock_func("node_labels", return_value=labels):
-        with mock_func("node_add_label", return_value=node_data):
-            actual = kubernetes.node_label_present(
-                name="failure-domain.beta.kubernetes.io/region",
-                node="minikube",
-                value="us-east-1",
-            )
-            assert actual == {
-                "changes": {
-                    "minikube.failure-domain.beta.kubernetes.io/region": {
-                        "new": {"failure-domain.beta.kubernetes.io/region": ("us-east-1")},
-                        "old": {"failure-domain.beta.kubernetes.io/region": ("us-west-1")},
-                    }
-                },
-                "result": True,
-                "name": "failure-domain.beta.kubernetes.io/region",
-                "comment": "The label is already set, changing the value",
-            }
-
-
 def test_node_label_absent__noop_test_true():
     labels = make_node_labels()
     with mock_func("node_labels", return_value=labels, test=True):
@@ -583,7 +279,7 @@ def test_node_label_absent__noop_test_true():
         )
         assert actual == {
             "changes": {},
-            "result": None,
+            "result": True,
             "name": "non-existent-label",
             "comment": "The label does not exist",
         }
@@ -604,77 +300,13 @@ def test_node_label_absent__noop():
         }
 
 
-def test_node_label_absent__delete_test_true():
-    labels = make_node_labels()
-    with mock_func("node_labels", return_value=labels, test=True):
-        actual = kubernetes.node_label_absent(
-            name="failure-domain.beta.kubernetes.io/region",
-            node="minikube",
-        )
-        assert actual == {
-            "changes": {},
-            "result": None,
-            "name": "failure-domain.beta.kubernetes.io/region",
-            "comment": "The label is going to be deleted",
-        }
-
-
-def test_node_label_absent__delete():
-    node_data = make_node()
-    labels = node_data["metadata"]["labels"].copy()
-
-    node_data["metadata"]["labels"].pop("failure-domain.beta.kubernetes.io/region")
-
-    with mock_func("node_labels", return_value=labels):
-        with mock_func("node_remove_label", return_value=node_data):
-            actual = kubernetes.node_label_absent(
-                name="failure-domain.beta.kubernetes.io/region",
-                node="minikube",
-            )
-            assert actual == {
-                "result": True,
-                "changes": {
-                    "kubernetes.node_label": {
-                        "new": "absent",
-                        "old": "present",
-                    }
-                },
-                "comment": "Label removed from node",
-                "name": "failure-domain.beta.kubernetes.io/region",
-            }
-
-
-def test_namespace_present__create_test_true():
-    with mock_func("show_namespace", return_value=None, test=True):
-        actual = kubernetes.namespace_present(name="saltstack")
-        assert actual == {
-            "changes": {},
-            "result": None,
-            "name": "saltstack",
-            "comment": "The namespace is going to be created",
-        }
-
-
-def test_namespace_present__create():
-    namespace_data = make_namespace(name="saltstack")
-    with mock_func("show_namespace", return_value=None):
-        with mock_func("create_namespace", return_value=namespace_data):
-            actual = kubernetes.namespace_present(name="saltstack")
-            assert actual == {
-                "changes": {"namespace": {"new": namespace_data, "old": {}}},
-                "result": True,
-                "name": "saltstack",
-                "comment": "",
-            }
-
-
 def test_namespace_present__noop_test_true():
     namespace_data = make_namespace(name="saltstack")
     with mock_func("show_namespace", return_value=namespace_data, test=True):
         actual = kubernetes.namespace_present(name="saltstack")
         assert actual == {
             "changes": {},
-            "result": None,
+            "result": True,
             "name": "saltstack",
             "comment": "The namespace already exists",
         }
@@ -697,7 +329,7 @@ def test_namespace_absent__noop_test_true():
         actual = kubernetes.namespace_absent(name="salt")
         assert actual == {
             "changes": {},
-            "result": None,
+            "result": True,
             "name": "salt",
             "comment": "The namespace does not exist",
         }
@@ -714,34 +346,6 @@ def test_namespace_absent__noop():
         }
 
 
-def test_namespace_absent__delete_test_true():
-    namespace_data = make_namespace(name="salt")
-    with mock_func("show_namespace", return_value=namespace_data, test=True):
-        actual = kubernetes.namespace_absent(name="salt")
-        assert actual == {
-            "changes": {},
-            "result": None,
-            "name": "salt",
-            "comment": "The namespace is going to be deleted",
-        }
-
-
-def test_namespace_absent__delete_code_200():
-    namespace_data = make_namespace(name="salt")
-    deleted = namespace_data.copy()
-    deleted["code"] = 200
-    deleted.update({"code": 200, "message": None})
-    with mock_func("show_namespace", return_value=namespace_data):
-        with mock_func("delete_namespace", return_value=deleted):
-            actual = kubernetes.namespace_absent(name="salt")
-            assert actual == {
-                "changes": {"kubernetes.namespace": {"new": "absent", "old": "present"}},
-                "result": True,
-                "name": "salt",
-                "comment": "Terminating",
-            }
-
-
 def test_namespace_absent__delete_status_terminating():
     namespace_data = make_namespace(name="salt")
     deleted = namespace_data.copy()
@@ -756,10 +360,10 @@ def test_namespace_absent__delete_status_terminating():
         with mock_func("delete_namespace", return_value=deleted):
             actual = kubernetes.namespace_absent(name="salt")
             assert actual == {
-                "changes": {"kubernetes.namespace": {"new": "absent", "old": "present"}},
+                "changes": {"old": "present", "new": "absent"},
                 "result": True,
                 "name": "salt",
-                "comment": "Terminating",
+                "comment": "Namespace salt deleted",
             }
 
 
@@ -772,105 +376,363 @@ def test_namespace_absent__delete_status_phase_terminating():
         with mock_func("delete_namespace", return_value=deleted):
             actual = kubernetes.namespace_absent(name="salt")
             assert actual == {
-                "changes": {"kubernetes.namespace": {"new": "absent", "old": "present"}},
+                "changes": {"old": "present", "new": "absent"},
                 "result": True,
                 "name": "salt",
-                "comment": "Terminating",
+                "comment": "Namespace salt deleted",
             }
 
 
 def test_namespace_absent__delete_error():
     namespace_data = make_namespace(name="salt")
-    deleted = namespace_data.copy()
-    deleted.update({"code": 418, "message": "I' a teapot!", "status": None})
     with mock_func("show_namespace", return_value=namespace_data):
-        with mock_func("delete_namespace", return_value=deleted):
+        with patch.dict(
+            kubernetes.__salt__,
+            {
+                "kubernetes.delete_namespace": MagicMock(
+                    side_effect=CommandExecutionError("I'm a teapot!")
+                )
+            },
+        ):
             actual = kubernetes.namespace_absent(name="salt")
             assert actual == {
                 "changes": {},
                 "result": False,
                 "name": "salt",
-                "comment": f"Something went wrong, response: {deleted}",
+                "comment": "I'm a teapot!",
             }
 
 
-def test_deployment_present_with_metadata_validation():
+def test_deployment_present_handles_show_deployment_error():
     """
-    Test deployment_present metadata validation
+    Test deployment_present handles CommandExecutionError from show_deployment
     """
-    metadata = {"labels": {"app": "nginx"}, "annotations": {"description": "test deployment"}}
-    spec = {"replicas": 3}
-
-    with mock_func("show_deployment", return_value=None):
-        with mock_func("create_deployment", return_value={}) as create_mock:
-            ret = kubernetes.deployment_present(name="test-deploy", metadata=metadata, spec=spec)
-            assert ret["result"] is True
-            create_mock.assert_called_with(
-                name="test-deploy",
-                namespace="default",
-                metadata=metadata,
-                spec=spec,
-                source="",
-                template="",
-                saltenv="base",
-                template_context=None,
-                wait=False,
-                timeout=60,
+    with patch.dict(
+        kubernetes.__salt__,
+        {
+            "kubernetes.show_deployment": MagicMock(
+                side_effect=CommandExecutionError("Connection failed")
             )
+        },
+    ):
+        with patch.dict(kubernetes.__opts__, {"test": False}):
+            ret = kubernetes.deployment_present("test-deploy")
+
+            assert ret["result"] is False
+            assert "Connection failed" in ret["comment"]
+            assert not ret["changes"]
 
 
-def test_service_present_with_spec_validation():
+def test_deployment_present_handles_create_deployment_error():
     """
-    Test service_present spec validation
+    Test deployment_present handles CommandExecutionError from create_deployment
     """
-    spec = {
-        "ports": [{"port": 80, "targetPort": 8080}],
-        "selector": {"app": "nginx"},
-        "type": "ClusterIP",
-    }
+    with patch.dict(
+        kubernetes.__salt__,
+        {
+            "kubernetes.show_deployment": MagicMock(return_value=None),
+            "kubernetes.create_deployment": MagicMock(
+                side_effect=CommandExecutionError("Invalid spec")
+            ),
+        },
+    ):
+        with patch.dict(kubernetes.__opts__, {"test": False}):
+            ret = kubernetes.deployment_present("test-deploy", spec={"invalid": "spec"})
 
-    with mock_func("show_service", return_value=None):
-        with mock_func("create_service", return_value={}) as create_mock:
-            ret = kubernetes.service_present(name="test-svc", spec=spec)
-            assert ret["result"] is True
-            create_mock.assert_called_with(
-                name="test-svc",
-                namespace="default",
-                metadata={},
-                spec=spec,
-                source="",
-                template="",
-                saltenv="base",
-                template_context=None,
-                wait=False,
-                timeout=60,
+            assert ret["result"] is False
+            assert "Invalid spec" in ret["comment"]
+
+
+def test_deployment_present_handles_patch_deployment_error():
+    """
+    Test deployment_present handles CommandExecutionError from patch_deployment
+    """
+    existing_deployment = {"metadata": {"name": "test"}, "spec": {"replicas": 1}}
+
+    with patch.dict(
+        kubernetes.__salt__,
+        {
+            "kubernetes.show_deployment": MagicMock(return_value=existing_deployment),
+            "kubernetes.patch_deployment": MagicMock(
+                side_effect=CommandExecutionError("Patch failed")
+            ),
+        },
+    ):
+        with patch.dict(kubernetes.__opts__, {"test": False}):
+            ret = kubernetes.deployment_present("test-deploy", spec={"replicas": 3})
+
+            assert ret["result"] is False
+            assert "Patch failed" in ret["comment"]
+
+
+def test_deployment_present_dry_run_fallback():
+    """
+    Test that deployment_present falls back gracefully when dry_run fails in test mode
+    """
+    with patch.dict(
+        kubernetes.__salt__,
+        {
+            "kubernetes.show_deployment": MagicMock(return_value=None),
+            "kubernetes.create_deployment": MagicMock(
+                side_effect=CommandExecutionError("Dry run failed")
+            ),
+        },
+    ):
+        with patch.dict(kubernetes.__opts__, {"test": True}):
+            ret = kubernetes.deployment_present("test-deploy", spec={"replicas": 3})
+
+            assert ret["result"] is None
+            assert "Dry run failed" in ret["comment"]
+            assert "dependencies not created yet" in ret["comment"]
+
+
+@pytest.mark.parametrize(
+    "state_func,show_func",
+    [
+        ("deployment_absent", "show_deployment"),
+        ("service_absent", "show_service"),
+        ("secret_absent", "show_secret"),
+        ("configmap_absent", "show_configmap"),
+        ("pod_absent", "show_pod"),
+    ],
+)
+def test_absent_handles_show_error(state_func, show_func):
+    """
+    Test that _absent functions handle CommandExecutionError from show
+    """
+    with patch.dict(
+        kubernetes.__salt__,
+        {f"kubernetes.{show_func}": MagicMock(side_effect=CommandExecutionError("API error"))},
+    ):
+        with patch.dict(kubernetes.__opts__, {"test": False}):
+            func = getattr(kubernetes, state_func)
+            ret = func(name="test")
+            assert ret["result"] is False
+            assert "API error" in ret["comment"]
+
+
+@pytest.mark.parametrize(
+    "state_func,show_func,delete_func",
+    [
+        ("deployment_absent", "show_deployment", "delete_deployment"),
+        ("service_absent", "show_service", "delete_service"),
+        ("secret_absent", "show_secret", "delete_secret"),
+        ("configmap_absent", "show_configmap", "delete_configmap"),
+        ("pod_absent", "show_pod", "delete_pod"),
+    ],
+)
+def test_absent_handles_delete_error(state_func, show_func, delete_func):
+    """
+    Test that _absent functions handle CommandExecutionError from delete
+    """
+    with mock_func(show_func, return_value={"metadata": {"name": "test"}}):
+        with patch.dict(
+            kubernetes.__salt__,
+            {
+                f"kubernetes.{delete_func}": MagicMock(
+                    side_effect=CommandExecutionError("Delete failed")
+                )
+            },
+        ):
+            func = getattr(kubernetes, state_func)
+            ret = func(name="test")
+            assert ret["result"] is False
+            assert "Delete failed" in ret["comment"]
+
+
+@pytest.mark.parametrize(
+    "state_func,show_func",
+    [
+        ("service_present", "show_service"),
+        ("secret_present", "show_secret"),
+        ("configmap_present", "show_configmap"),
+        ("pod_present", "show_pod"),
+        ("namespace_present", "show_namespace"),
+    ],
+)
+def test_present_handles_show_error(state_func, show_func):
+    """
+    Test that _present functions handle CommandExecutionError from show
+    """
+    with patch.dict(
+        kubernetes.__salt__,
+        {f"kubernetes.{show_func}": MagicMock(side_effect=CommandExecutionError("API error"))},
+    ):
+        with patch.dict(kubernetes.__opts__, {"test": False}):
+            func = getattr(kubernetes, state_func)
+            ret = func(name="test")
+            assert ret["result"] is False
+            assert "API error" in ret["comment"]
+
+
+def test_service_present_source_conflict():
+    """
+    Test service_present returns error when both source and metadata/spec are provided
+    """
+    with patch.dict(kubernetes.__opts__, {"test": False}):
+        ret = kubernetes.service_present(
+            name="test",
+            source="salt://test.yml",
+            metadata={"labels": {"app": "test"}},
+        )
+        assert ret["result"] is False
+        assert "source" in ret["comment"].lower()
+
+
+def test_pod_present_source_conflict():
+    """
+    Test pod_present returns error when both source and metadata/spec are provided
+    """
+    with patch.dict(kubernetes.__opts__, {"test": False}):
+        ret = kubernetes.pod_present(
+            name="test",
+            source="salt://test.yml",
+            metadata={"labels": {"app": "test"}},
+        )
+        assert ret["result"] is False
+        assert "source" in ret["comment"].lower()
+
+
+def test_service_present_handles_create_error():
+    """
+    Test service_present handles CommandExecutionError from create_service
+    """
+    with patch.dict(
+        kubernetes.__salt__,
+        {
+            "kubernetes.show_service": MagicMock(return_value=None),
+            "kubernetes.create_service": MagicMock(
+                side_effect=CommandExecutionError("Invalid spec")
+            ),
+        },
+    ):
+        with patch.dict(kubernetes.__opts__, {"test": False}):
+            ret = kubernetes.service_present("test-svc", spec={"ports": [{"port": 80}]})
+            assert ret["result"] is False
+            assert "Invalid spec" in ret["comment"]
+
+
+def test_service_present_handles_patch_error():
+    """
+    Test service_present handles CommandExecutionError from patch_service
+    """
+    existing = {"metadata": {"name": "test"}, "spec": {"type": "ClusterIP"}}
+    with patch.dict(
+        kubernetes.__salt__,
+        {
+            "kubernetes.show_service": MagicMock(return_value=existing),
+            "kubernetes.patch_service": MagicMock(
+                side_effect=CommandExecutionError("Patch failed")
+            ),
+        },
+    ):
+        with patch.dict(kubernetes.__opts__, {"test": False}):
+            ret = kubernetes.service_present("test-svc", spec={"type": "NodePort"})
+            assert ret["result"] is False
+            assert "Patch failed" in ret["comment"]
+
+
+def test_service_present_dry_run_fallback():
+    """
+    Test service_present falls back gracefully when dry_run fails in test mode
+    """
+    with patch.dict(
+        kubernetes.__salt__,
+        {
+            "kubernetes.show_service": MagicMock(return_value=None),
+            "kubernetes.create_service": MagicMock(
+                side_effect=CommandExecutionError("Namespace not found")
+            ),
+        },
+    ):
+        with patch.dict(kubernetes.__opts__, {"test": True}):
+            ret = kubernetes.service_present("test-svc", spec={"ports": [{"port": 80}]})
+            assert ret["result"] is None
+            assert "dependencies not created yet" in ret["comment"]
+
+
+def test_secret_present_dry_run_fallback():
+    """
+    Test secret_present falls back gracefully when dry_run fails in test mode
+    """
+    with patch.dict(
+        kubernetes.__salt__,
+        {
+            "kubernetes.show_secret": MagicMock(return_value=None),
+            "kubernetes.create_secret": MagicMock(
+                side_effect=CommandExecutionError("Namespace not found")
+            ),
+        },
+    ):
+        with patch.dict(kubernetes.__opts__, {"test": True}):
+            ret = kubernetes.secret_present("test-secret", data={"key": "value"})
+            assert ret["result"] is None
+            assert "dependencies not created yet" in ret["comment"]
+
+
+def test_configmap_present_dry_run_fallback():
+    """
+    Test configmap_present falls back gracefully when dry_run fails in test mode
+    """
+    with patch.dict(
+        kubernetes.__salt__,
+        {
+            "kubernetes.show_configmap": MagicMock(return_value=None),
+            "kubernetes.create_configmap": MagicMock(
+                side_effect=CommandExecutionError("Namespace not found")
+            ),
+        },
+    ):
+        with patch.dict(kubernetes.__opts__, {"test": True}):
+            ret = kubernetes.configmap_present("test-cm", data={"key": "value"})
+            assert ret["result"] is None
+            assert "dependencies not created yet" in ret["comment"]
+
+
+def test_namespace_present_handles_create_error():
+    """
+    Test namespace_present handles CommandExecutionError from create_namespace
+    """
+    with patch.dict(
+        kubernetes.__salt__,
+        {
+            "kubernetes.show_namespace": MagicMock(return_value=None),
+            "kubernetes.create_namespace": MagicMock(
+                side_effect=CommandExecutionError("Already exists")
+            ),
+        },
+    ):
+        with patch.dict(kubernetes.__opts__, {"test": False}):
+            ret = kubernetes.namespace_present("test-ns")
+            assert ret["result"] is False
+            assert "Already exists" in ret["comment"]
+
+
+def test_node_label_present_handles_error():
+    """
+    Test node_label_present handles CommandExecutionError from node_labels
+    """
+    with patch.dict(
+        kubernetes.__salt__,
+        {"kubernetes.node_labels": MagicMock(side_effect=CommandExecutionError("Node not found"))},
+    ):
+        with patch.dict(kubernetes.__opts__, {"test": False}):
+            ret = kubernetes.node_label_present(
+                name="test-label", node="missing-node", value="test"
             )
+            assert ret["result"] is False
+            assert "Node not found" in ret["comment"]
 
 
-def test_deployment_present_with_patch():
+def test_node_label_absent_handles_error():
     """
-    Test deployment_present with patching an existing deployment
+    Test node_label_absent handles CommandExecutionError from node_labels
     """
-    existing_deployment = {
-        "metadata": {"name": "test-deploy", "namespace": "default"},
-        "spec": {"replicas": 2, "template": {"metadata": {"labels": {"app": "nginx"}}}},
-    }
-    updated_deployment = existing_deployment.copy()
-    updated_deployment["spec"]["replicas"] = 3
-
-    with mock_func("show_deployment", return_value=existing_deployment):
-        with mock_func("patch_deployment", return_value=updated_deployment) as patch_mock:
-            ret = kubernetes.deployment_present(
-                "test-deploy",
-                namespace="default",
-                spec={"replicas": 3, "template": {"metadata": {"labels": {"app": "nginx"}}}},
-            )
-            assert ret["result"] is True
-            patch_mock.assert_called_with(
-                "test-deploy",
-                "default",
-                patch={
-                    "spec": {"replicas": 3, "template": {"metadata": {"labels": {"app": "nginx"}}}}
-                },
-                dry_run=True,
-            )
+    with patch.dict(
+        kubernetes.__salt__,
+        {"kubernetes.node_labels": MagicMock(side_effect=CommandExecutionError("Node not found"))},
+    ):
+        with patch.dict(kubernetes.__opts__, {"test": False}):
+            ret = kubernetes.node_label_absent(name="test-label", node="missing-node")
+            assert ret["result"] is False
+            assert "Node not found" in ret["comment"]

@@ -190,7 +190,8 @@ def secret(salt_call_cli, secret_spec, request):
             name=name,
             namespace=namespace,
             data=secret_spec["data"],
-            type=secret_spec["type"],
+            secret_type=secret_spec["type"],
+            metadata=secret_spec["metadata"],
         )
         assert res.returncode == 0
 
