@@ -167,39 +167,35 @@ def deployment_absent(name, namespace="default", wait=False, timeout=60, **kwarg
 
     try:
         deployment = __salt__["kubernetes.show_deployment"](name, namespace, **kwargs)
-    except CommandExecutionError as err:
-        log.exception(str(err), exc_info_on_loglevel=logging.DEBUG)
-        ret["result"] = False
-        ret["comment"] = str(err)
-        return ret
 
-    if deployment is None:
-        ret["result"] = True if not __opts__["test"] else None
-        ret["comment"] = "The deployment does not exist"
-        return ret
+        if deployment is None:
+            ret["result"] = True
+            ret["comment"] = "The deployment does not exist"
+            return ret
 
-    if __opts__["test"]:
-        ret["result"] = None
-        ret["comment"] = "The deployment is going to be deleted"
-        ret["changes"] = {
-            "old": "present",
-            "new": "absent",
-        }
-        return ret
+        if __opts__["test"]:
+            ret["result"] = None
+            ret["comment"] = "The deployment is going to be deleted"
+            ret["changes"] = {
+                "old": "present",
+                "new": "absent",
+            }
+            return ret
 
-    try:
         __salt__["kubernetes.delete_deployment"](
             name, namespace, wait=wait, timeout=timeout, **kwargs
         )
+
+        ret["result"] = True
+        ret["changes"] = {"old": "present", "new": "absent"}
+        ret["comment"] = f"Deployment {name} deleted"
+
     except CommandExecutionError as err:
-        log.exception(str(err))
+        log.error(str(err), exc_info_on_loglevel=logging.DEBUG)
         ret["result"] = False
         ret["comment"] = str(err)
-        return ret
+        ret["changes"] = {}
 
-    ret["result"] = True
-    ret["changes"] = {"old": "present", "new": "absent"}
-    ret["comment"] = f"Deployment {name} deleted"
     return ret
 
 
@@ -211,7 +207,6 @@ def deployment_present(
     source="",
     template="",
     template_context=None,
-    replace=None,
     wait=False,
     timeout=60,
     **kwargs,
@@ -219,7 +214,7 @@ def deployment_present(
     """
     Ensures that the named deployment is present inside of the specified
     namespace with the given metadata and spec.
-    If the deployment exists it will be replaced.
+    If the deployment exists, it will be patched with the desired state.
 
     name
         The name of the deployment.
@@ -246,20 +241,15 @@ def deployment_present(
 
         Variables to be passed into the template.
 
-    replace
-        .. versionadded:: 2.0.0
-
-        If set to True, the function will force replace the existing deployment.
-
     wait
         .. versionadded:: 2.0.0
 
-        If set to True, the function will wait until the deployment is created.
+        If set to True, the function will wait until the deployment is ready.
 
     timeout
         .. versionadded:: 2.0.0
 
-        The time in seconds to wait for the deployment to be created.
+        The time in seconds to wait for the deployment to be ready.
 
     Example:
 
@@ -296,40 +286,33 @@ def deployment_present(
 
     try:
         deployment = __salt__["kubernetes.show_deployment"](name, namespace, **kwargs)
-    except CommandExecutionError as err:
-        log.exception(str(err), exc_info_on_loglevel=logging.DEBUG)
-        ret["result"] = False
-        ret["comment"] = str(err)
-        return ret
 
-    if deployment is None:
-        if __opts__["test"]:
-            ret["result"] = None
-            ret["comment"] = "The deployment is going to be created"
-            # Simulate creation to show changes to account for using the source argument
-            try:
-                dry_run_result = __salt__["kubernetes.create_deployment"](
-                    name=name,
-                    namespace=namespace,
-                    metadata=metadata,
-                    spec=spec,
-                    source=source,
-                    template=template,
-                    saltenv=__env__,
-                    template_context=template_context,
-                    dry_run=True,
-                    **kwargs,
-                )
-                ret["changes"] = {"old": {}, "new": dry_run_result}
-            except CommandExecutionError as err:
-                log.debug("Dry run failed: %s", str(err))
-                ret["result"] = False
-                ret["comment"] = str(err)
+        if deployment is None:
+            if __opts__["test"]:
+                ret["result"] = None
+                ret["comment"] = "The deployment is going to be created"
+                try:
+                    dry_run_result = __salt__["kubernetes.create_deployment"](
+                        name=name,
+                        namespace=namespace,
+                        metadata=metadata,
+                        spec=spec,
+                        source=source,
+                        template=template,
+                        saltenv=__env__,
+                        template_context=template_context,
+                        dry_run=True,
+                        **kwargs,
+                    )
+                    ret["changes"] = {"old": {}, "new": dry_run_result}
+                except CommandExecutionError as err:
+                    ret["result"] = None
+                    ret["comment"] = (
+                        "The deployment is going to be created. "
+                        f"Dry run failed, possibly due to dependencies not created yet: {err}"
+                    )
                 return ret
 
-            return ret
-
-        try:
             res = __salt__["kubernetes.create_deployment"](
                 name=name,
                 namespace=namespace,
@@ -343,109 +326,77 @@ def deployment_present(
                 timeout=timeout,
                 **kwargs,
             )
-        except CommandExecutionError as err:
-            log.exception(str(err))
-            ret["result"] = False
-            ret["comment"] = str(err)
+            ret["result"] = True
+            ret["changes"] = {"old": {}, "new": res}
+            ret["comment"] = "Deployment created"
             return ret
-        ret["changes"] = {"old": {}, "new": res}
 
-    if replace is True and deployment is not None:
-        log.info("Forcing the recreation of the deployment")
-        ret["comment"] = "The deployment is already present. Forcing recreation"
-        try:
-            res = __salt__["kubernetes.replace_deployment"](
-                name=name,
-                namespace=namespace,
-                metadata=metadata,
-                spec=spec,
-                source=source,
-                template=template,
-                saltenv=__env__,
-                template_context=template_context,
-                wait=wait,
-                timeout=timeout,
-                **kwargs,
-            )
-        except CommandExecutionError as err:
-            log.exception(str(err), exc_info_on_loglevel=logging.DEBUG)
-            ret["result"] = False
-            ret["comment"] = str(err)
-            return ret
-        ret["changes"] = {"old": deployment, "new": res}
-        ret["result"] = True
-        return ret
+        # Deployment exists — build the patch object
+        if source:
+            patch_kwargs = {
+                "source": source,
+                "template": template,
+                "template_context": template_context,
+            }
+        else:
+            patch_obj = {}
+            if metadata:
+                patch_obj["metadata"] = metadata
+            if spec:
+                patch_obj["spec"] = spec
+            patch_kwargs = {"patch": patch_obj}
 
-    if deployment is not None:
-        try:
-            if source:
+        if __opts__["test"]:
+            try:
                 res = __salt__["kubernetes.patch_deployment"](
                     name,
                     namespace,
-                    patch="none",
-                    source=source,
-                    template=template,
-                    template_context=template_context,
                     dry_run=True,
+                    **patch_kwargs,
                     **kwargs,
                 )
-            else:
-                patch_obj = {}
-                if metadata:
-                    patch_obj["metadata"] = metadata
-                if spec:
-                    patch_obj["spec"] = spec
-
-                res = __salt__["kubernetes.patch_deployment"](
-                    name,
-                    namespace,
-                    patch=patch_obj,
-                    dry_run=True,
-                    **kwargs,
+            except CommandExecutionError as err:
+                ret["result"] = None
+                ret["comment"] = (
+                    "The deployment is going to be updated. "
+                    f"Dry run failed, possibly due to dependencies not created yet: {err}"
                 )
+                return ret
 
             if res == deployment:
                 ret["result"] = True
-                ret["comment"] = "The deployment is already present and matches the desired state"
+                ret["comment"] = "The deployment is already in the desired state"
                 return ret
 
-            if __opts__["test"]:
-                ret["result"] = None
-                ret["comment"] = "The deployment is going to be patched"
-                ret["changes"] = {"old": deployment, "new": res}
-                return ret
-
-            if source:
-                res = __salt__["kubernetes.patch_deployment"](
-                    name,
-                    namespace,
-                    patch=None,
-                    source=source,
-                    template=template,
-                    template_context=template_context,
-                    **kwargs,
-                )
-            else:
-                res = __salt__["kubernetes.patch_deployment"](
-                    name,
-                    namespace,
-                    patch=patch_obj,
-                    **kwargs,
-                )
-
+            ret["result"] = None
+            ret["comment"] = "The deployment is going to be updated"
             ret["changes"] = {"old": deployment, "new": res}
+            return ret
+
+        res = __salt__["kubernetes.patch_deployment"](
+            name,
+            namespace,
+            wait=wait,
+            timeout=timeout,
+            **patch_kwargs,
+            **kwargs,
+        )
+
+        if res == deployment:
             ret["result"] = True
-            ret["comment"] = "Deployment updated"
+            ret["comment"] = "The deployment is already in the desired state"
             return ret
 
-        except CommandExecutionError as err:
-            log.exception(str(err), exc_info_on_loglevel=logging.DEBUG)
-            ret["result"] = False
-            ret["comment"] = str(err)
-            return ret
+        ret["changes"] = {"old": deployment, "new": res}
+        ret["result"] = True
+        ret["comment"] = "Deployment updated"
 
-    ret["result"] = True
-    ret["comment"] = "Deployment processed successfully"
+    except CommandExecutionError as err:
+        log.error(str(err), exc_info_on_loglevel=logging.DEBUG)
+        ret["result"] = False
+        ret["comment"] = str(err)
+        ret["changes"] = {}
+
     return ret
 
 
@@ -464,7 +415,7 @@ def service_present(
     """
     Ensures that the named service is present inside of the specified namespace
     with the given metadata and spec.
-    If the deployment exists it will be replaced.
+    If the service exists, it will be patched with the desired state.
 
     name
         The name of the service.
@@ -531,18 +482,33 @@ def service_present(
 
     try:
         service = __salt__["kubernetes.show_service"](name, namespace, **kwargs)
-    except CommandExecutionError as err:
-        log.exception(str(err), exc_info_on_loglevel=logging.DEBUG)
-        ret["result"] = False
-        ret["comment"] = str(err)
-        return ret
 
-    if service is None:
-        if __opts__["test"]:
-            ret["result"] = None
-            ret["comment"] = "The service is going to be created"
-            return ret
-        try:
+        if service is None:
+            if __opts__["test"]:
+                ret["result"] = None
+                ret["comment"] = "The service is going to be created"
+                try:
+                    dry_run_result = __salt__["kubernetes.create_service"](
+                        name=name,
+                        namespace=namespace,
+                        metadata=metadata,
+                        spec=spec,
+                        source=source,
+                        template=template,
+                        saltenv=__env__,
+                        template_context=template_context,
+                        dry_run=True,
+                        **kwargs,
+                    )
+                    ret["changes"] = {"old": {}, "new": dry_run_result}
+                except CommandExecutionError as err:
+                    ret["result"] = None
+                    ret["comment"] = (
+                        "The service is going to be created. "
+                        f"Dry run failed, possibly due to dependencies not created yet: {err}"
+                    )
+                return ret
+
             res = __salt__["kubernetes.create_service"](
                 name=name,
                 namespace=namespace,
@@ -556,43 +522,77 @@ def service_present(
                 timeout=timeout,
                 **kwargs,
             )
-        except CommandExecutionError as err:
-            log.exception(str(err), exc_info_on_loglevel=logging.DEBUG)
-            ret["result"] = False
-            ret["comment"] = str(err)
+            ret["result"] = True
+            ret["changes"] = {"old": {}, "new": res}
+            ret["comment"] = "Service created"
             return ret
-        ret["changes"][f"{namespace}.{name}"] = {"old": {}, "new": res}
-    else:
+
+        # Service exists — build the patch object
+        if source:
+            patch_kwargs = {
+                "source": source,
+                "template": template,
+                "template_context": template_context,
+            }
+        else:
+            patch_obj = {}
+            if metadata:
+                patch_obj["metadata"] = metadata
+            if spec:
+                patch_obj["spec"] = spec
+            patch_kwargs = {"patch": patch_obj}
+
         if __opts__["test"]:
+            try:
+                res = __salt__["kubernetes.patch_service"](
+                    name,
+                    namespace,
+                    dry_run=True,
+                    **patch_kwargs,
+                    **kwargs,
+                )
+            except CommandExecutionError as err:
+                ret["result"] = None
+                ret["comment"] = (
+                    "The service is going to be updated. "
+                    f"Dry run failed, possibly due to dependencies not created yet: {err}"
+                )
+                return ret
+
+            if res == service:
+                ret["result"] = True
+                ret["comment"] = "The service is already in the desired state"
+                return ret
+
             ret["result"] = None
+            ret["comment"] = "The service is going to be updated"
+            ret["changes"] = {"old": service, "new": res}
             return ret
 
-        # TODO: improve checks  # pylint: disable=fixme
-        log.info("Forcing the recreation of the service")
-        ret["comment"] = "The service is already present. Forcing recreation"
-        try:
-            res = __salt__["kubernetes.replace_service"](
-                name=name,
-                namespace=namespace,
-                metadata=metadata,
-                spec=spec,
-                source=source,
-                template=template,
-                old_service=service,
-                saltenv=__env__,
-                template_context=template_context,
-                wait=wait,
-                timeout=timeout,
-                **kwargs,
-            )
-        except CommandExecutionError as err:
-            log.exception(str(err), exc_info_on_loglevel=logging.DEBUG)
-            ret["result"] = False
-            ret["comment"] = str(err)
+        res = __salt__["kubernetes.patch_service"](
+            name,
+            namespace,
+            wait=wait,
+            timeout=timeout,
+            **patch_kwargs,
+            **kwargs,
+        )
+
+        if res == service:
+            ret["result"] = True
+            ret["comment"] = "The service is already in the desired state"
             return ret
 
-    ret["changes"] = {"metadata": metadata, "spec": spec}
-    ret["result"] = True
+        ret["changes"] = {"old": service, "new": res}
+        ret["result"] = True
+        ret["comment"] = "Service updated"
+
+    except CommandExecutionError as err:
+        log.error(str(err), exc_info_on_loglevel=logging.DEBUG)
+        ret["result"] = False
+        ret["comment"] = str(err)
+        ret["changes"] = {}
+
     return ret
 
 
@@ -628,33 +628,30 @@ def service_absent(name, namespace="default", wait=False, timeout=60, **kwargs):
 
     try:
         service = __salt__["kubernetes.show_service"](name, namespace, **kwargs)
-    except CommandExecutionError as err:
-        log.exception(str(err), exc_info_on_loglevel=logging.DEBUG)
-        ret["result"] = False
-        ret["comment"] = str(err)
-        return ret
 
-    if service is None:
-        ret["result"] = True if not __opts__["test"] else None
-        ret["comment"] = "The service does not exist"
-        return ret
+        if service is None:
+            ret["result"] = True
+            ret["comment"] = "The service does not exist"
+            return ret
 
-    if __opts__["test"]:
-        ret["comment"] = "The service is going to be deleted"
-        ret["result"] = None
-        return ret
+        if __opts__["test"]:
+            ret["comment"] = "The service is going to be deleted"
+            ret["result"] = None
+            ret["changes"] = {"old": "present", "new": "absent"}
+            return ret
 
-    try:
         __salt__["kubernetes.delete_service"](name, namespace, wait=wait, timeout=timeout, **kwargs)
+
+        ret["result"] = True
+        ret["changes"] = {"old": "present", "new": "absent"}
+        ret["comment"] = f"Service {name} deleted"
+
     except CommandExecutionError as err:
-        log.exception(str(err), exc_info_on_loglevel=logging.DEBUG)
+        log.error(str(err), exc_info_on_loglevel=logging.DEBUG)
         ret["result"] = False
         ret["comment"] = str(err)
-        return ret
+        ret["changes"] = {}
 
-    ret["result"] = True
-    ret["changes"] = {"kubernetes.service": {"new": "absent", "old": "present"}}
-    ret["comment"] = "Service deleted"
     return ret
 
 
@@ -688,42 +685,29 @@ def namespace_absent(name, wait=False, timeout=60, **kwargs):
 
     try:
         namespace = __salt__["kubernetes.show_namespace"](name, **kwargs)
-    except CommandExecutionError as err:
-        log.exception(str(err), exc_info_on_loglevel=logging.DEBUG)
-        ret["result"] = False
-        ret["comment"] = str(err)
-        return ret
 
-    if namespace is None:
-        ret["result"] = True if not __opts__["test"] else None
-        ret["comment"] = "The namespace does not exist"
-        return ret
+        if namespace is None:
+            ret["result"] = True
+            ret["comment"] = "The namespace does not exist"
+            return ret
 
-    if __opts__["test"]:
-        ret["comment"] = "The namespace is going to be deleted"
-        ret["result"] = None
-        return ret
+        if __opts__["test"]:
+            ret["comment"] = "The namespace is going to be deleted"
+            ret["result"] = None
+            ret["changes"] = {"old": "present", "new": "absent"}
+            return ret
 
-    try:
-        res = __salt__["kubernetes.delete_namespace"](name, wait=wait, timeout=timeout, **kwargs)
-    except CommandExecutionError as err:
-        log.exception(str(err), exc_info_on_loglevel=logging.DEBUG)
-        ret["result"] = False
-        ret["comment"] = str(err)
-        return ret
-    if (
-        res["code"] == 200
-        or (isinstance(res["status"], str) and "Terminating" in res["status"])
-        or (isinstance(res["status"], dict) and res["status"]["phase"] == "Terminating")
-    ):
+        __salt__["kubernetes.delete_namespace"](name, wait=wait, timeout=timeout, **kwargs)
+
         ret["result"] = True
-        ret["changes"] = {"kubernetes.namespace": {"new": "absent", "old": "present"}}
-        if res["message"]:
-            ret["comment"] = res["message"]
-        else:
-            ret["comment"] = "Terminating"
-    else:
-        ret["comment"] = f"Something went wrong, response: {res}"
+        ret["changes"] = {"old": "present", "new": "absent"}
+        ret["comment"] = f"Namespace {name} deleted"
+
+    except CommandExecutionError as err:
+        log.error(str(err), exc_info_on_loglevel=logging.DEBUG)
+        ret["result"] = False
+        ret["comment"] = str(err)
+        ret["changes"] = {}
 
     return ret
 
@@ -747,30 +731,26 @@ def namespace_present(name, **kwargs):
 
     try:
         namespace = __salt__["kubernetes.show_namespace"](name, **kwargs)
+
+        if namespace is None:
+            if __opts__["test"]:
+                ret["result"] = None
+                ret["comment"] = "The namespace is going to be created"
+                ret["changes"] = {"old": {}, "new": {"metadata": {"name": name}}}
+                return ret
+
+            res = __salt__["kubernetes.create_namespace"](name, **kwargs)
+            ret["result"] = True
+            ret["changes"] = {"old": {}, "new": res}
+        else:
+            ret["result"] = True
+            ret["comment"] = "The namespace already exists"
+
     except CommandExecutionError as err:
-        log.exception(str(err), exc_info_on_loglevel=logging.DEBUG)
+        log.error(str(err), exc_info_on_loglevel=logging.DEBUG)
         ret["result"] = False
         ret["comment"] = str(err)
-        return ret
-
-    if namespace is None:
-        if __opts__["test"]:
-            ret["result"] = None
-            ret["comment"] = "The namespace is going to be created"
-            return ret
-
-        try:
-            res = __salt__["kubernetes.create_namespace"](name, **kwargs)
-        except CommandExecutionError as err:
-            log.exception(str(err), exc_info_on_loglevel=logging.DEBUG)
-            ret["result"] = False
-            ret["comment"] = str(err)
-            return ret
-        ret["result"] = True
-        ret["changes"]["namespace"] = {"old": {}, "new": res}
-    else:
-        ret["result"] = True if not __opts__["test"] else None
-        ret["comment"] = "The namespace already exists"
+        ret["changes"] = {}
 
     return ret
 
@@ -809,36 +789,30 @@ def secret_absent(name, namespace="default", wait=False, timeout=60, **kwargs):
 
     try:
         secret = __salt__["kubernetes.show_secret"](name, namespace, **kwargs)
-    except CommandExecutionError as err:
-        log.exception(str(err), exc_info_on_loglevel=logging.DEBUG)
-        ret["result"] = False
-        ret["comment"] = str(err)
-        return ret
 
-    if secret is None:
-        ret["result"] = True if not __opts__["test"] else None
-        ret["comment"] = "The secret does not exist"
-        return ret
+        if secret is None:
+            ret["result"] = True
+            ret["comment"] = "The secret does not exist"
+            return ret
 
-    if __opts__["test"]:
-        ret["comment"] = "The secret is going to be deleted"
-        ret["result"] = None
-        return ret
+        if __opts__["test"]:
+            ret["comment"] = "The secret is going to be deleted"
+            ret["result"] = None
+            ret["changes"] = {"old": "present", "new": "absent"}
+            return ret
 
-    try:
         __salt__["kubernetes.delete_secret"](name, namespace, wait=wait, timeout=timeout, **kwargs)
+
+        ret["result"] = True
+        ret["changes"] = {"old": "present", "new": "absent"}
+        ret["comment"] = f"Secret {name} deleted"
+
     except CommandExecutionError as err:
-        log.exception(str(err), exc_info_on_loglevel=logging.DEBUG)
+        log.error(str(err), exc_info_on_loglevel=logging.DEBUG)
         ret["result"] = False
         ret["comment"] = str(err)
-        return ret
+        ret["changes"] = {}
 
-    # As for kubernetes 1.6.4 doesn't set a code when deleting a secret
-    # The kubernetes module will raise an exception if the kubernetes
-    # server will return an error
-    ret["result"] = True
-    ret["changes"] = {"kubernetes.secret": {"new": "absent", "old": "present"}}
-    ret["comment"] = "Secret deleted"
     return ret
 
 
@@ -858,7 +832,7 @@ def secret_present(
     """
     Ensures that the named secret is present inside of the specified namespace
     with the given data.
-    If the secret exists it will be replaced.
+    If the secret exists, it will be patched with the desired state.
 
     name
         The name of the secret.
@@ -923,21 +897,40 @@ def secret_present(
 
     try:
         secret = __salt__["kubernetes.show_secret"](name, namespace, **kwargs)
-    except CommandExecutionError as err:
-        log.exception(str(err), exc_info_on_loglevel=logging.DEBUG)
-        ret["result"] = False
-        ret["comment"] = str(err)
-        return ret
 
-    if secret is None:
-        if data is None:
-            data = {}
+        if secret is None:
+            if data is None:
+                data = {}
 
-        if __opts__["test"]:
-            ret["result"] = None
-            ret["comment"] = "The secret is going to be created"
-            return ret
-        try:
+            if __opts__["test"]:
+                ret["result"] = None
+                ret["comment"] = "The secret is going to be created"
+                try:
+                    dry_run_result = __salt__["kubernetes.create_secret"](
+                        name=name,
+                        namespace=namespace,
+                        data=data,
+                        source=source,
+                        template=template,
+                        saltenv=__env__,
+                        template_context=template_context,
+                        secret_type=secret_type,
+                        metadata=metadata,
+                        dry_run=True,
+                        **kwargs,
+                    )
+                    ret["changes"] = {
+                        "old": {},
+                        "new": {"data": list(dry_run_result.get("data") or [])},
+                    }
+                except CommandExecutionError as err:
+                    ret["result"] = None
+                    ret["comment"] = (
+                        "The secret is going to be created. "
+                        f"Dry run failed, possibly due to dependencies not created yet: {err}"
+                    )
+                return ret
+
             res = __salt__["kubernetes.create_secret"](
                 name=name,
                 namespace=namespace,
@@ -952,48 +945,87 @@ def secret_present(
                 timeout=timeout,
                 **kwargs,
             )
-        except CommandExecutionError as err:
-            log.exception(str(err), exc_info_on_loglevel=logging.DEBUG)
-            ret["result"] = False
-            ret["comment"] = str(err)
+            ret["result"] = True
+            ret["changes"] = {
+                "old": {},
+                "new": {"data": list(res.get("data") or [])},
+            }
+            ret["comment"] = "Secret created"
             return ret
-        ret["changes"][f"{namespace}.{name}"] = {"old": {}, "new": res}
-    else:
+
+        # Secret exists — build the patch object
+        if source:
+            patch_kwargs = {
+                "source": source,
+                "template": template,
+                "template_context": template_context,
+            }
+        else:
+            patch_obj = {}
+            if metadata:
+                patch_obj["metadata"] = metadata
+            if data:
+                patch_obj["data"] = data
+            if secret_type:
+                patch_obj["type"] = secret_type
+            patch_kwargs = {"patch": patch_obj}
+
         if __opts__["test"]:
+            try:
+                res = __salt__["kubernetes.patch_secret"](
+                    name,
+                    namespace,
+                    dry_run=True,
+                    **patch_kwargs,
+                    **kwargs,
+                )
+            except CommandExecutionError as err:
+                ret["result"] = None
+                ret["comment"] = (
+                    "The secret is going to be updated. "
+                    f"Dry run failed, possibly due to dependencies not created yet: {err}"
+                )
+                return ret
+
+            if res == secret:
+                ret["result"] = True
+                ret["comment"] = "The secret is already in the desired state"
+                return ret
+
             ret["result"] = None
-            ret["comment"] = "The secret is going to be replaced"
+            ret["comment"] = "The secret is going to be updated"
+            ret["changes"] = {
+                "old": {"data": list(secret.get("data") or [])},
+                "new": {"data": list(res.get("data") or [])},
+            }
             return ret
 
-        # TODO: improve checks  # pylint: disable=fixme
-        log.info("Forcing the recreation of the secret")
-        ret["comment"] = "The secret is already present. Forcing recreation"
-        try:
-            res = __salt__["kubernetes.replace_secret"](
-                name=name,
-                namespace=namespace,
-                data=data,
-                source=source,
-                template=template,
-                saltenv=__env__,
-                template_context=template_context,
-                secret_type=secret_type,
-                metadata=metadata,
-                wait=wait,
-                timeout=timeout,
-                **kwargs,
-            )
-        except CommandExecutionError as err:
-            log.exception(str(err), exc_info_on_loglevel=logging.DEBUG)
-            ret["result"] = False
-            ret["comment"] = str(err)
+        res = __salt__["kubernetes.patch_secret"](
+            name,
+            namespace,
+            wait=wait,
+            timeout=timeout,
+            **patch_kwargs,
+            **kwargs,
+        )
+
+        if res == secret:
+            ret["result"] = True
+            ret["comment"] = "The secret is already in the desired state"
             return ret
 
-    ret["changes"] = {
-        # Omit values from the return. They are unencrypted
-        # and can contain sensitive data.
-        "data": list(res["data"] or [])
-    }
-    ret["result"] = True
+        ret["changes"] = {
+            "old": {"data": list(secret.get("data") or [])},
+            "new": {"data": list(res.get("data") or [])},
+        }
+        ret["result"] = True
+        ret["comment"] = "Secret updated"
+
+    except CommandExecutionError as err:
+        log.error(str(err), exc_info_on_loglevel=logging.DEBUG)
+        ret["result"] = False
+        ret["comment"] = str(err)
+        ret["changes"] = {}
 
     return ret
 
@@ -1032,35 +1064,31 @@ def configmap_absent(name, namespace="default", wait=False, timeout=60, **kwargs
 
     try:
         configmap = __salt__["kubernetes.show_configmap"](name, namespace, **kwargs)
-    except CommandExecutionError as err:
-        log.exception(str(err), exc_info_on_loglevel=logging.DEBUG)
-        ret["result"] = False
-        ret["comment"] = str(err)
-        return ret
 
-    if configmap is None:
-        ret["result"] = True if not __opts__["test"] else None
-        ret["comment"] = "The configmap does not exist"
-        return ret
+        if configmap is None:
+            ret["result"] = True
+            ret["comment"] = "The configmap does not exist"
+            return ret
 
-    if __opts__["test"]:
-        ret["comment"] = "The configmap is going to be deleted"
-        ret["result"] = None
-        return ret
+        if __opts__["test"]:
+            ret["comment"] = "The configmap is going to be deleted"
+            ret["result"] = None
+            ret["changes"] = {"old": "present", "new": "absent"}
+            return ret
 
-    try:
         __salt__["kubernetes.delete_configmap"](
             name, namespace, wait=wait, timeout=timeout, **kwargs
         )
+
+        ret["result"] = True
+        ret["changes"] = {"old": "present", "new": "absent"}
+        ret["comment"] = f"ConfigMap {name} deleted"
+
     except CommandExecutionError as err:
-        log.exception(str(err), exc_info_on_loglevel=logging.DEBUG)
+        log.error(str(err), exc_info_on_loglevel=logging.DEBUG)
         ret["result"] = False
         ret["comment"] = str(err)
-        return ret
-
-    ret["result"] = True
-    ret["changes"] = {"kubernetes.configmap": {"new": "absent", "old": "present"}}
-    ret["comment"] = "ConfigMap deleted"
+        ret["changes"] = {}
 
     return ret
 
@@ -1079,7 +1107,7 @@ def configmap_present(
     """
     Ensures that the named configmap is present inside of the specified namespace
     with the given data.
-    If the configmap exists it will be replaced.
+    If the configmap exists, it will be patched with the desired state.
 
     name
         The name of the configmap.
@@ -1138,18 +1166,32 @@ def configmap_present(
 
     try:
         configmap = __salt__["kubernetes.show_configmap"](name, namespace, **kwargs)
-    except CommandExecutionError as err:
-        log.exception(str(err), exc_info_on_loglevel=logging.DEBUG)
-        ret["result"] = False
-        ret["comment"] = str(err)
-        return ret
 
-    if configmap is None:
-        if __opts__["test"]:
-            ret["result"] = None
-            ret["comment"] = "The configmap is going to be created"
-            return ret
-        try:
+        if configmap is None:
+            if __opts__["test"]:
+                ret["result"] = None
+                ret["comment"] = "The configmap is going to be created"
+                try:
+                    dry_run_result = __salt__["kubernetes.create_configmap"](
+                        name=name,
+                        namespace=namespace,
+                        data=data,
+                        source=source,
+                        template=template,
+                        saltenv=__env__,
+                        template_context=template_context,
+                        dry_run=True,
+                        **kwargs,
+                    )
+                    ret["changes"] = {"old": {}, "new": dry_run_result}
+                except CommandExecutionError as err:
+                    ret["result"] = None
+                    ret["comment"] = (
+                        "The configmap is going to be created. "
+                        f"Dry run failed, possibly due to dependencies not created yet: {err}"
+                    )
+                return ret
+
             res = __salt__["kubernetes.create_configmap"](
                 name=name,
                 namespace=namespace,
@@ -1162,41 +1204,75 @@ def configmap_present(
                 timeout=timeout,
                 **kwargs,
             )
-        except CommandExecutionError as err:
-            log.exception(str(err), exc_info_on_loglevel=logging.DEBUG)
-            ret["result"] = False
-            ret["comment"] = str(err)
+            ret["result"] = True
+            ret["changes"] = {"old": {}, "new": res}
+            ret["comment"] = "ConfigMap created"
             return ret
-        ret["changes"][f"{namespace}.{name}"] = {"old": {}, "new": res}
-    else:
+
+        # ConfigMap exists — build the patch object
+        if source:
+            patch_kwargs = {
+                "source": source,
+                "template": template,
+                "template_context": template_context,
+            }
+        else:
+            patch_obj = {}
+            if data:
+                patch_obj["data"] = data
+            patch_kwargs = {"patch": patch_obj}
+
         if __opts__["test"]:
+            try:
+                res = __salt__["kubernetes.patch_configmap"](
+                    name,
+                    namespace,
+                    dry_run=True,
+                    **patch_kwargs,
+                    **kwargs,
+                )
+            except CommandExecutionError as err:
+                ret["result"] = None
+                ret["comment"] = (
+                    "The configmap is going to be updated. "
+                    f"Dry run failed, possibly due to dependencies not created yet: {err}"
+                )
+                return ret
+
+            if res == configmap:
+                ret["result"] = True
+                ret["comment"] = "The configmap is already in the desired state"
+                return ret
+
             ret["result"] = None
-            ret["comment"] = "The configmap is going to be replaced"
+            ret["comment"] = "The configmap is going to be updated"
+            ret["changes"] = {"old": configmap, "new": res}
             return ret
 
-        log.info("Forcing the recreation of the service")
-        ret["comment"] = "The configmap is already present. Forcing recreation"
-        try:
-            res = __salt__["kubernetes.replace_configmap"](
-                name=name,
-                namespace=namespace,
-                data=data,
-                source=source,
-                template=template,
-                saltenv=__env__,
-                template_context=template_context,
-                wait=wait,
-                timeout=timeout,
-                **kwargs,
-            )
-        except CommandExecutionError as err:
-            log.exception(str(err), exc_info_on_loglevel=logging.DEBUG)
-            ret["result"] = False
-            ret["comment"] = str(err)
+        res = __salt__["kubernetes.patch_configmap"](
+            name,
+            namespace,
+            wait=wait,
+            timeout=timeout,
+            **patch_kwargs,
+            **kwargs,
+        )
+
+        if res == configmap:
+            ret["result"] = True
+            ret["comment"] = "The configmap is already in the desired state"
             return ret
 
-    ret["changes"] = {"data": res["data"]}
-    ret["result"] = True
+        ret["changes"] = {"old": configmap, "new": res}
+        ret["result"] = True
+        ret["comment"] = "ConfigMap updated"
+
+    except CommandExecutionError as err:
+        log.error(str(err), exc_info_on_loglevel=logging.DEBUG)
+        ret["result"] = False
+        ret["comment"] = str(err)
+        ret["changes"] = {}
+
     return ret
 
 
@@ -1232,33 +1308,30 @@ def pod_absent(name, namespace="default", wait=False, timeout=60, **kwargs):
 
     try:
         pod = __salt__["kubernetes.show_pod"](name, namespace, **kwargs)
-    except CommandExecutionError as err:
-        log.exception(str(err), exc_info_on_loglevel=logging.DEBUG)
-        ret["result"] = False
-        ret["comment"] = str(err)
-        return ret
 
-    if pod is None:
-        ret["result"] = True if not __opts__["test"] else None
-        ret["comment"] = "The pod does not exist"
-        return ret
+        if pod is None:
+            ret["result"] = True
+            ret["comment"] = "The pod does not exist"
+            return ret
 
-    if __opts__["test"]:
-        ret["comment"] = "The pod is going to be deleted"
-        ret["result"] = None
-        return ret
+        if __opts__["test"]:
+            ret["comment"] = "The pod is going to be deleted"
+            ret["result"] = None
+            ret["changes"] = {"old": "present", "new": "absent"}
+            return ret
 
-    try:
         __salt__["kubernetes.delete_pod"](name, namespace, wait=wait, timeout=timeout, **kwargs)
+
+        ret["result"] = True
+        ret["changes"] = {"old": "present", "new": "absent"}
+        ret["comment"] = f"Pod {name} deleted"
+
     except CommandExecutionError as err:
-        log.exception(str(err), exc_info_on_loglevel=logging.DEBUG)
+        log.error(str(err), exc_info_on_loglevel=logging.DEBUG)
         ret["result"] = False
         ret["comment"] = str(err)
-        return ret
+        ret["changes"] = {}
 
-    ret["result"] = True
-    ret["changes"] = {"kubernetes.pod": {"new": "absent", "old": "present"}}
-    ret["comment"] = "Pod deleted"
     return ret
 
 
@@ -1277,9 +1350,12 @@ def pod_present(
     """
     Ensures that the named pod is present inside of the specified
     namespace with the given metadata and spec.
-    salt is currently unable to replace a pod without
-    deleting it. Please perform the removal of the pod requiring
-    the 'pod_absent' state if this is the desired behaviour.
+
+    .. note::
+        Pods are immutable once created. If the pod already exists, this state
+        will report success without changes. To update a pod, first remove it
+        with ``pod_absent`` and then recreate it. For managed workloads,
+        consider using ``deployment_present`` instead.
 
     name
         The name of the pod.
@@ -1345,18 +1421,13 @@ def pod_present(
 
     try:
         pod = __salt__["kubernetes.show_pod"](name, namespace, **kwargs)
-    except CommandExecutionError as err:
-        log.exception(str(err), exc_info_on_loglevel=logging.DEBUG)
-        ret["result"] = False
-        ret["comment"] = str(err)
-        return ret
 
-    if pod is None:
-        if __opts__["test"]:
-            ret["result"] = None
-            ret["comment"] = "The pod is going to be created"
-            return ret
-        try:
+        if pod is None:
+            if __opts__["test"]:
+                ret["result"] = None
+                ret["comment"] = "The pod is going to be created"
+                return ret
+
             res = __salt__["kubernetes.create_pod"](
                 name=name,
                 namespace=namespace,
@@ -1370,28 +1441,25 @@ def pod_present(
                 timeout=timeout,
                 **kwargs,
             )
-        except CommandExecutionError as err:
-            log.exception(str(err), exc_info_on_loglevel=logging.DEBUG)
-            ret["result"] = False
-            ret["comment"] = str(err)
-            return ret
-        ret["changes"][f"{namespace}.{name}"] = {"old": {}, "new": res}
-    else:
-        if __opts__["test"]:
-            ret["result"] = None
+            ret["result"] = True
+            ret["changes"] = {"old": {}, "new": res}
+            ret["comment"] = "Pod created"
             return ret
 
-        # TODO: fix replace_namespaced_pod validation issues
+        # Pod already exists — pods are immutable, report as already present
+        ret["result"] = True
         ret["comment"] = (
-            "salt is currently unable to replace a pod without "
-            "deleting it. Please perform the removal of the pod requiring "
-            "the 'pod_absent' state if this is the desired behaviour."
+            "The pod already exists. Pods are immutable once created. "
+            "To update, remove with pod_absent first, then recreate. "
+            "For managed workloads, consider using deployment_present instead."
         )
-        ret["result"] = False
-        return ret
 
-    ret["changes"] = {"metadata": metadata, "spec": spec}
-    ret["result"] = True
+    except CommandExecutionError as err:
+        log.error(str(err), exc_info_on_loglevel=logging.DEBUG)
+        ret["result"] = False
+        ret["comment"] = str(err)
+        ret["changes"] = {}
+
     return ret
 
 
@@ -1418,33 +1486,29 @@ def node_label_absent(name, node, **kwargs):
 
     try:
         labels = __salt__["kubernetes.node_labels"](node, **kwargs)
-    except CommandExecutionError as err:
-        log.exception(str(err), exc_info_on_loglevel=logging.DEBUG)
-        ret["result"] = False
-        ret["comment"] = str(err)
-        return ret
 
-    if name not in labels:
-        ret["result"] = True if not __opts__["test"] else None
-        ret["comment"] = "The label does not exist"
-        return ret
+        if name not in labels:
+            ret["result"] = True
+            ret["comment"] = "The label does not exist"
+            return ret
 
-    if __opts__["test"]:
-        ret["comment"] = "The label is going to be deleted"
-        ret["result"] = None
-        return ret
+        if __opts__["test"]:
+            ret["comment"] = "The label is going to be deleted"
+            ret["result"] = None
+            ret["changes"] = {"old": "present", "new": "absent"}
+            return ret
 
-    try:
         __salt__["kubernetes.node_remove_label"](node_name=node, label_name=name, **kwargs)
+
+        ret["result"] = True
+        ret["changes"] = {"old": "present", "new": "absent"}
+        ret["comment"] = "Label removed from node"
+
     except CommandExecutionError as err:
-        log.exception(str(err), exc_info_on_loglevel=logging.DEBUG)
+        log.error(str(err), exc_info_on_loglevel=logging.DEBUG)
         ret["result"] = False
         ret["comment"] = str(err)
-        return ret
-
-    ret["result"] = True
-    ret["changes"] = {"kubernetes.node_label": {"new": "absent", "old": "present"}}
-    ret["comment"] = "Label removed from node"
+        ret["changes"] = {}
 
     return ret
 
@@ -1472,45 +1536,39 @@ def node_label_folder_absent(name, node, **kwargs):
 
     try:
         labels = __salt__["kubernetes.node_labels"](node, **kwargs)
-    except CommandExecutionError as err:
-        log.exception(str(err), exc_info_on_loglevel=logging.DEBUG)
-        ret["result"] = False
-        ret["comment"] = str(err)
-        return ret
 
-    folder = name.strip("/") + "/"
-    labels_to_drop = []
-    new_labels = []
-    for label in labels:
-        if label.startswith(folder):
-            labels_to_drop.append(label)
-        else:
-            new_labels.append(label)
+        folder = name.strip("/") + "/"
+        labels_to_drop = []
+        new_labels = []
+        for label in labels:
+            if label.startswith(folder):
+                labels_to_drop.append(label)
+            else:
+                new_labels.append(label)
 
-    if not labels_to_drop:
-        ret["result"] = True if not __opts__["test"] else None
-        ret["comment"] = "The label folder does not exist"
-        return ret
-
-    if __opts__["test"]:
-        ret["comment"] = "The label folder is going to be deleted"
-        ret["result"] = None
-        return ret
-
-    for label in labels_to_drop:
-        try:
-            __salt__["kubernetes.node_remove_label"](node_name=node, label_name=label, **kwargs)
-        except CommandExecutionError as err:
-            log.exception(str(err), exc_info_on_loglevel=logging.DEBUG)
-            ret["result"] = False
-            ret["comment"] = str(err)
+        if not labels_to_drop:
+            ret["result"] = True
+            ret["comment"] = "The label folder does not exist"
             return ret
 
-    ret["result"] = True
-    ret["changes"] = {
-        "kubernetes.node_label_folder_absent": {"old": list(labels), "new": new_labels}
-    }
-    ret["comment"] = "Label folder removed from node"
+        if __opts__["test"]:
+            ret["comment"] = "The label folder is going to be deleted"
+            ret["result"] = None
+            ret["changes"] = {"old": list(labels), "new": new_labels}
+            return ret
+
+        for label in labels_to_drop:
+            __salt__["kubernetes.node_remove_label"](node_name=node, label_name=label, **kwargs)
+
+        ret["result"] = True
+        ret["changes"] = {"old": list(labels), "new": new_labels}
+        ret["comment"] = "Label folder removed from node"
+
+    except CommandExecutionError as err:
+        log.error(str(err), exc_info_on_loglevel=logging.DEBUG)
+        ret["result"] = False
+        ret["comment"] = str(err)
+        ret["changes"] = {}
 
     return ret
 
@@ -1543,52 +1601,50 @@ def node_label_present(name, node, value, **kwargs):
 
     try:
         labels = __salt__["kubernetes.node_labels"](node, **kwargs)
-    except CommandExecutionError as err:
-        log.exception(str(err), exc_info_on_loglevel=logging.DEBUG)
-        ret["result"] = False
-        ret["comment"] = str(err)
-        return ret
 
-    if name not in labels:
-        if __opts__["test"]:
-            ret["result"] = None
-            ret["comment"] = "The label is going to be set"
-            return ret
-        try:
+        if name not in labels:
+            if __opts__["test"]:
+                ret["result"] = None
+                ret["comment"] = "The label is going to be set"
+                old_labels = copy.copy(labels)
+                new_labels = copy.copy(labels)
+                new_labels[name] = value
+                ret["changes"] = {"old": old_labels, "new": new_labels}
+                return ret
+
             __salt__["kubernetes.node_add_label"](
                 label_name=name, label_value=value, node_name=node, **kwargs
             )
-        except CommandExecutionError as err:
-            log.exception(str(err), exc_info_on_loglevel=logging.DEBUG)
-            ret["result"] = False
-            ret["comment"] = str(err)
-            return ret
 
-    elif labels[name] == value:
-        ret["result"] = True
-        ret["comment"] = "The label is already set and has the specified value"
-        return ret
-    else:
-        if __opts__["test"]:
-            ret["result"] = None
-            ret["comment"] = "The label is going to be updated"
+        elif labels[name] == value:
+            ret["result"] = True
+            ret["comment"] = "The label is already set and has the specified value"
             return ret
+        else:
+            if __opts__["test"]:
+                ret["result"] = None
+                ret["comment"] = "The label is going to be updated"
+                old_labels = copy.copy(labels)
+                new_labels = copy.copy(labels)
+                new_labels[name] = value
+                ret["changes"] = {"old": old_labels, "new": new_labels}
+                return ret
 
-        ret["comment"] = "The label is already set, changing the value"
-        try:
+            ret["comment"] = "The label is already set, changing the value"
             __salt__["kubernetes.node_add_label"](
                 node_name=node, label_name=name, label_value=value, **kwargs
             )
-        except CommandExecutionError as err:
-            log.exception(str(err), exc_info_on_loglevel=logging.DEBUG)
-            ret["result"] = False
-            ret["comment"] = str(err)
-            return ret
 
-    old_labels = copy.copy(labels)
-    labels[name] = value
+        old_labels = copy.copy(labels)
+        labels[name] = value
 
-    ret["changes"][f"{node}.{name}"] = {"old": old_labels, "new": labels}
-    ret["result"] = True
+        ret["changes"] = {"old": old_labels, "new": labels}
+        ret["result"] = True
+
+    except CommandExecutionError as err:
+        log.error(str(err), exc_info_on_loglevel=logging.DEBUG)
+        ret["result"] = False
+        ret["comment"] = str(err)
+        ret["changes"] = {}
 
     return ret

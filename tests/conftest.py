@@ -18,7 +18,7 @@ log = logging.getLogger(__name__)
 # Some clouds may have different supported versions
 K8S_VERSIONS = [
     "v1.28.15",
-    "v1.32.0",
+    "v1.35.0",
 ]  # pragma: no cover
 
 # This swallows all logging to stdout.

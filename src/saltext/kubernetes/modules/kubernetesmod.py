@@ -1,4 +1,3 @@
-# pylint: disable=raise-missing-from
 """
 Module for handling kubernetes calls.
 
@@ -148,7 +147,7 @@ def _cleanup(**kwargs):
                 os.unlink(kubeconfig)
             except OSError as err:
                 if err.errno != errno.ENOENT:
-                    log.exception(err)
+                    log.error(str(err), exc_info_on_loglevel=logging.DEBUG)
 
 
 def ping(**kwargs):
@@ -168,7 +167,10 @@ def ping(**kwargs):
         api_response = api_instance.get_api_resources()
         return bool(api_response and hasattr(api_response, "resources") and api_response.resources)
     except (ApiException, HTTPError):
-        log.exception("Exception when calling CoreV1Api->get_api_resources")
+        log.error(
+            "Exception when calling CoreV1Api->get_api_resources",
+            exc_info_on_loglevel=logging.DEBUG,
+        )
         return False
     finally:
         _cleanup(**cfg)
@@ -189,12 +191,15 @@ def nodes(**kwargs):
         api_instance = kubernetes.client.CoreV1Api()
         api_response = api_instance.list_node()
 
-        return [k8s_node["metadata"]["name"] for k8s_node in api_response.to_dict().get("items")]
+        return [
+            k8s_node["metadata"]["name"]
+            for k8s_node in ApiClient().sanitize_for_serialization(api_response).get("items", [])
+        ]
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
             return []
-        log.exception("Exception when calling CoreV1Api->list_node")
-        raise CommandExecutionError(exc)
+        log.error("Exception when calling CoreV1Api->list_node", exc_info_on_loglevel=logging.DEBUG)
+        raise CommandExecutionError(exc) from exc
     finally:
         _cleanup(**cfg)
 
@@ -216,14 +221,14 @@ def node(name, **kwargs):
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
             return None
-        log.exception("Exception when calling CoreV1Api->list_node")
-        raise CommandExecutionError(exc)
+        log.error("Exception when calling CoreV1Api->list_node", exc_info_on_loglevel=logging.DEBUG)
+        raise CommandExecutionError(exc) from exc
     finally:
         _cleanup(**cfg)
 
     for k8s_node in api_response.items:
         if k8s_node.metadata.name == name:
-            return k8s_node.to_dict()
+            return ApiClient().sanitize_for_serialization(k8s_node)
 
     return None
 
@@ -286,8 +291,10 @@ def node_add_label(node_name, label_name, label_value, **kwargs):
         api_response = api_instance.patch_node(node_name, body)
         return api_response
     except (ApiException, HTTPError) as exc:
-        log.exception("Exception when calling CoreV1Api->patch_node")
-        raise CommandExecutionError(str(exc))
+        log.error(
+            "Exception when calling CoreV1Api->patch_node", exc_info_on_loglevel=logging.DEBUG
+        )
+        raise CommandExecutionError(str(exc)) from exc
     finally:
         _cleanup(**cfg)
 
@@ -319,8 +326,10 @@ def node_remove_label(node_name, label_name, **kwargs):
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
             raise CommandExecutionError(f"Node {node_name} not found") from exc
-        log.exception("Exception when calling CoreV1Api->patch_node")
-        raise CommandExecutionError(exc)
+        log.error(
+            "Exception when calling CoreV1Api->patch_node", exc_info_on_loglevel=logging.DEBUG
+        )
+        raise CommandExecutionError(exc) from exc
     finally:
         _cleanup(**cfg)
 
@@ -340,12 +349,17 @@ def namespaces(**kwargs):
         api_instance = kubernetes.client.CoreV1Api()
         api_response = api_instance.list_namespace()
 
-        return [nms["metadata"]["name"] for nms in api_response.to_dict().get("items")]
+        return [
+            nms["metadata"]["name"]
+            for nms in ApiClient().sanitize_for_serialization(api_response).get("items", [])
+        ]
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
             return []
-        log.exception("Exception when calling CoreV1Api->list_namespace")
-        raise CommandExecutionError(exc)
+        log.error(
+            "Exception when calling CoreV1Api->list_namespace", exc_info_on_loglevel=logging.DEBUG
+        )
+        raise CommandExecutionError(exc) from exc
     finally:
         _cleanup(**cfg)
 
@@ -369,14 +383,17 @@ def deployments(namespace="default", **kwargs):
         api_instance = kubernetes.client.AppsV1Api()
         api_response = api_instance.list_namespaced_deployment(namespace)
 
-        serialized_response = kubernetes.client.ApiClient().sanitize_for_serialization(api_response)
+        serialized_response = ApiClient().sanitize_for_serialization(api_response)
         items = serialized_response.get("items") or []
         return [dep["metadata"]["name"] for dep in items]
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
             return []
-        log.exception("Exception when calling AppsV1Api->list_namespaced_deployment")
-        raise CommandExecutionError(exc)
+        log.error(
+            "Exception in call to AppsV1Api->list_namespaced_deployment",
+            exc_info_on_loglevel=logging.DEBUG,
+        )
+        raise CommandExecutionError(exc) from exc
     finally:
         _cleanup(**cfg)
 
@@ -400,12 +417,18 @@ def services(namespace="default", **kwargs):
         api_instance = kubernetes.client.CoreV1Api()
         api_response = api_instance.list_namespaced_service(namespace)
 
-        return [srv["metadata"]["name"] for srv in api_response.to_dict().get("items")]
+        return [
+            srv["metadata"]["name"]
+            for srv in ApiClient().sanitize_for_serialization(api_response).get("items", [])
+        ]
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
             return []
-        log.exception("Exception when calling CoreV1Api->list_namespaced_service")
-        raise CommandExecutionError(exc)
+        log.error(
+            "Exception when calling CoreV1Api->list_namespaced_service",
+            exc_info_on_loglevel=logging.DEBUG,
+        )
+        raise CommandExecutionError(exc) from exc
     finally:
         _cleanup(**cfg)
 
@@ -428,12 +451,18 @@ def pods(namespace="default", **kwargs):
     try:
         api_instance = kubernetes.client.CoreV1Api()
         api_response = api_instance.list_namespaced_pod(namespace)
-        return [pod["metadata"]["name"] for pod in api_response.to_dict().get("items", [])]
+        return [
+            pod["metadata"]["name"]
+            for pod in ApiClient().sanitize_for_serialization(api_response).get("items", [])
+        ]
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
             return []  # Return empty list for nonexistent namespace
-        log.exception("Exception when calling CoreV1Api->list_namespaced_pod")
-        raise CommandExecutionError(exc)
+        log.error(
+            "Exception when calling CoreV1Api->list_namespaced_pod",
+            exc_info_on_loglevel=logging.DEBUG,
+        )
+        raise CommandExecutionError(exc) from exc
     finally:
         _cleanup(**cfg)
 
@@ -457,12 +486,18 @@ def secrets(namespace="default", **kwargs):
         api_instance = kubernetes.client.CoreV1Api()
         api_response = api_instance.list_namespaced_secret(namespace)
 
-        return [secret["metadata"]["name"] for secret in api_response.to_dict().get("items")]
+        return [
+            secret["metadata"]["name"]
+            for secret in ApiClient().sanitize_for_serialization(api_response).get("items", [])
+        ]
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
             return []
-        log.exception("Exception when calling CoreV1Api->list_namespaced_secret")
-        raise CommandExecutionError(exc)
+        log.error(
+            "Exception when calling CoreV1Api->list_namespaced_secret",
+            exc_info_on_loglevel=logging.DEBUG,
+        )
+        raise CommandExecutionError(exc) from exc
     finally:
         _cleanup(**cfg)
 
@@ -487,13 +522,17 @@ def configmaps(namespace="default", **kwargs):
         api_response = api_instance.list_namespaced_config_map(namespace)
 
         return [
-            configmap["metadata"]["name"] for configmap in api_response.to_dict().get("items", [])
+            configmap["metadata"]["name"]
+            for configmap in ApiClient().sanitize_for_serialization(api_response).get("items", [])
         ]
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
             return []  # Return empty list for nonexistent namespace
-        log.exception("Exception when calling CoreV1Api->list_namespaced_config_map")
-        raise CommandExecutionError(exc)
+        log.error(
+            "Exception when calling CoreV1Api->list_namespaced_config_map",
+            exc_info_on_loglevel=logging.DEBUG,
+        )
+        raise CommandExecutionError(exc) from exc
     finally:
         _cleanup(**cfg)
 
@@ -524,8 +563,11 @@ def show_deployment(name, namespace="default", **kwargs):
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
             return None
-        log.exception("Exception when calling AppsV1Api->read_namespaced_deployment")
-        raise CommandExecutionError(exc)
+        log.error(
+            "Exception in call to AppsV1Api->read_namespaced_deployment",
+            exc_info_on_loglevel=logging.DEBUG,
+        )
+        raise CommandExecutionError(exc) from exc
     finally:
         _cleanup(**cfg)
 
@@ -552,12 +594,15 @@ def show_service(name, namespace="default", **kwargs):
         api_instance = kubernetes.client.CoreV1Api()
         api_response = api_instance.read_namespaced_service(name, namespace)
 
-        return api_response.to_dict()
+        return ApiClient().sanitize_for_serialization(api_response)
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
             return None
-        log.exception("Exception when calling CoreV1Api->read_namespaced_service")
-        raise CommandExecutionError(exc)
+        log.error(
+            "Exception when calling CoreV1Api->read_namespaced_service",
+            exc_info_on_loglevel=logging.DEBUG,
+        )
+        raise CommandExecutionError(exc) from exc
     finally:
         _cleanup(**cfg)
 
@@ -584,12 +629,15 @@ def show_pod(name, namespace="default", **kwargs):
         api_instance = kubernetes.client.CoreV1Api()
         api_response = api_instance.read_namespaced_pod(name, namespace)
 
-        return api_response.to_dict()
+        return ApiClient().sanitize_for_serialization(api_response)
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
             return None
-        log.exception("Exception when calling CoreV1Api->read_namespaced_pod")
-        raise CommandExecutionError(exc)
+        log.error(
+            "Exception when calling CoreV1Api->read_namespaced_pod",
+            exc_info_on_loglevel=logging.DEBUG,
+        )
+        raise CommandExecutionError(exc) from exc
     finally:
         _cleanup(**cfg)
 
@@ -612,14 +660,16 @@ def show_namespace(name, **kwargs):
     try:
         api_instance = kubernetes.client.CoreV1Api()
         api_response = api_instance.read_namespace(name)
-        return api_response.to_dict()
+        return ApiClient().sanitize_for_serialization(api_response)
     except ApiException as exc:
         if exc.status == 404:
             return None
-        log.exception("Exception when calling CoreV1Api->read_namespace")
+        log.error(
+            "Exception when calling CoreV1Api->read_namespace", exc_info_on_loglevel=logging.DEBUG
+        )
         raise CommandExecutionError(exc) from exc
     except HTTPError as exc:
-        log.exception("HTTP error occurred")
+        log.error("HTTP error occurred", exc_info_on_loglevel=logging.DEBUG)
         raise CommandExecutionError(exc) from exc
     finally:
         _cleanup(**cfg)
@@ -652,7 +702,7 @@ def show_secret(name, namespace="default", decode=False, **kwargs):
     try:
         api_instance = kubernetes.client.CoreV1Api()
         api_response = api_instance.read_namespaced_secret(name, namespace)
-        response_dict = api_response.to_dict()
+        response_dict = ApiClient().sanitize_for_serialization(api_response)
 
         if response_dict.get("data") and decode:
             decoded_data = {}
@@ -667,8 +717,11 @@ def show_secret(name, namespace="default", decode=False, **kwargs):
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
             return None
-        log.exception("Exception when calling CoreV1Api->read_namespaced_secret")
-        raise CommandExecutionError(exc)
+        log.error(
+            "Exception when calling CoreV1Api->read_namespaced_secret",
+            exc_info_on_loglevel=logging.DEBUG,
+        )
+        raise CommandExecutionError(exc) from exc
     finally:
         _cleanup(**cfg)
 
@@ -695,12 +748,15 @@ def show_configmap(name, namespace="default", **kwargs):
         api_instance = kubernetes.client.CoreV1Api()
         api_response = api_instance.read_namespaced_config_map(name, namespace)
 
-        return api_response.to_dict()
+        return ApiClient().sanitize_for_serialization(api_response)
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
             return None
-        log.exception("Exception when calling CoreV1Api->read_namespaced_config_map")
-        raise CommandExecutionError(exc)
+        log.error(
+            "Exception when calling CoreV1Api->read_namespaced_config_map",
+            exc_info_on_loglevel=logging.DEBUG,
+        )
+        raise CommandExecutionError(exc) from exc
     finally:
         _cleanup(**cfg)
 
@@ -750,8 +806,11 @@ def delete_deployment(name, namespace="default", wait=False, timeout=60, **kwarg
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
             return None
-        log.exception("Exception when calling AppsV1Api->delete_namespaced_deployment")
-        raise CommandExecutionError(exc)
+        log.error(
+            "Exception in call to AppsV1Api->delete_namespaced_deployment",
+            exc_info_on_loglevel=logging.DEBUG,
+        )
+        raise CommandExecutionError(exc) from exc
     finally:
         _cleanup(**cfg)
 
@@ -795,13 +854,16 @@ def delete_service(name, namespace="default", wait=False, timeout=60, **kwargs):
             ):
                 raise CommandExecutionError(f"Timeout waiting for service {name} to be deleted")
 
-        return api_response.to_dict()
+        return ApiClient().sanitize_for_serialization(api_response)
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
             return None
         else:
-            log.exception("Exception when calling CoreV1Api->delete_namespaced_service")
-            raise CommandExecutionError(exc)
+            log.error(
+                "Exception when calling CoreV1Api->delete_namespaced_service",
+                exc_info_on_loglevel=logging.DEBUG,
+            )
+            raise CommandExecutionError(exc) from exc
     finally:
         _cleanup(**cfg)
 
@@ -846,13 +908,16 @@ def delete_pod(name, namespace="default", wait=False, timeout=60, **kwargs):
             ):
                 raise CommandExecutionError(f"Timeout waiting for pod {name} to be deleted")
 
-        return api_response.to_dict()
+        return ApiClient().sanitize_for_serialization(api_response)
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
             return None
         else:
-            log.exception("Exception when calling CoreV1Api->delete_namespaced_pod")
-            raise CommandExecutionError(exc)
+            log.error(
+                "Exception when calling CoreV1Api->delete_namespaced_pod",
+                exc_info_on_loglevel=logging.DEBUG,
+            )
+            raise CommandExecutionError(exc) from exc
     finally:
         _cleanup(**cfg)
 
@@ -894,16 +959,18 @@ def delete_namespace(name, wait=False, timeout=60, **kwargs):
             ):
                 raise CommandExecutionError(f"Timeout waiting for namespace {name} to be deleted")
 
-        return api_response.to_dict()
+        return ApiClient().sanitize_for_serialization(api_response)
     except ApiException as exc:
         if exc.status == 404:
             return None
         if exc.status == 403:
             raise CommandExecutionError(f"Cannot delete namespace {name}: {exc.reason}") from exc
-        log.exception("Exception when calling CoreV1Api->delete_namespace")
+        log.error(
+            "Exception when calling CoreV1Api->delete_namespace", exc_info_on_loglevel=logging.DEBUG
+        )
         raise CommandExecutionError(exc) from exc
     except HTTPError as exc:
-        log.exception("HTTP error occurred")
+        log.error("HTTP error occurred", exc_info_on_loglevel=logging.DEBUG)
         raise CommandExecutionError(exc) from exc
     finally:
         _cleanup(**cfg)
@@ -951,12 +1018,15 @@ def delete_secret(name, namespace="default", wait=False, timeout=60, **kwargs):
             ):
                 raise CommandExecutionError(f"Timeout waiting for secret {name} to be deleted")
 
-        return api_response.to_dict()
+        return ApiClient().sanitize_for_serialization(api_response)
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
             return None
-        log.exception("Exception when calling CoreV1Api->delete_namespaced_secret")
-        raise CommandExecutionError(exc)
+        log.error(
+            "Exception when calling CoreV1Api->delete_namespaced_secret",
+            exc_info_on_loglevel=logging.DEBUG,
+        )
+        raise CommandExecutionError(exc) from exc
     finally:
         _cleanup(**cfg)
 
@@ -1003,13 +1073,16 @@ def delete_configmap(name, namespace="default", wait=False, timeout=60, **kwargs
             ):
                 raise CommandExecutionError(f"Timeout waiting for configmap {name} to be deleted")
 
-        return api_response.to_dict()
+        return ApiClient().sanitize_for_serialization(api_response)
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
             return None
         else:
-            log.exception("Exception when calling CoreV1Api->delete_namespaced_config_map")
-            raise CommandExecutionError(exc)
+            log.error(
+                "Exception when calling CoreV1Api->delete_namespaced_config_map",
+                exc_info_on_loglevel=logging.DEBUG,
+            )
+            raise CommandExecutionError(exc) from exc
     finally:
         _cleanup(**cfg)
 
@@ -1099,10 +1172,9 @@ def create_deployment(
 
     try:
         api_instance = kubernetes.client.AppsV1Api()
-        if dry_run:
-            api_response = api_instance.create_namespaced_deployment(namespace, body, dry_run="All")
-        else:
-            api_response = api_instance.create_namespaced_deployment(namespace, body)
+        api_response = api_instance.create_namespaced_deployment(
+            namespace, body, dry_run="All" if dry_run else None
+        )
 
         if wait:
             if not _wait_for_resource_status(
@@ -1119,8 +1191,11 @@ def create_deployment(
                 raise CommandExecutionError(f"Deployment {namespace}/{name} not found") from exc
             if exc.status == 409:
                 raise CommandExecutionError(f"Deployment {name} already exists") from exc
-        log.exception("Exception when calling AppsV1Api->create_namespaced_deployment")
-        raise CommandExecutionError(exc)
+        log.error(
+            "Exception in call to AppsV1Api->create_namespaced_deployment",
+            exc_info_on_loglevel=logging.DEBUG,
+        )
+        raise CommandExecutionError(exc) from exc
     finally:
         _cleanup(**cfg)
 
@@ -1222,15 +1297,18 @@ def create_pod(
             ):
                 raise CommandExecutionError(f"Timeout waiting for pod {name} to become ready")
 
-        return api_response.to_dict()
+        return ApiClient().sanitize_for_serialization(api_response)
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException):
             if exc.status == 404:
                 raise CommandExecutionError(f"Pod {namespace}/{name} not found") from exc
             if exc.status == 409:
                 raise CommandExecutionError(f"Pod {name} already exists") from exc
-        log.exception("Exception when calling CoreV1Api->create_namespaced_pod")
-        raise CommandExecutionError(exc)
+        log.error(
+            "Exception when calling CoreV1Api->create_namespaced_pod",
+            exc_info_on_loglevel=logging.DEBUG,
+        )
+        raise CommandExecutionError(exc) from exc
     finally:
         _cleanup(**cfg)
 
@@ -1244,6 +1322,7 @@ def create_service(
     template=None,
     saltenv=None,
     template_context=None,
+    dry_run=False,
     wait=False,
     timeout=60,
     **kwargs,
@@ -1338,7 +1417,9 @@ def create_service(
 
     try:
         api_instance = kubernetes.client.CoreV1Api()
-        api_response = api_instance.create_namespaced_service(namespace, body)
+        api_response = api_instance.create_namespaced_service(
+            namespace, body, dry_run="All" if dry_run else None
+        )
 
         if wait:
             if not _wait_for_resource_status(
@@ -1346,15 +1427,18 @@ def create_service(
             ):
                 raise CommandExecutionError(f"Timeout waiting for service {name} to become ready")
 
-        return api_response.to_dict()
+        return ApiClient().sanitize_for_serialization(api_response)
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException):
             if exc.status == 404:
                 raise CommandExecutionError(f"Service {namespace}/{name} not found") from exc
             if exc.status == 409:
                 raise CommandExecutionError(f"Service {name} already exists") from exc
-        log.exception("Exception when calling CoreV1Api->create_namespaced_service")
-        raise CommandExecutionError(exc)
+        log.error(
+            "Exception when calling CoreV1Api->create_namespaced_service",
+            exc_info_on_loglevel=logging.DEBUG,
+        )
+        raise CommandExecutionError(exc) from exc
     finally:
         _cleanup(**cfg)
 
@@ -1369,6 +1453,7 @@ def create_secret(
     template_context=None,
     secret_type=None,
     metadata=None,
+    dry_run=False,
     wait=False,
     timeout=60,
     **kwargs,
@@ -1480,7 +1565,9 @@ def create_secret(
 
     try:
         api_instance = kubernetes.client.CoreV1Api()
-        api_response = api_instance.create_namespaced_secret(namespace, body)
+        api_response = api_instance.create_namespaced_secret(
+            namespace, body, dry_run="All" if dry_run else None
+        )
 
         if wait:
             if not _wait_for_resource_status(
@@ -1488,17 +1575,20 @@ def create_secret(
             ):
                 raise CommandExecutionError(f"Timeout waiting for secret {name} to become ready")
 
-        return api_response.to_dict()
+        return ApiClient().sanitize_for_serialization(api_response)
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException):
             if exc.status == 409:
                 raise CommandExecutionError(
                     f"Secret {name} already exists in namespace {namespace}. Use replace_secret to update it."
-                )
+                ) from exc
             if exc.status == 404:
                 raise CommandExecutionError(f"Secret {namespace}/{name} not found") from exc
-            log.exception("Exception when calling CoreV1Api->create_namespaced_secret")
-        raise CommandExecutionError(str(exc))
+            log.error(
+                "Exception when calling CoreV1Api->create_namespaced_secret",
+                exc_info_on_loglevel=logging.DEBUG,
+            )
+        raise CommandExecutionError(str(exc)) from exc
     finally:
         _cleanup(**cfg)
 
@@ -1511,6 +1601,7 @@ def create_configmap(
     template=None,
     saltenv=None,
     template_context=None,
+    dry_run=False,
     wait=False,
     timeout=60,
     **kwargs,
@@ -1597,7 +1688,9 @@ def create_configmap(
 
     try:
         api_instance = kubernetes.client.CoreV1Api()
-        api_response = api_instance.create_namespaced_config_map(namespace, body)
+        api_response = api_instance.create_namespaced_config_map(
+            namespace, body, dry_run="All" if dry_run else None
+        )
 
         if wait:
             if not _wait_for_resource_status(
@@ -1605,15 +1698,18 @@ def create_configmap(
             ):
                 raise CommandExecutionError(f"Timeout waiting for configmap {name} to become ready")
 
-        return api_response.to_dict()
+        return ApiClient().sanitize_for_serialization(api_response)
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException):
             if exc.status == 404:
                 raise CommandExecutionError(f"ConfigMap {namespace}/{name} not found") from exc
             if exc.status == 409:
                 raise CommandExecutionError(f"ConfigMap {name} already exists") from exc
-        log.exception("Exception when calling CoreV1Api->create_namespaced_config_map")
-        raise CommandExecutionError(exc)
+        log.error(
+            "Exception when calling CoreV1Api->create_namespaced_config_map",
+            exc_info_on_loglevel=logging.DEBUG,
+        )
+        raise CommandExecutionError(exc) from exc
     finally:
         _cleanup(**cfg)
 
@@ -1641,16 +1737,18 @@ def create_namespace(name, **kwargs):
     try:
         api_instance = kubernetes.client.CoreV1Api()
         api_response = api_instance.create_namespace(body)
-        return api_response.to_dict()
+        return ApiClient().sanitize_for_serialization(api_response)
     except ApiException as exc:
         if exc.status == 409:
             raise CommandExecutionError(f"Namespace {name} already exists: {exc.reason}") from exc
         if exc.status == 422:
             raise CommandExecutionError(f"Invalid namespace name {name}: {exc.reason}") from exc
-        log.exception("Exception when calling CoreV1Api->create_namespace")
+        log.error(
+            "Exception when calling CoreV1Api->create_namespace", exc_info_on_loglevel=logging.DEBUG
+        )
         raise CommandExecutionError(exc) from exc
     except HTTPError as exc:
-        log.exception("HTTP error occurred")
+        log.error("HTTP error occurred", exc_info_on_loglevel=logging.DEBUG)
         raise CommandExecutionError(exc) from exc
     finally:
         _cleanup(**cfg)
@@ -1750,8 +1848,11 @@ def replace_deployment(
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
             raise CommandExecutionError(f"Deployment {namespace}/{name} not found") from exc
-        log.exception("Exception when calling AppsV1Api->replace_namespaced_deployment")
-        raise CommandExecutionError(exc)
+        log.error(
+            "Exception in call to AppsV1Api->replace_namespaced_deployment",
+            exc_info_on_loglevel=logging.DEBUG,
+        )
+        raise CommandExecutionError(exc) from exc
     finally:
         _cleanup(**cfg)
 
@@ -1826,7 +1927,7 @@ def replace_service(
     .. code-block:: bash
 
         salt '*' kubernetes.replace_service name=my-service \
-            old_service='{"metadata": {"resource_version": "12345"}, "spec": {"cluster_ip": "10.0.0.1"}}' \
+            old_service='{"metadata": {"resourceVersion": "12345"}, "spec": {"clusterIP": "10.0.0.1"}}' \
             metadata='{"labels": {"app": "my-app"}}' \
             spec='{"ports": [{"port": 80, "targetPort": 8080}], "selector": {"app": "my-app"}}' \
             source=/path/to/service.yaml \
@@ -1851,8 +1952,8 @@ def replace_service(
 
     # Some attributes have to be preserved
     # otherwise exceptions will be thrown
-    body.spec.cluster_ip = old_service["spec"]["cluster_ip"]
-    body.metadata.resource_version = old_service["metadata"]["resource_version"]
+    body.spec.cluster_ip = old_service["spec"]["clusterIP"]
+    body.metadata.resource_version = old_service["metadata"]["resourceVersion"]
 
     cfg = _setup_conn(**kwargs)
 
@@ -1866,12 +1967,15 @@ def replace_service(
             ):
                 raise CommandExecutionError(f"Timeout waiting for service {name} to become ready")
 
-        return api_response.to_dict()
+        return ApiClient().sanitize_for_serialization(api_response)
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
             raise CommandExecutionError(f"Service {namespace}/{name} not found") from exc
-        log.exception("Exception when calling CoreV1Api->replace_namespaced_service")
-        raise CommandExecutionError(exc)
+        log.error(
+            "Exception when calling CoreV1Api->replace_namespaced_service",
+            exc_info_on_loglevel=logging.DEBUG,
+        )
+        raise CommandExecutionError(exc) from exc
     finally:
         _cleanup(**cfg)
 
@@ -2012,12 +2116,15 @@ def replace_secret(
             ):
                 raise CommandExecutionError(f"Timeout waiting for secret {name} to be ready")
 
-        return api_response.to_dict()
+        return ApiClient().sanitize_for_serialization(api_response)
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
             raise CommandExecutionError(f"Secret {namespace}/{name} not found") from exc
-        log.exception("Exception when calling CoreV1Api->replace_namespaced_secret")
-        raise CommandExecutionError(str(exc))
+        log.error(
+            "Exception when calling CoreV1Api->replace_namespaced_secret",
+            exc_info_on_loglevel=logging.DEBUG,
+        )
+        raise CommandExecutionError(str(exc)) from exc
     finally:
         _cleanup(**cfg)
 
@@ -2105,12 +2212,311 @@ def replace_configmap(
             ):
                 raise CommandExecutionError(f"Timeout waiting for configmap {name} to be ready")
 
-        return api_response.to_dict()
+        return ApiClient().sanitize_for_serialization(api_response)
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
             raise CommandExecutionError(f"ConfigMap {namespace}/{name} not found") from exc
-        log.exception("Exception when calling CoreV1Api->replace_namespaced_configmap")
-        raise CommandExecutionError(exc)
+        log.error(
+            "Exception when calling CoreV1Api->replace_namespaced_configmap",
+            exc_info_on_loglevel=logging.DEBUG,
+        )
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def patch_service(
+    name,
+    namespace,
+    patch=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    dry_run=False,
+    wait=False,
+    timeout=60,
+    **kwargs,
+):
+    """
+    .. versionadded:: 2.0.0
+
+    Patches an existing service with the provided patch dictionary.
+
+    name
+        The name of the service
+
+    namespace
+        The namespace of the service
+
+    patch
+        A dictionary representing the patch to apply to the service
+
+    source
+        File path to patch definition
+
+    template
+        Template engine to use to render the source file
+
+    saltenv
+        Salt environment to pull the source file from
+
+    template_context
+        Variables to make available in templated files
+
+    dry_run
+        If True, only simulates the patch without applying it (default: False)
+
+    wait
+        Wait for service to become ready (default: False)
+
+    timeout
+        Timeout in seconds to wait for service (default: 60)
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.patch_service \\
+            name=my-service \\
+            namespace=default \\
+            patch='{"spec": {"type": "LoadBalancer"}}'
+    """
+    if source:
+        rendered = __read_and_render_yaml_file(source, template, saltenv, template_context)
+        if not isinstance(rendered, dict):
+            raise CommandExecutionError("The source file did not render to a dictionary")
+        patch = rendered
+
+    if not isinstance(patch, dict):
+        raise CommandExecutionError("Patch must be a dictionary")
+
+    cfg = _setup_conn(**kwargs)
+
+    try:
+        api_instance = kubernetes.client.CoreV1Api()
+        api_response = api_instance.patch_namespaced_service(
+            name, namespace, patch, dry_run="All" if dry_run else None
+        )
+
+        if wait:
+            if not _wait_for_resource_status(
+                api_instance, "service", name, namespace, "ready", timeout
+            ):
+                raise CommandExecutionError(f"Timeout waiting for service {name} to become ready")
+
+        return ApiClient().sanitize_for_serialization(api_response)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            raise CommandExecutionError(f"Service {namespace}/{name} not found") from exc
+        if isinstance(exc, ApiException) and exc.status == 409:
+            raise CommandExecutionError(f"Conflict when patching service {name}") from exc
+        log.error(
+            "Exception in call to CoreV1Api->patch_namespaced_service",
+            exc_info_on_loglevel=logging.DEBUG,
+        )
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def patch_secret(
+    name,
+    namespace,
+    patch=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    dry_run=False,
+    wait=False,
+    timeout=60,
+    **kwargs,
+):
+    """
+    .. versionadded:: 2.0.0
+
+    Patches an existing secret with the provided patch dictionary.
+
+    name
+        The name of the secret
+
+    namespace
+        The namespace of the secret
+
+    patch
+        A dictionary representing the patch to apply to the secret
+
+    source
+        File path to patch definition
+
+    template
+        Template engine to use to render the source file
+
+    saltenv
+        Salt environment to pull the source file from
+
+    template_context
+        Variables to make available in templated files
+
+    dry_run
+        If True, only simulates the patch without applying it (default: False)
+
+    wait
+        Wait for secret to become ready (default: False)
+
+    timeout
+        Timeout in seconds to wait for secret (default: 60)
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.patch_secret \\
+            name=my-secret \\
+            namespace=default \\
+            patch='{"data": {"password": "bmV3cGFzcw=="}}'
+    """
+    if source:
+        rendered = __read_and_render_yaml_file(source, template, saltenv, template_context)
+        if not isinstance(rendered, dict):
+            raise CommandExecutionError("The source file did not render to a dictionary")
+        patch = rendered
+
+    if not isinstance(patch, dict):
+        raise CommandExecutionError("Patch must be a dictionary")
+
+    # Encode secret data values to base64 if not already encoded
+    if "data" in patch and isinstance(patch["data"], dict):
+        encoded_data = {}
+        for key, value in patch["data"].items():
+            value = str(value)
+            if __is_base64(value):
+                encoded_data[key] = value
+            else:
+                encoded_data[key] = base64.b64encode(value.encode("utf-8")).decode("utf-8")
+        patch = {**patch, "data": encoded_data}
+
+    cfg = _setup_conn(**kwargs)
+
+    try:
+        api_instance = kubernetes.client.CoreV1Api()
+        api_response = api_instance.patch_namespaced_secret(
+            name, namespace, patch, dry_run="All" if dry_run else None
+        )
+
+        if wait:
+            if not _wait_for_resource_status(
+                api_instance, "secret", name, namespace, "ready", timeout
+            ):
+                raise CommandExecutionError(f"Timeout waiting for secret {name} to become ready")
+
+        return ApiClient().sanitize_for_serialization(api_response)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            raise CommandExecutionError(f"Secret {namespace}/{name} not found") from exc
+        if isinstance(exc, ApiException) and exc.status == 409:
+            raise CommandExecutionError(f"Conflict when patching secret {name}") from exc
+        log.error(
+            "Exception in call to CoreV1Api->patch_namespaced_secret",
+            exc_info_on_loglevel=logging.DEBUG,
+        )
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def patch_configmap(
+    name,
+    namespace,
+    patch=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    dry_run=False,
+    wait=False,
+    timeout=60,
+    **kwargs,
+):
+    """
+    .. versionadded:: 2.0.0
+
+    Patches an existing configmap with the provided patch dictionary.
+
+    name
+        The name of the configmap
+
+    namespace
+        The namespace of the configmap
+
+    patch
+        A dictionary representing the patch to apply to the configmap
+
+    source
+        File path to patch definition
+
+    template
+        Template engine to use to render the source file
+
+    saltenv
+        Salt environment to pull the source file from
+
+    template_context
+        Variables to make available in templated files
+
+    dry_run
+        If True, only simulates the patch without applying it (default: False)
+
+    wait
+        Wait for configmap to become ready (default: False)
+
+    timeout
+        Timeout in seconds to wait for configmap (default: 60)
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.patch_configmap \\
+            name=my-config \\
+            namespace=default \\
+            patch='{"data": {"key": "new-value"}}'
+    """
+    if source:
+        rendered = __read_and_render_yaml_file(source, template, saltenv, template_context)
+        if not isinstance(rendered, dict):
+            raise CommandExecutionError("The source file did not render to a dictionary")
+        patch = rendered
+
+    if not isinstance(patch, dict):
+        raise CommandExecutionError("Patch must be a dictionary")
+
+    cfg = _setup_conn(**kwargs)
+
+    try:
+        api_instance = kubernetes.client.CoreV1Api()
+        api_response = api_instance.patch_namespaced_config_map(
+            name, namespace, patch, dry_run="All" if dry_run else None
+        )
+
+        if wait:
+            if not _wait_for_resource_status(
+                api_instance, "config_map", name, namespace, "ready", timeout
+            ):
+                raise CommandExecutionError(f"Timeout waiting for configmap {name} to become ready")
+
+        return ApiClient().sanitize_for_serialization(api_response)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            raise CommandExecutionError(f"ConfigMap {namespace}/{name} not found") from exc
+        if isinstance(exc, ApiException) and exc.status == 409:
+            raise CommandExecutionError(f"Conflict when patching configmap {name}") from exc
+        log.error(
+            "Exception in call to CoreV1Api->patch_namespaced_config_map",
+            exc_info_on_loglevel=logging.DEBUG,
+        )
+        raise CommandExecutionError(exc) from exc
     finally:
         _cleanup(**cfg)
 
@@ -2118,7 +2524,7 @@ def replace_configmap(
 def patch_deployment(
     name,
     namespace,
-    patch,
+    patch=None,
     source=None,
     template=None,
     saltenv=None,
@@ -2185,12 +2591,9 @@ def patch_deployment(
 
     try:
         api_instance = kubernetes.client.AppsV1Api()
-        if dry_run:
-            api_response = api_instance.patch_namespaced_deployment(
-                name, namespace, patch, dry_run="All"
-            )
-        else:
-            api_response = api_instance.patch_namespaced_deployment(name, namespace, patch)
+        api_response = api_instance.patch_namespaced_deployment(
+            name, namespace, patch, dry_run="All" if dry_run else None
+        )
 
         if wait:
             if not _wait_for_resource_status(
@@ -2206,8 +2609,11 @@ def patch_deployment(
             raise CommandExecutionError(f"Deployment {namespace}/{name} not found") from exc
         if isinstance(exc, ApiException) and exc.status == 409:
             raise CommandExecutionError(f"Conflict when patching deployment {name}") from exc
-        log.exception("Exception when calling AppsV1Api->patch_namespaced_deployment")
-        raise CommandExecutionError(exc)
+        log.error(
+            "Exception in call to AppsV1Api->patch_namespaced_deployment",
+            exc_info_on_loglevel=logging.DEBUG,
+        )
+        raise CommandExecutionError(exc) from exc
     finally:
         _cleanup(**cfg)
 
@@ -2264,7 +2670,7 @@ def __create_object_body(
     try:
         created_spec = spec_creator(spec)
     except (ValueError, TypeError) as exc:
-        raise CommandExecutionError(f"Invalid {kind} spec: {exc}")
+        raise CommandExecutionError(f"Invalid {kind} spec: {exc}") from exc
 
     return obj_class(
         metadata=__dict_to_object_meta(name, namespace, metadata),
@@ -2396,7 +2802,7 @@ def __dict_to_deployment_spec(spec):
     try:
         pod_spec = __dict_to_pod_spec(template["spec"])
     except (CommandExecutionError, ValueError) as exc:
-        raise CommandExecutionError(f"Invalid pod spec in deployment template: {exc}")
+        raise CommandExecutionError(f"Invalid pod spec in deployment template: {exc}") from exc
 
     # Create pod template
     pod_template = kubernetes.client.V1PodTemplateSpec(
@@ -2412,13 +2818,13 @@ def __dict_to_deployment_spec(spec):
         try:
             processed_spec["replicas"] = int(processed_spec["replicas"])
         except (TypeError, ValueError) as exc:
-            raise CommandExecutionError(f"replicas must be an integer: {exc}")
+            raise CommandExecutionError(f"replicas must be an integer: {exc}") from exc
 
     # Create final spec
     try:
         return V1DeploymentSpec(**processed_spec)
     except (TypeError, ValueError) as exc:
-        raise CommandExecutionError(f"Invalid deployment spec: {exc}")
+        raise CommandExecutionError(f"Invalid deployment spec: {exc}") from exc
 
 
 def __dict_to_pod_spec(spec):
@@ -2481,7 +2887,7 @@ def __dict_to_pod_spec(spec):
                     except (TypeError, ValueError) as exc:
                         raise CommandExecutionError(
                             f"containerPort in container {container_copy['name']} must be an integer: {exc}"
-                        )
+                        ) from exc
                 processed_ports.append(kubernetes.client.V1ContainerPort(**port_copy))
 
         containers.append(kubernetes.client.V1Container(**container_copy))
@@ -2505,7 +2911,7 @@ def __dict_to_pod_spec(spec):
     try:
         return kubernetes.client.V1PodSpec(**processed_spec)
     except (TypeError, ValueError) as exc:
-        raise CommandExecutionError(f"Invalid pod spec: {exc}")
+        raise CommandExecutionError(f"Invalid pod spec: {exc}") from exc
 
 
 def __dict_to_service_spec(spec):
@@ -2550,7 +2956,7 @@ def __dict_to_service_spec(spec):
                     except (TypeError, ValueError) as exc:
                         raise CommandExecutionError(
                             f"Invalid port specification at index {i}: {exc}"
-                        )
+                        ) from exc
                 else:
                     # Verify required fields for port
                     if "port" not in port:
@@ -2561,7 +2967,9 @@ def __dict_to_service_spec(spec):
                     try:
                         port_num = int(port["port"])
                     except (TypeError, ValueError) as exc:
-                        raise CommandExecutionError(f"Invalid port number at index {i}: {exc}")
+                        raise CommandExecutionError(
+                            f"Invalid port number at index {i}: {exc}"
+                        ) from exc
 
                     # Create port object
                     kube_port = kubernetes.client.V1ServicePort(port=port_num)
@@ -2583,7 +2991,7 @@ def __dict_to_service_spec(spec):
                         except (TypeError, ValueError) as exc:
                             raise CommandExecutionError(
                                 f"Invalid nodePort value at index {i}: {exc}"
-                            )
+                            ) from exc
 
                     # Copy remaining port attributes
                     for port_key, port_value in port.items():
@@ -2599,7 +3007,7 @@ def __dict_to_service_spec(spec):
                                 except (TypeError, ValueError) as exc:
                                     raise CommandExecutionError(
                                         f"Invalid {port_key} value at index {i}: {exc}"
-                                    )
+                                    ) from exc
                             if hasattr(kube_port, port_key):
                                 setattr(kube_port, port_key, port_value)
 
@@ -2716,17 +3124,9 @@ def _wait_for_resource_status(
                             if all_containers_ready:
                                 return True
                     elif resource_type == "service":
-                        # For services, check if endpoints exist
-                        endpoints_api = kubernetes.client.CoreV1Api()
-                        try:
-                            endpoints = endpoints_api.read_namespaced_endpoints(name, namespace)
-                            if endpoints and endpoints.subsets:
-                                for subset in endpoints.subsets:
-                                    if subset.addresses:
-                                        return True  # Service has endpoints
-                        except ApiException:
-                            pass
-                        return False  # No endpoints found
+                        # Services are considered ready once they exist and have a clusterIP assigned
+                        if event["object"].spec.cluster_ip:
+                            return True
                     else:
                         return True  # For other resources, assume ready when created
 
@@ -2748,7 +3148,9 @@ def _wait_for_resource_status(
         return False
 
     except (ApiException, HTTPError) as exc:
-        log.exception("Exception when waiting for %s", resource_type)
-        raise CommandExecutionError(exc)
+        log.error(
+            "Exception when waiting for %s", resource_type, exc_info_on_loglevel=logging.DEBUG
+        )
+        raise CommandExecutionError(exc) from exc
     finally:
         w.stop()

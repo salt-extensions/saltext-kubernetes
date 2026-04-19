@@ -153,7 +153,7 @@ def test_create_pod(salt_call_cli, pod):
     assert res.data["metadata"]["namespace"] == pod["namespace"]
     assert res.data["spec"]["containers"][0]["name"] == "nginx"
     assert res.data["spec"]["containers"][0]["image"] == "nginx:latest"
-    assert res.data["spec"]["containers"][0]["ports"][0]["container_port"] == 80
+    assert res.data["spec"]["containers"][0]["ports"][0]["containerPort"] == 80
 
 
 def test_delete_pod(salt_call_cli, pod):
@@ -279,7 +279,7 @@ def test_create_secret(salt_call_cli, secret):
         namespace=secret["namespace"],
         data=secret["data"],
         metadata=secret["metadata"],
-        type=secret["type"],
+        secret_type=secret["type"],
         wait=True,
     )
     assert res.returncode == 0

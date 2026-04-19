@@ -18,6 +18,15 @@ def kubernetes(modules):
     return modules.kubernetes
 
 
+def test_namespaces(kubernetes, namespace):
+    """
+    Test that the namespaces function returns a list of namespaces and includes the test namespace
+    """
+    res = kubernetes.namespaces()
+    assert isinstance(res, list)
+    assert namespace in res
+
+
 @pytest.mark.parametrize("namespace", [False], indirect=True)
 def test_create_namespace(kubernetes, namespace):
     """
@@ -81,6 +90,15 @@ def pod_spec():
     Fixture providing a basic pod spec
     """
     return {"containers": [{"name": "nginx", "image": "nginx:latest"}]}
+
+
+def test_pods(kubernetes, pod):
+    """
+    Test that the pods function returns a list of pods in the specified namespace
+    """
+    res = kubernetes.pods(pod["namespace"])
+    assert isinstance(res, list)
+    assert pod["name"] in res
 
 
 @pytest.mark.parametrize("pod", [False], indirect=True)
@@ -192,6 +210,15 @@ def secret_data(request):
     raise ValueError(f"Unknown secret type: {typ}")
 
 
+def test_secrets(kubernetes, secret):
+    """
+    Test that the secrets function returns a list of secrets in the specified namespace
+    """
+    res = kubernetes.secrets(secret["namespace"])
+    assert isinstance(res, list)
+    assert secret["name"] in res
+
+
 @pytest.mark.parametrize("secret", [False], indirect=True)
 def test_create_secret(kubernetes, secret):
     """
@@ -216,6 +243,88 @@ def test_create_existing_secret(kubernetes, secret, secret_data):
     with pytest.raises(CommandExecutionError, match=".*already exists.*"):
         kubernetes.create_secret(
             secret["name"], secret["namespace"], data=secret_data[0], wait=True
+        )
+
+
+def test_show_secret(kubernetes, secret, secret_data):
+    """
+    Test showing a secret returns expected result
+    """
+    res = kubernetes.show_secret(secret["name"], secret["namespace"], decode=True)
+    assert isinstance(res, dict)
+    assert res["data"]["key"] == secret_data[0]["key"]
+
+
+@pytest.mark.parametrize("secret", [False], indirect=True)
+def test_show_nonexistent_secret(kubernetes, secret):
+    """
+    Test showing a secret that doesn't exist returns None
+    """
+    res = kubernetes.show_secret(secret["name"], secret["namespace"])
+    assert res is None
+
+
+def test_replace_secret(kubernetes, secret, secret_data):
+    """
+    Test replacing a secret with new data
+    """
+    new_data = {"key": "new_value"}
+    res = kubernetes.replace_secret(
+        name=secret["name"],
+        namespace=secret["namespace"],
+        data=new_data,
+        secret_type=secret_data[1],
+        wait=True,
+    )
+    assert isinstance(res, dict)
+    res = kubernetes.show_secret(secret["name"], secret["namespace"], decode=True)
+    assert res["data"]["key"] == "new_value"
+
+
+@pytest.mark.parametrize("secret", [False], indirect=True)
+def test_replace_nonexistent_secret(kubernetes, secret, secret_data):
+    """
+    Test replacing a secret that doesn't exist raises appropriate error
+    """
+    new_data = {"key": "new_value"}
+    with pytest.raises(CommandExecutionError, match=".*not found.*"):
+        kubernetes.replace_secret(
+            name=secret["name"],
+            namespace=secret["namespace"],
+            data=new_data,
+            secret_type=secret_data[1],
+            wait=True,
+        )
+
+
+def test_patch_secret(kubernetes, secret):
+    """
+    Test patching a secret to update data
+    """
+    patch = {"data": {"key": "patched_value"}}
+    res = kubernetes.patch_secret(
+        name=secret["name"],
+        namespace=secret["namespace"],
+        patch=patch,
+        wait=True,
+    )
+    assert isinstance(res, dict)
+    res = kubernetes.show_secret(secret["name"], secret["namespace"], decode=True)
+    assert res["data"]["key"] == "patched_value"
+
+
+@pytest.mark.parametrize("secret", [False], indirect=True)
+def test_patch_nonexistent_secret(kubernetes, secret):
+    """
+    Test patching a secret that doesn't exist raises appropriate error
+    """
+    patch = {"data": {"key": "patched_value"}}
+    with pytest.raises(CommandExecutionError, match=".*not found.*"):
+        kubernetes.patch_secret(
+            name=secret["name"],
+            namespace=secret["namespace"],
+            patch=patch,
+            wait=True,
         )
 
 
@@ -380,6 +489,15 @@ def deployment_spec():
     }
 
 
+def test_deployments(kubernetes, deployment):
+    """
+    Test that the deployments function returns a list of deployments in the specified namespace
+    """
+    res = kubernetes.deployments(deployment["namespace"])
+    assert isinstance(res, list)
+    assert deployment["name"] in res
+
+
 @pytest.mark.parametrize("deployment", [False], indirect=True)
 def test_create_deployment(kubernetes, deployment):
     """
@@ -414,6 +532,106 @@ def test_create_existing_deployment(kubernetes, deployment):
             template=None,
             saltenv="base",
             wait=True,
+        )
+
+
+def test_show_deployment(kubernetes, deployment):
+    """
+    Test showing a deployment returns expected result
+    """
+    res = kubernetes.show_deployment(deployment["name"], deployment["namespace"])
+    assert isinstance(res, dict)
+    assert res["metadata"]["name"] == deployment["name"]
+    assert res["metadata"]["namespace"] == deployment["namespace"]
+    assert res["spec"]["replicas"] == deployment["spec"]["replicas"]
+    assert res["spec"]["selector"] == deployment["spec"]["selector"]
+
+
+@pytest.mark.parametrize("deployment", [False], indirect=True)
+def test_show_nonexistent_deployment(kubernetes, deployment):
+    """
+    Test showing a deployment that doesn't exist returns None
+    """
+    res = kubernetes.show_deployment(deployment["name"], deployment["namespace"])
+    assert res is None
+
+
+def test_replace_deployment(kubernetes, deployment):
+    """
+    Test replacing a deployment with new spec
+    """
+    new_spec = deployment["spec"].copy()
+    new_spec["replicas"] = 2
+
+    res = kubernetes.replace_deployment(
+        name=deployment["name"],
+        namespace=deployment["namespace"],
+        metadata={},
+        spec=new_spec,
+        source=None,
+        template=None,
+        saltenv="base",
+        wait=True,
+    )
+    assert isinstance(res, dict)
+    assert res["spec"]["replicas"] == 2
+
+
+@pytest.mark.parametrize("deployment", [False], indirect=True)
+def test_replace_nonexistent_deployment(kubernetes, deployment):
+    """
+    Test replacing a deployment that doesn't exist raises appropriate error
+    """
+    new_spec = deployment["spec"].copy()
+    new_spec["replicas"] = 2
+
+    with pytest.raises(CommandExecutionError, match=".*not found.*"):
+        kubernetes.replace_deployment(
+            name=deployment["name"],
+            namespace=deployment["namespace"],
+            metadata={},
+            spec=new_spec,
+            source=None,
+            template=None,
+            saltenv="base",
+            wait=True,
+        )
+
+
+def test_patch_deployment(kubernetes, deployment):
+    """
+    Test patching a deployment to change the number of replicas.
+    """
+    # Patch the deployment to change replicas from 1 to 2
+    patch = {
+        "spec": {
+            "replicas": 2,
+        }
+    }
+    res = kubernetes.patch_deployment(
+        deployment["name"],
+        deployment["namespace"],
+        patch,
+        wait=True,
+        timeout=120,
+    )
+    assert isinstance(res, dict)
+    assert res["spec"]["replicas"] == 2
+
+
+@pytest.mark.parametrize("deployment", [False], indirect=True)
+def test_patch_nonexistent_deployment(kubernetes, deployment):
+    """
+    Test patching a deployment that doesn't exist raises appropriate error
+    """
+    patch = {"spec": {"replicas": 2}}
+    with pytest.raises(CommandExecutionError, match=".*not found.*"):
+        kubernetes.patch_deployment(
+            deployment["name"],
+            deployment["namespace"],
+            patch,
+            wait=True,
+            timeout=120,
         )
 
 
@@ -503,6 +721,15 @@ def service_spec(request):
     raise ValueError(f"Unknown service type: {typ}")
 
 
+def test_services(kubernetes, service):
+    """
+    Test that the services function returns a list of services in the specified namespace
+    """
+    res = kubernetes.services(service["namespace"])
+    assert isinstance(res, list)
+    assert service["name"] in res
+
+
 @pytest.mark.parametrize("service", [False], indirect=True)
 def test_create_service(kubernetes, service):
     """
@@ -536,6 +763,110 @@ def test_create_existing_service(kubernetes, service):
             source=None,
             template=None,
             saltenv="base",
+            wait=True,
+        )
+
+
+def test_show_service(kubernetes, service):
+    """
+    Test showing a service returns expected result
+    """
+    res = kubernetes.show_service(service["name"], service["namespace"])
+    assert isinstance(res, dict)
+    assert res["metadata"]["name"] == service["name"]
+    assert res["metadata"]["namespace"] == service["namespace"]
+    assert res["spec"]["type"] == service["spec"]["type"]
+    assert res["spec"]["selector"] == service["spec"]["selector"]
+    # K8s adds default fields (protocol, targetPort) to ports
+    for i, expected_port in enumerate(service["spec"]["ports"]):
+        for key, val in expected_port.items():
+            assert res["spec"]["ports"][i][key] == val
+
+
+@pytest.mark.parametrize("service", [False], indirect=True)
+def test_show_nonexistent_service(kubernetes, service):
+    """
+    Test showing a service that doesn't exist returns None
+    """
+    res = kubernetes.show_service(service["name"], service["namespace"])
+    assert res is None
+
+
+def test_replace_service(kubernetes, service):
+    """
+    Test replacing a service with new spec
+    """
+    old_service = kubernetes.show_service(service["name"], service["namespace"])
+    new_spec = service["spec"].copy()
+    new_spec["ports"] = [{"port": 8080}]
+
+    res = kubernetes.replace_service(
+        name=service["name"],
+        namespace=service["namespace"],
+        metadata={},
+        spec=new_spec,
+        old_service=old_service,
+        source=None,
+        template=None,
+        saltenv="base",
+        wait=True,
+    )
+    assert isinstance(res, dict)
+    assert res["spec"]["ports"][0]["port"] == 8080
+
+
+@pytest.mark.parametrize("service", [False], indirect=True)
+def test_replace_nonexistent_service(kubernetes, service):
+    """
+    Test replacing a service that doesn't exist raises appropriate error
+    """
+    new_spec = service["spec"].copy()
+    new_spec["ports"] = [{"port": 8080}]
+    fake_old_service = {
+        "metadata": {"resourceVersion": "1"},
+        "spec": {"clusterIP": "None"},
+    }
+
+    with pytest.raises(CommandExecutionError):
+        kubernetes.replace_service(
+            name=service["name"],
+            namespace="nonexistent-namespace",
+            metadata={},
+            spec=new_spec,
+            old_service=fake_old_service,
+            source=None,
+            template=None,
+            saltenv="base",
+            wait=True,
+        )
+
+
+def test_patch_service(kubernetes, service):
+    """
+    Test patching a service to update selector
+    """
+    patch = {"spec": {"selector": {"app": "patched-nginx"}}}
+    res = kubernetes.patch_service(
+        name=service["name"],
+        namespace=service["namespace"],
+        patch=patch,
+        wait=True,
+    )
+    assert isinstance(res, dict)
+    assert res["spec"]["selector"]["app"] == "patched-nginx"
+
+
+@pytest.mark.parametrize("service", [False], indirect=True)
+def test_patch_nonexistent_service(kubernetes, service):
+    """
+    Test patching a service that doesn't exist raises appropriate error
+    """
+    patch = {"spec": {"ports": [{"port": 8080}]}}
+    with pytest.raises(CommandExecutionError, match=".*not found.*"):
+        kubernetes.patch_service(
+            name=service["name"],
+            namespace=service["namespace"],
+            patch=patch,
             wait=True,
         )
 
@@ -639,6 +970,15 @@ def configmap_data(request):
     raise ValueError(f"Unknown configmap data type: {data}")
 
 
+def test_configmaps(kubernetes, configmap):
+    """
+    Test that the configmaps function returns a list of configmap names in the specified namespace
+    """
+    res = kubernetes.configmaps(configmap["namespace"])
+    assert isinstance(res, list)
+    assert configmap["name"] in res
+
+
 @pytest.mark.usefixtures("configmap_data")
 @pytest.mark.parametrize(
     "configmap_data,expected",
@@ -686,6 +1026,84 @@ def test_create_existing_configmap(kubernetes, configmap):
     with pytest.raises(CommandExecutionError, match=".*already exists.*"):
         kubernetes.create_configmap(
             configmap["name"], configmap["namespace"], data=configmap["data"], wait=True
+        )
+
+
+def test_show_configmap(kubernetes, configmap):
+    """
+    Test showing a configmap returns expected result
+    """
+    res = kubernetes.show_configmap(configmap["name"], configmap["namespace"])
+    assert isinstance(res, dict)
+    assert res["data"] == configmap["data"]
+
+
+@pytest.mark.parametrize("configmap", [False], indirect=True)
+def test_show_nonexistent_configmap(kubernetes, configmap):
+    """
+    Test showing a configmap that doesn't exist returns None
+    """
+    res = kubernetes.show_configmap(configmap["name"], configmap["namespace"])
+    assert res is None
+
+
+def test_replace_configmap(kubernetes, configmap):
+    """
+    Test replacing a configmap with new data
+    """
+    new_data = {"key": "new_value"}
+    res = kubernetes.replace_configmap(
+        name=configmap["name"],
+        namespace=configmap["namespace"],
+        data=new_data,
+        wait=True,
+    )
+    assert isinstance(res, dict)
+    assert res["data"] == new_data
+
+
+@pytest.mark.parametrize("configmap", [False], indirect=True)
+def test_replace_nonexistent_configmap(kubernetes, configmap):
+    """
+    Test replacing a configmap that doesn't exist raises appropriate error
+    """
+    new_data = {"key": "new_value"}
+    with pytest.raises(CommandExecutionError, match=".*not found.*"):
+        kubernetes.replace_configmap(
+            name=configmap["name"],
+            namespace=configmap["namespace"],
+            data=new_data,
+            wait=True,
+        )
+
+
+def test_patch_configmap(kubernetes, configmap):
+    """
+    Test patching a configmap to update data
+    """
+    patch = {"data": {"key": "patched_value"}}
+    res = kubernetes.patch_configmap(
+        name=configmap["name"],
+        namespace=configmap["namespace"],
+        patch=patch,
+        wait=True,
+    )
+    assert isinstance(res, dict)
+    assert res["data"]["key"] == "patched_value"
+
+
+@pytest.mark.parametrize("configmap", [False], indirect=True)
+def test_patch_nonexistent_configmap(kubernetes, configmap):
+    """
+    Test patching a configmap that doesn't exist raises appropriate error
+    """
+    patch = {"data": {"key": "patched_value"}}
+    with pytest.raises(CommandExecutionError, match=".*not found.*"):
+        kubernetes.patch_configmap(
+            name=configmap["name"],
+            namespace=configmap["namespace"],
+            patch=patch,
+            wait=True,
         )
 
 
