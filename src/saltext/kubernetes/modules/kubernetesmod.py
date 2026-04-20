@@ -198,7 +198,6 @@ def nodes(**kwargs):
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
             return []
-        log.error("Exception when calling CoreV1Api->list_node", exc_info_on_loglevel=logging.DEBUG)
         raise CommandExecutionError(exc) from exc
     finally:
         _cleanup(**cfg)
@@ -221,7 +220,6 @@ def node(name, **kwargs):
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
             return None
-        log.error("Exception when calling CoreV1Api->list_node", exc_info_on_loglevel=logging.DEBUG)
         raise CommandExecutionError(exc) from exc
     finally:
         _cleanup(**cfg)
@@ -291,9 +289,6 @@ def node_add_label(node_name, label_name, label_value, **kwargs):
         api_response = api_instance.patch_node(node_name, body)
         return api_response
     except (ApiException, HTTPError) as exc:
-        log.error(
-            "Exception when calling CoreV1Api->patch_node", exc_info_on_loglevel=logging.DEBUG
-        )
         raise CommandExecutionError(str(exc)) from exc
     finally:
         _cleanup(**cfg)
@@ -326,9 +321,6 @@ def node_remove_label(node_name, label_name, **kwargs):
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
             raise CommandExecutionError(f"Node {node_name} not found") from exc
-        log.error(
-            "Exception when calling CoreV1Api->patch_node", exc_info_on_loglevel=logging.DEBUG
-        )
         raise CommandExecutionError(exc) from exc
     finally:
         _cleanup(**cfg)
@@ -356,9 +348,6 @@ def namespaces(**kwargs):
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
             return []
-        log.error(
-            "Exception when calling CoreV1Api->list_namespace", exc_info_on_loglevel=logging.DEBUG
-        )
         raise CommandExecutionError(exc) from exc
     finally:
         _cleanup(**cfg)
@@ -389,10 +378,6 @@ def deployments(namespace="default", **kwargs):
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
             return []
-        log.error(
-            "Exception in call to AppsV1Api->list_namespaced_deployment",
-            exc_info_on_loglevel=logging.DEBUG,
-        )
         raise CommandExecutionError(exc) from exc
     finally:
         _cleanup(**cfg)
@@ -424,10 +409,6 @@ def services(namespace="default", **kwargs):
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
             return []
-        log.error(
-            "Exception when calling CoreV1Api->list_namespaced_service",
-            exc_info_on_loglevel=logging.DEBUG,
-        )
         raise CommandExecutionError(exc) from exc
     finally:
         _cleanup(**cfg)
@@ -458,10 +439,6 @@ def pods(namespace="default", **kwargs):
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
             return []  # Return empty list for nonexistent namespace
-        log.error(
-            "Exception when calling CoreV1Api->list_namespaced_pod",
-            exc_info_on_loglevel=logging.DEBUG,
-        )
         raise CommandExecutionError(exc) from exc
     finally:
         _cleanup(**cfg)
@@ -493,10 +470,6 @@ def secrets(namespace="default", **kwargs):
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
             return []
-        log.error(
-            "Exception when calling CoreV1Api->list_namespaced_secret",
-            exc_info_on_loglevel=logging.DEBUG,
-        )
         raise CommandExecutionError(exc) from exc
     finally:
         _cleanup(**cfg)
@@ -528,10 +501,6 @@ def configmaps(namespace="default", **kwargs):
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
             return []  # Return empty list for nonexistent namespace
-        log.error(
-            "Exception when calling CoreV1Api->list_namespaced_config_map",
-            exc_info_on_loglevel=logging.DEBUG,
-        )
         raise CommandExecutionError(exc) from exc
     finally:
         _cleanup(**cfg)
@@ -563,10 +532,6 @@ def show_deployment(name, namespace="default", **kwargs):
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
             return None
-        log.error(
-            "Exception in call to AppsV1Api->read_namespaced_deployment",
-            exc_info_on_loglevel=logging.DEBUG,
-        )
         raise CommandExecutionError(exc) from exc
     finally:
         _cleanup(**cfg)
@@ -598,10 +563,6 @@ def show_service(name, namespace="default", **kwargs):
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
             return None
-        log.error(
-            "Exception when calling CoreV1Api->read_namespaced_service",
-            exc_info_on_loglevel=logging.DEBUG,
-        )
         raise CommandExecutionError(exc) from exc
     finally:
         _cleanup(**cfg)
@@ -633,10 +594,6 @@ def show_pod(name, namespace="default", **kwargs):
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
             return None
-        log.error(
-            "Exception when calling CoreV1Api->read_namespaced_pod",
-            exc_info_on_loglevel=logging.DEBUG,
-        )
         raise CommandExecutionError(exc) from exc
     finally:
         _cleanup(**cfg)
@@ -664,12 +621,8 @@ def show_namespace(name, **kwargs):
     except ApiException as exc:
         if exc.status == 404:
             return None
-        log.error(
-            "Exception when calling CoreV1Api->read_namespace", exc_info_on_loglevel=logging.DEBUG
-        )
         raise CommandExecutionError(exc) from exc
     except HTTPError as exc:
-        log.error("HTTP error occurred", exc_info_on_loglevel=logging.DEBUG)
         raise CommandExecutionError(exc) from exc
     finally:
         _cleanup(**cfg)
@@ -717,10 +670,6 @@ def show_secret(name, namespace="default", decode=False, **kwargs):
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
             return None
-        log.error(
-            "Exception when calling CoreV1Api->read_namespaced_secret",
-            exc_info_on_loglevel=logging.DEBUG,
-        )
         raise CommandExecutionError(exc) from exc
     finally:
         _cleanup(**cfg)
@@ -752,10 +701,6 @@ def show_configmap(name, namespace="default", **kwargs):
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
             return None
-        log.error(
-            "Exception when calling CoreV1Api->read_namespaced_config_map",
-            exc_info_on_loglevel=logging.DEBUG,
-        )
         raise CommandExecutionError(exc) from exc
     finally:
         _cleanup(**cfg)
@@ -806,10 +751,6 @@ def delete_deployment(name, namespace="default", wait=False, timeout=60, **kwarg
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
             return None
-        log.error(
-            "Exception in call to AppsV1Api->delete_namespaced_deployment",
-            exc_info_on_loglevel=logging.DEBUG,
-        )
         raise CommandExecutionError(exc) from exc
     finally:
         _cleanup(**cfg)
@@ -859,10 +800,6 @@ def delete_service(name, namespace="default", wait=False, timeout=60, **kwargs):
         if isinstance(exc, ApiException) and exc.status == 404:
             return None
         else:
-            log.error(
-                "Exception when calling CoreV1Api->delete_namespaced_service",
-                exc_info_on_loglevel=logging.DEBUG,
-            )
             raise CommandExecutionError(exc) from exc
     finally:
         _cleanup(**cfg)
@@ -913,10 +850,6 @@ def delete_pod(name, namespace="default", wait=False, timeout=60, **kwargs):
         if isinstance(exc, ApiException) and exc.status == 404:
             return None
         else:
-            log.error(
-                "Exception when calling CoreV1Api->delete_namespaced_pod",
-                exc_info_on_loglevel=logging.DEBUG,
-            )
             raise CommandExecutionError(exc) from exc
     finally:
         _cleanup(**cfg)
@@ -965,12 +898,8 @@ def delete_namespace(name, wait=False, timeout=60, **kwargs):
             return None
         if exc.status == 403:
             raise CommandExecutionError(f"Cannot delete namespace {name}: {exc.reason}") from exc
-        log.error(
-            "Exception when calling CoreV1Api->delete_namespace", exc_info_on_loglevel=logging.DEBUG
-        )
         raise CommandExecutionError(exc) from exc
     except HTTPError as exc:
-        log.error("HTTP error occurred", exc_info_on_loglevel=logging.DEBUG)
         raise CommandExecutionError(exc) from exc
     finally:
         _cleanup(**cfg)
@@ -1022,10 +951,6 @@ def delete_secret(name, namespace="default", wait=False, timeout=60, **kwargs):
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
             return None
-        log.error(
-            "Exception when calling CoreV1Api->delete_namespaced_secret",
-            exc_info_on_loglevel=logging.DEBUG,
-        )
         raise CommandExecutionError(exc) from exc
     finally:
         _cleanup(**cfg)
@@ -1078,10 +1003,6 @@ def delete_configmap(name, namespace="default", wait=False, timeout=60, **kwargs
         if isinstance(exc, ApiException) and exc.status == 404:
             return None
         else:
-            log.error(
-                "Exception when calling CoreV1Api->delete_namespaced_config_map",
-                exc_info_on_loglevel=logging.DEBUG,
-            )
             raise CommandExecutionError(exc) from exc
     finally:
         _cleanup(**cfg)
@@ -1191,10 +1112,6 @@ def create_deployment(
                 raise CommandExecutionError(f"Deployment {namespace}/{name} not found") from exc
             if exc.status == 409:
                 raise CommandExecutionError(f"Deployment {name} already exists") from exc
-        log.error(
-            "Exception in call to AppsV1Api->create_namespaced_deployment",
-            exc_info_on_loglevel=logging.DEBUG,
-        )
         raise CommandExecutionError(exc) from exc
     finally:
         _cleanup(**cfg)
@@ -1304,10 +1221,6 @@ def create_pod(
                 raise CommandExecutionError(f"Pod {namespace}/{name} not found") from exc
             if exc.status == 409:
                 raise CommandExecutionError(f"Pod {name} already exists") from exc
-        log.error(
-            "Exception when calling CoreV1Api->create_namespaced_pod",
-            exc_info_on_loglevel=logging.DEBUG,
-        )
         raise CommandExecutionError(exc) from exc
     finally:
         _cleanup(**cfg)
@@ -1434,10 +1347,6 @@ def create_service(
                 raise CommandExecutionError(f"Service {namespace}/{name} not found") from exc
             if exc.status == 409:
                 raise CommandExecutionError(f"Service {name} already exists") from exc
-        log.error(
-            "Exception when calling CoreV1Api->create_namespaced_service",
-            exc_info_on_loglevel=logging.DEBUG,
-        )
         raise CommandExecutionError(exc) from exc
     finally:
         _cleanup(**cfg)
@@ -1584,10 +1493,6 @@ def create_secret(
                 ) from exc
             if exc.status == 404:
                 raise CommandExecutionError(f"Secret {namespace}/{name} not found") from exc
-            log.error(
-                "Exception when calling CoreV1Api->create_namespaced_secret",
-                exc_info_on_loglevel=logging.DEBUG,
-            )
         raise CommandExecutionError(str(exc)) from exc
     finally:
         _cleanup(**cfg)
@@ -1705,10 +1610,6 @@ def create_configmap(
                 raise CommandExecutionError(f"ConfigMap {namespace}/{name} not found") from exc
             if exc.status == 409:
                 raise CommandExecutionError(f"ConfigMap {name} already exists") from exc
-        log.error(
-            "Exception when calling CoreV1Api->create_namespaced_config_map",
-            exc_info_on_loglevel=logging.DEBUG,
-        )
         raise CommandExecutionError(exc) from exc
     finally:
         _cleanup(**cfg)
@@ -1743,12 +1644,8 @@ def create_namespace(name, **kwargs):
             raise CommandExecutionError(f"Namespace {name} already exists: {exc.reason}") from exc
         if exc.status == 422:
             raise CommandExecutionError(f"Invalid namespace name {name}: {exc.reason}") from exc
-        log.error(
-            "Exception when calling CoreV1Api->create_namespace", exc_info_on_loglevel=logging.DEBUG
-        )
         raise CommandExecutionError(exc) from exc
     except HTTPError as exc:
-        log.error("HTTP error occurred", exc_info_on_loglevel=logging.DEBUG)
         raise CommandExecutionError(exc) from exc
     finally:
         _cleanup(**cfg)
@@ -1848,10 +1745,6 @@ def replace_deployment(
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
             raise CommandExecutionError(f"Deployment {namespace}/{name} not found") from exc
-        log.error(
-            "Exception in call to AppsV1Api->replace_namespaced_deployment",
-            exc_info_on_loglevel=logging.DEBUG,
-        )
         raise CommandExecutionError(exc) from exc
     finally:
         _cleanup(**cfg)
@@ -1971,10 +1864,6 @@ def replace_service(
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
             raise CommandExecutionError(f"Service {namespace}/{name} not found") from exc
-        log.error(
-            "Exception when calling CoreV1Api->replace_namespaced_service",
-            exc_info_on_loglevel=logging.DEBUG,
-        )
         raise CommandExecutionError(exc) from exc
     finally:
         _cleanup(**cfg)
@@ -2120,10 +2009,6 @@ def replace_secret(
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
             raise CommandExecutionError(f"Secret {namespace}/{name} not found") from exc
-        log.error(
-            "Exception when calling CoreV1Api->replace_namespaced_secret",
-            exc_info_on_loglevel=logging.DEBUG,
-        )
         raise CommandExecutionError(str(exc)) from exc
     finally:
         _cleanup(**cfg)
@@ -2216,10 +2101,6 @@ def replace_configmap(
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
             raise CommandExecutionError(f"ConfigMap {namespace}/{name} not found") from exc
-        log.error(
-            "Exception when calling CoreV1Api->replace_namespaced_configmap",
-            exc_info_on_loglevel=logging.DEBUG,
-        )
         raise CommandExecutionError(exc) from exc
     finally:
         _cleanup(**cfg)
@@ -2311,10 +2192,6 @@ def patch_service(
             raise CommandExecutionError(f"Service {namespace}/{name} not found") from exc
         if isinstance(exc, ApiException) and exc.status == 409:
             raise CommandExecutionError(f"Conflict when patching service {name}") from exc
-        log.error(
-            "Exception in call to CoreV1Api->patch_namespaced_service",
-            exc_info_on_loglevel=logging.DEBUG,
-        )
         raise CommandExecutionError(exc) from exc
     finally:
         _cleanup(**cfg)
@@ -2417,10 +2294,6 @@ def patch_secret(
             raise CommandExecutionError(f"Secret {namespace}/{name} not found") from exc
         if isinstance(exc, ApiException) and exc.status == 409:
             raise CommandExecutionError(f"Conflict when patching secret {name}") from exc
-        log.error(
-            "Exception in call to CoreV1Api->patch_namespaced_secret",
-            exc_info_on_loglevel=logging.DEBUG,
-        )
         raise CommandExecutionError(exc) from exc
     finally:
         _cleanup(**cfg)
@@ -2512,10 +2385,6 @@ def patch_configmap(
             raise CommandExecutionError(f"ConfigMap {namespace}/{name} not found") from exc
         if isinstance(exc, ApiException) and exc.status == 409:
             raise CommandExecutionError(f"Conflict when patching configmap {name}") from exc
-        log.error(
-            "Exception in call to CoreV1Api->patch_namespaced_config_map",
-            exc_info_on_loglevel=logging.DEBUG,
-        )
         raise CommandExecutionError(exc) from exc
     finally:
         _cleanup(**cfg)
@@ -2609,10 +2478,6 @@ def patch_deployment(
             raise CommandExecutionError(f"Deployment {namespace}/{name} not found") from exc
         if isinstance(exc, ApiException) and exc.status == 409:
             raise CommandExecutionError(f"Conflict when patching deployment {name}") from exc
-        log.error(
-            "Exception in call to AppsV1Api->patch_namespaced_deployment",
-            exc_info_on_loglevel=logging.DEBUG,
-        )
         raise CommandExecutionError(exc) from exc
     finally:
         _cleanup(**cfg)
@@ -3148,9 +3013,6 @@ def _wait_for_resource_status(
         return False
 
     except (ApiException, HTTPError) as exc:
-        log.error(
-            "Exception when waiting for %s", resource_type, exc_info_on_loglevel=logging.DEBUG
-        )
         raise CommandExecutionError(exc) from exc
     finally:
         w.stop()

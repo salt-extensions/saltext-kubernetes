@@ -404,10 +404,7 @@ def test_deployment_present_patch(kubernetes, deployment, kubernetes_exe, testmo
         name=deployment["name"], namespace=deployment["namespace"]
     )
     assert deployment_state["metadata"]["name"] == deployment["name"]
-    if not testmode:
-        assert deployment_state["spec"]["replicas"] == 4
-    else:
-        assert deployment_state["spec"]["replicas"] != 4
+    assert (deployment_state["spec"]["replicas"] == 4) is not testmode
 
 
 def test_deployment_present_patch_source(
@@ -548,7 +545,6 @@ def test_secret_present(kubernetes, secret, testmode, kubernetes_exe):
     assert ret.result in (None, True)
     assert (ret.result is None) is testmode
     if not testmode:
-        assert ret.result is True
         # Verify secret is created
         secret_state = kubernetes_exe.show_secret(
             name=secret["name"], namespace=secret["namespace"], decode=True
@@ -602,10 +598,7 @@ def test_secret_present_patch(kubernetes, secret, kubernetes_exe, testmode):
         name=secret["name"], namespace=secret["namespace"], decode=True
     )
     assert secret_state["metadata"]["name"] == secret["name"]
-    if not testmode:
-        assert secret_state["data"]["key"] == "new_value"
-    else:
-        assert secret_state["data"]["key"] == "value"
+    assert (secret_state["data"]["key"] == "new_value") is not testmode
 
 
 @pytest.fixture
@@ -706,7 +699,6 @@ def test_secret_absent(kubernetes, secret, testmode, kubernetes_exe):
     assert ret.result in (None, True)
     assert (ret.result is None) is testmode
     if not testmode:
-        assert ret.result is True
         assert ret.changes["new"] == "absent"
         # Verify secret is deleted
         secret_state = kubernetes_exe.show_secret(
@@ -768,7 +760,6 @@ def test_service_present(kubernetes, service, testmode, kubernetes_exe):
     assert ret.result in (None, True)
     assert (ret.result is None) is testmode
     if not testmode:
-        assert ret.result is True
         # Verify service is created
         service_state = kubernetes_exe.show_service(
             name=service["name"], namespace=service["namespace"]
@@ -835,10 +826,7 @@ def test_service_present_patch(kubernetes, service, kubernetes_exe, testmode):
     assert service_state["spec"]["ports"][1]["name"] == "https"
     assert service_state["spec"]["ports"][1]["port"] == 443
     assert service_state["spec"]["ports"][1]["targetPort"] == 8443
-    if not testmode:
-        assert service_state["spec"]["type"] == "NodePort"
-    else:
-        assert service_state["spec"]["type"] == "ClusterIP"
+    assert (service_state["spec"]["type"] == "NodePort") is not testmode
 
 
 @pytest.fixture
@@ -918,7 +906,6 @@ def test_service_absent(kubernetes, service, testmode, kubernetes_exe):
     assert ret.result in (None, True)
     assert (ret.result is None) is testmode
     if not testmode:
-        assert ret.result is True
         assert ret.changes["new"] == "absent"
         # Verify service is deleted
         service_state = kubernetes_exe.show_service(
@@ -977,7 +964,6 @@ def test_configmap_present(kubernetes, configmap, testmode, kubernetes_exe):
     assert ret.result in (None, True)
     assert (ret.result is None) is testmode
     if not testmode:
-        assert ret.result is True
         # Verify configmap is created
         configmap_state = kubernetes_exe.show_configmap(
             name=configmap["name"], namespace=configmap["namespace"]
@@ -1036,12 +1022,10 @@ def test_configmap_patch(kubernetes, configmap, kubernetes_exe, testmode):
     )
     assert configmap_state["metadata"]["name"] == configmap["name"]
     assert configmap_state["metadata"]["namespace"] == configmap["namespace"]
-    if not testmode:
-        assert configmap_state["data"]["config.yaml"] == "foo: newbar\nkey: newvalue"
-        assert configmap_state["data"]["app.properties"] == "app.name=newapp\napp.port=9090"
-    else:
-        assert configmap_state["data"]["config.yaml"] == "foo: bar\nkey: value"
-        assert configmap_state["data"]["app.properties"] == "app.name=myapp\napp.port=8080"
+    assert (configmap_state["data"]["config.yaml"] == "foo: newbar\nkey: newvalue") is not testmode
+    assert (
+        configmap_state["data"]["app.properties"] == "app.name=newapp\napp.port=9090"
+    ) is not testmode
 
 
 @pytest.fixture
@@ -1112,7 +1096,6 @@ def test_configmap_absent(kubernetes, configmap, testmode, kubernetes_exe):
     assert ret.result in (None, True)
     assert (ret.result is None) is testmode
     if not testmode:
-        assert ret.result is True
         assert ret.changes["new"] == "absent"
 
         # Verify configmap is deleted
@@ -1190,19 +1173,14 @@ def test_node_label_present(kubernetes, labeled_node, testmode, kubernetes_exe):
 
     assert ret.result in (None, True)
     assert (ret.result is None) is testmode
+    assert ret.changes["new"][label_name] == label_value
+    assert label_name not in ret.changes["old"]
+    node_label_state = kubernetes_exe.node_labels(labeled_node["name"])
     if not testmode:
-        assert ret.result is True
-        assert ret.changes["new"]
-        # Verify label is created
-        node_label_state = kubernetes_exe.node_labels(labeled_node["name"])
         assert node_label_state[label_name] == label_value
     else:
-        assert ret.changes["new"][label_name] == label_value
-        assert label_name not in ret.changes["old"]
-        assert "The label is going to be set" in ret.comment
-        # Verify label is not created in test mode
-        node_label_state = kubernetes_exe.node_labels(labeled_node["name"])
         assert label_name not in node_label_state
+        assert "The label is going to be set" in ret.comment
 
 
 def test_node_label_present_idempotency(kubernetes, labeled_node, testmode):
@@ -1237,19 +1215,14 @@ def test_node_label_present_replace(kubernetes, labeled_node, testmode, kubernet
     )
     assert ret.result in (None, True)
     assert (ret.result is None) is testmode
+    assert ret.changes["new"][label_name] == new_value
+    assert ret.changes["old"][label_name] == labeled_node["labels"][label_name]
+    node_label_state = kubernetes_exe.node_labels(labeled_node["name"])
     if not testmode:
-        assert ret.result is True
-        assert ret.changes["new"][label_name] == new_value
-        # Verify label is replaced
-        node_label_state = kubernetes_exe.node_labels(labeled_node["name"])
         assert node_label_state[label_name] == new_value
     else:
-        assert ret.changes["new"][label_name] == new_value
-        assert ret.changes["old"][label_name] == labeled_node["labels"][label_name]
-        assert "The label is going to be updated" in ret.comment
-        # Verify label is not replaced in test mode
-        node_label_state = kubernetes_exe.node_labels(labeled_node["name"])
         assert node_label_state[label_name] == labeled_node["labels"][label_name]
+        assert "The label is going to be updated" in ret.comment
 
 
 def test_node_label_absent(kubernetes, labeled_node, testmode, kubernetes_exe):
@@ -1261,7 +1234,6 @@ def test_node_label_absent(kubernetes, labeled_node, testmode, kubernetes_exe):
     assert ret.result in (None, True)
     assert (ret.result is None) is testmode
     if not testmode:
-        assert ret.result is True
         assert ret.changes["new"] == "absent"
         # Verify label is deleted
         node_label_state = kubernetes_exe.node_labels(labeled_node["name"])
