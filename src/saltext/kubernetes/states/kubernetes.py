@@ -109,6 +109,7 @@ import copy
 import logging
 
 from salt.exceptions import CommandExecutionError
+from salt.utils.dictdiffer import RecursiveDictDiffer
 
 log = logging.getLogger(__name__)
 
@@ -132,6 +133,14 @@ def _error(ret, err_msg):
     ret["result"] = False
     ret["comment"] = err_msg
     return ret
+
+
+def _changes(old, new):
+    """
+    Return a changes dict using RecursiveDictDiffer for concise reporting.
+    """
+    diff = RecursiveDictDiffer(old, new, ignore_missing_keys=False)
+    return {"old": diff.old_values, "new": diff.new_values}
 
 
 def deployment_absent(name, namespace="default", wait=False, timeout=60, **kwargs):
@@ -288,47 +297,38 @@ def deployment_present(
         deployment = __salt__["kubernetes.show_deployment"](name, namespace, **kwargs)
 
         if deployment is None:
+            try:
+                res = __salt__["kubernetes.create_deployment"](
+                    name=name,
+                    namespace=namespace,
+                    metadata=metadata,
+                    spec=spec,
+                    source=source,
+                    template=template,
+                    saltenv=__env__,
+                    template_context=template_context,
+                    dry_run=bool(__opts__["test"]),
+                    wait=wait if not __opts__["test"] else False,
+                    timeout=timeout,
+                    **kwargs,
+                )
+            except CommandExecutionError as err:
+                if not __opts__["test"]:
+                    raise
+                ret["result"] = None
+                ret["comment"] = (
+                    "The deployment is going to be created. "
+                    f"Dry run failed, possibly due to dependencies not created yet: {err}"
+                )
+                return ret
+
+            ret["changes"] = {"old": {}, "new": res}
             if __opts__["test"]:
                 ret["result"] = None
                 ret["comment"] = "The deployment is going to be created"
-                try:
-                    dry_run_result = __salt__["kubernetes.create_deployment"](
-                        name=name,
-                        namespace=namespace,
-                        metadata=metadata,
-                        spec=spec,
-                        source=source,
-                        template=template,
-                        saltenv=__env__,
-                        template_context=template_context,
-                        dry_run=True,
-                        **kwargs,
-                    )
-                    ret["changes"] = {"old": {}, "new": dry_run_result}
-                except CommandExecutionError as err:
-                    ret["result"] = None
-                    ret["comment"] = (
-                        "The deployment is going to be created. "
-                        f"Dry run failed, possibly due to dependencies not created yet: {err}"
-                    )
-                return ret
-
-            res = __salt__["kubernetes.create_deployment"](
-                name=name,
-                namespace=namespace,
-                metadata=metadata,
-                spec=spec,
-                source=source,
-                template=template,
-                saltenv=__env__,
-                template_context=template_context,
-                wait=wait,
-                timeout=timeout,
-                **kwargs,
-            )
-            ret["result"] = True
-            ret["changes"] = {"old": {}, "new": res}
-            ret["comment"] = "Deployment created"
+            else:
+                ret["result"] = True
+                ret["comment"] = "Deployment created"
             return ret
 
         # Deployment exists — build the patch object
@@ -346,50 +346,38 @@ def deployment_present(
                 patch_obj["spec"] = spec
             patch_kwargs = {"patch": patch_obj}
 
-        if __opts__["test"]:
-            try:
-                res = __salt__["kubernetes.patch_deployment"](
-                    name,
-                    namespace,
-                    dry_run=True,
-                    **patch_kwargs,
-                    **kwargs,
-                )
-            except CommandExecutionError as err:
-                ret["result"] = None
-                ret["comment"] = (
-                    "The deployment is going to be updated. "
-                    f"Dry run failed, possibly due to dependencies not created yet: {err}"
-                )
-                return ret
-
-            if res == deployment:
-                ret["result"] = True
-                ret["comment"] = "The deployment is already in the desired state"
-                return ret
-
+        try:
+            res = __salt__["kubernetes.patch_deployment"](
+                name,
+                namespace,
+                dry_run=bool(__opts__["test"]),
+                wait=wait,
+                timeout=timeout,
+                **patch_kwargs,
+                **kwargs,
+            )
+        except CommandExecutionError as err:
+            if not __opts__["test"]:
+                raise
             ret["result"] = None
-            ret["comment"] = "The deployment is going to be updated"
-            ret["changes"] = {"old": deployment, "new": res}
+            ret["comment"] = (
+                "The deployment is going to be updated. "
+                f"Dry run failed, possibly due to dependencies not created yet: {err}"
+            )
             return ret
-
-        res = __salt__["kubernetes.patch_deployment"](
-            name,
-            namespace,
-            wait=wait,
-            timeout=timeout,
-            **patch_kwargs,
-            **kwargs,
-        )
 
         if res == deployment:
             ret["result"] = True
             ret["comment"] = "The deployment is already in the desired state"
             return ret
 
-        ret["changes"] = {"old": deployment, "new": res}
-        ret["result"] = True
-        ret["comment"] = "Deployment updated"
+        ret["changes"] = _changes(deployment, res)
+        if __opts__["test"]:
+            ret["result"] = None
+            ret["comment"] = "The deployment is going to be updated"
+        else:
+            ret["result"] = True
+            ret["comment"] = "Deployment updated"
 
     except CommandExecutionError as err:
         log.error(str(err), exc_info_on_loglevel=logging.DEBUG)
@@ -484,47 +472,38 @@ def service_present(
         service = __salt__["kubernetes.show_service"](name, namespace, **kwargs)
 
         if service is None:
+            try:
+                res = __salt__["kubernetes.create_service"](
+                    name=name,
+                    namespace=namespace,
+                    metadata=metadata,
+                    spec=spec,
+                    source=source,
+                    template=template,
+                    saltenv=__env__,
+                    template_context=template_context,
+                    dry_run=bool(__opts__["test"]),
+                    wait=wait if not __opts__["test"] else False,
+                    timeout=timeout,
+                    **kwargs,
+                )
+            except CommandExecutionError as err:
+                if not __opts__["test"]:
+                    raise
+                ret["result"] = None
+                ret["comment"] = (
+                    "The service is going to be created. "
+                    f"Dry run failed, possibly due to dependencies not created yet: {err}"
+                )
+                return ret
+
+            ret["changes"] = {"old": {}, "new": res}
             if __opts__["test"]:
                 ret["result"] = None
                 ret["comment"] = "The service is going to be created"
-                try:
-                    dry_run_result = __salt__["kubernetes.create_service"](
-                        name=name,
-                        namespace=namespace,
-                        metadata=metadata,
-                        spec=spec,
-                        source=source,
-                        template=template,
-                        saltenv=__env__,
-                        template_context=template_context,
-                        dry_run=True,
-                        **kwargs,
-                    )
-                    ret["changes"] = {"old": {}, "new": dry_run_result}
-                except CommandExecutionError as err:
-                    ret["result"] = None
-                    ret["comment"] = (
-                        "The service is going to be created. "
-                        f"Dry run failed, possibly due to dependencies not created yet: {err}"
-                    )
-                return ret
-
-            res = __salt__["kubernetes.create_service"](
-                name=name,
-                namespace=namespace,
-                metadata=metadata,
-                spec=spec,
-                source=source,
-                template=template,
-                saltenv=__env__,
-                template_context=template_context,
-                wait=wait,
-                timeout=timeout,
-                **kwargs,
-            )
-            ret["result"] = True
-            ret["changes"] = {"old": {}, "new": res}
-            ret["comment"] = "Service created"
+            else:
+                ret["result"] = True
+                ret["comment"] = "Service created"
             return ret
 
         # Service exists — build the patch object
@@ -542,50 +521,38 @@ def service_present(
                 patch_obj["spec"] = spec
             patch_kwargs = {"patch": patch_obj}
 
-        if __opts__["test"]:
-            try:
-                res = __salt__["kubernetes.patch_service"](
-                    name,
-                    namespace,
-                    dry_run=True,
-                    **patch_kwargs,
-                    **kwargs,
-                )
-            except CommandExecutionError as err:
-                ret["result"] = None
-                ret["comment"] = (
-                    "The service is going to be updated. "
-                    f"Dry run failed, possibly due to dependencies not created yet: {err}"
-                )
-                return ret
-
-            if res == service:
-                ret["result"] = True
-                ret["comment"] = "The service is already in the desired state"
-                return ret
-
+        try:
+            res = __salt__["kubernetes.patch_service"](
+                name,
+                namespace,
+                dry_run=bool(__opts__["test"]),
+                wait=wait,
+                timeout=timeout,
+                **patch_kwargs,
+                **kwargs,
+            )
+        except CommandExecutionError as err:
+            if not __opts__["test"]:
+                raise
             ret["result"] = None
-            ret["comment"] = "The service is going to be updated"
-            ret["changes"] = {"old": service, "new": res}
+            ret["comment"] = (
+                "The service is going to be updated. "
+                f"Dry run failed, possibly due to dependencies not created yet: {err}"
+            )
             return ret
-
-        res = __salt__["kubernetes.patch_service"](
-            name,
-            namespace,
-            wait=wait,
-            timeout=timeout,
-            **patch_kwargs,
-            **kwargs,
-        )
 
         if res == service:
             ret["result"] = True
             ret["comment"] = "The service is already in the desired state"
             return ret
 
-        ret["changes"] = {"old": service, "new": res}
-        ret["result"] = True
-        ret["comment"] = "Service updated"
+        ret["changes"] = _changes(service, res)
+        if __opts__["test"]:
+            ret["result"] = None
+            ret["comment"] = "The service is going to be updated"
+        else:
+            ret["result"] = True
+            ret["comment"] = "Service updated"
 
     except CommandExecutionError as err:
         log.error(str(err), exc_info_on_loglevel=logging.DEBUG)
@@ -902,55 +869,42 @@ def secret_present(
             if data is None:
                 data = {}
 
-            if __opts__["test"]:
+            try:
+                res = __salt__["kubernetes.create_secret"](
+                    name=name,
+                    namespace=namespace,
+                    data=data,
+                    source=source,
+                    template=template,
+                    saltenv=__env__,
+                    template_context=template_context,
+                    secret_type=secret_type,
+                    metadata=metadata,
+                    dry_run=bool(__opts__["test"]),
+                    wait=wait if not __opts__["test"] else False,
+                    timeout=timeout,
+                    **kwargs,
+                )
+            except CommandExecutionError as err:
+                if not __opts__["test"]:
+                    raise
                 ret["result"] = None
-                ret["comment"] = "The secret is going to be created"
-                try:
-                    dry_run_result = __salt__["kubernetes.create_secret"](
-                        name=name,
-                        namespace=namespace,
-                        data=data,
-                        source=source,
-                        template=template,
-                        saltenv=__env__,
-                        template_context=template_context,
-                        secret_type=secret_type,
-                        metadata=metadata,
-                        dry_run=True,
-                        **kwargs,
-                    )
-                    ret["changes"] = {
-                        "old": {},
-                        "new": {"data": list(dry_run_result.get("data") or [])},
-                    }
-                except CommandExecutionError as err:
-                    ret["result"] = None
-                    ret["comment"] = (
-                        "The secret is going to be created. "
-                        f"Dry run failed, possibly due to dependencies not created yet: {err}"
-                    )
+                ret["comment"] = (
+                    "The secret is going to be created. "
+                    f"Dry run failed, possibly due to dependencies not created yet: {err}"
+                )
                 return ret
 
-            res = __salt__["kubernetes.create_secret"](
-                name=name,
-                namespace=namespace,
-                data=data,
-                source=source,
-                template=template,
-                saltenv=__env__,
-                template_context=template_context,
-                secret_type=secret_type,
-                metadata=metadata,
-                wait=wait,
-                timeout=timeout,
-                **kwargs,
-            )
-            ret["result"] = True
             ret["changes"] = {
                 "old": {},
                 "new": {"data": list(res.get("data") or [])},
             }
-            ret["comment"] = "Secret created"
+            if __opts__["test"]:
+                ret["result"] = None
+                ret["comment"] = "The secret is going to be created"
+            else:
+                ret["result"] = True
+                ret["comment"] = "Secret created"
             return ret
 
         # Secret exists — build the patch object
@@ -970,44 +924,25 @@ def secret_present(
                 patch_obj["type"] = secret_type
             patch_kwargs = {"patch": patch_obj}
 
-        if __opts__["test"]:
-            try:
-                res = __salt__["kubernetes.patch_secret"](
-                    name,
-                    namespace,
-                    dry_run=True,
-                    **patch_kwargs,
-                    **kwargs,
-                )
-            except CommandExecutionError as err:
-                ret["result"] = None
-                ret["comment"] = (
-                    "The secret is going to be updated. "
-                    f"Dry run failed, possibly due to dependencies not created yet: {err}"
-                )
-                return ret
-
-            if res == secret:
-                ret["result"] = True
-                ret["comment"] = "The secret is already in the desired state"
-                return ret
-
+        try:
+            res = __salt__["kubernetes.patch_secret"](
+                name,
+                namespace,
+                dry_run=bool(__opts__["test"]),
+                wait=wait,
+                timeout=timeout,
+                **patch_kwargs,
+                **kwargs,
+            )
+        except CommandExecutionError as err:
+            if not __opts__["test"]:
+                raise
             ret["result"] = None
-            ret["comment"] = "The secret is going to be updated"
-            ret["changes"] = {
-                "old": {"data": list(secret.get("data") or [])},
-                "new": {"data": list(res.get("data") or [])},
-            }
+            ret["comment"] = (
+                "The secret is going to be updated. "
+                f"Dry run failed, possibly due to dependencies not created yet: {err}"
+            )
             return ret
-
-        res = __salt__["kubernetes.patch_secret"](
-            name,
-            namespace,
-            wait=wait,
-            timeout=timeout,
-            **patch_kwargs,
-            **kwargs,
-        )
 
         if res == secret:
             ret["result"] = True
@@ -1018,8 +953,12 @@ def secret_present(
             "old": {"data": list(secret.get("data") or [])},
             "new": {"data": list(res.get("data") or [])},
         }
-        ret["result"] = True
-        ret["comment"] = "Secret updated"
+        if __opts__["test"]:
+            ret["result"] = None
+            ret["comment"] = "The secret is going to be updated"
+        else:
+            ret["result"] = True
+            ret["comment"] = "Secret updated"
 
     except CommandExecutionError as err:
         log.error(str(err), exc_info_on_loglevel=logging.DEBUG)
@@ -1168,45 +1107,37 @@ def configmap_present(
         configmap = __salt__["kubernetes.show_configmap"](name, namespace, **kwargs)
 
         if configmap is None:
+            try:
+                res = __salt__["kubernetes.create_configmap"](
+                    name=name,
+                    namespace=namespace,
+                    data=data,
+                    source=source,
+                    template=template,
+                    saltenv=__env__,
+                    template_context=template_context,
+                    dry_run=bool(__opts__["test"]),
+                    wait=wait if not __opts__["test"] else False,
+                    timeout=timeout,
+                    **kwargs,
+                )
+            except CommandExecutionError as err:
+                if not __opts__["test"]:
+                    raise
+                ret["result"] = None
+                ret["comment"] = (
+                    "The configmap is going to be created. "
+                    f"Dry run failed, possibly due to dependencies not created yet: {err}"
+                )
+                return ret
+
+            ret["changes"] = {"old": {}, "new": res}
             if __opts__["test"]:
                 ret["result"] = None
                 ret["comment"] = "The configmap is going to be created"
-                try:
-                    dry_run_result = __salt__["kubernetes.create_configmap"](
-                        name=name,
-                        namespace=namespace,
-                        data=data,
-                        source=source,
-                        template=template,
-                        saltenv=__env__,
-                        template_context=template_context,
-                        dry_run=True,
-                        **kwargs,
-                    )
-                    ret["changes"] = {"old": {}, "new": dry_run_result}
-                except CommandExecutionError as err:
-                    ret["result"] = None
-                    ret["comment"] = (
-                        "The configmap is going to be created. "
-                        f"Dry run failed, possibly due to dependencies not created yet: {err}"
-                    )
-                return ret
-
-            res = __salt__["kubernetes.create_configmap"](
-                name=name,
-                namespace=namespace,
-                data=data,
-                source=source,
-                template=template,
-                saltenv=__env__,
-                template_context=template_context,
-                wait=wait,
-                timeout=timeout,
-                **kwargs,
-            )
-            ret["result"] = True
-            ret["changes"] = {"old": {}, "new": res}
-            ret["comment"] = "ConfigMap created"
+            else:
+                ret["result"] = True
+                ret["comment"] = "ConfigMap created"
             return ret
 
         # ConfigMap exists — build the patch object
@@ -1222,53 +1153,40 @@ def configmap_present(
                 patch_obj["data"] = data
             patch_kwargs = {"patch": patch_obj}
 
-        if __opts__["test"]:
-            try:
-                res = __salt__["kubernetes.patch_configmap"](
-                    name,
-                    namespace,
-                    dry_run=True,
-                    **patch_kwargs,
-                    **kwargs,
-                )
-            except CommandExecutionError as err:
-                ret["result"] = None
-                ret["comment"] = (
-                    "The configmap is going to be updated. "
-                    f"Dry run failed, possibly due to dependencies not created yet: {err}"
-                )
-                return ret
-
-            if res == configmap:
-                ret["result"] = True
-                ret["comment"] = "The configmap is already in the desired state"
-                return ret
-
+        try:
+            res = __salt__["kubernetes.patch_configmap"](
+                name,
+                namespace,
+                dry_run=bool(__opts__["test"]),
+                wait=wait,
+                timeout=timeout,
+                **patch_kwargs,
+                **kwargs,
+            )
+        except CommandExecutionError as err:
+            if not __opts__["test"]:
+                raise
             ret["result"] = None
-            ret["comment"] = "The configmap is going to be updated"
-            ret["changes"] = {"old": configmap, "new": res}
+            ret["comment"] = (
+                "The configmap is going to be updated. "
+                f"Dry run failed, possibly due to dependencies not created yet: {err}"
+            )
             return ret
-
-        res = __salt__["kubernetes.patch_configmap"](
-            name,
-            namespace,
-            wait=wait,
-            timeout=timeout,
-            **patch_kwargs,
-            **kwargs,
-        )
 
         if res == configmap:
             ret["result"] = True
             ret["comment"] = "The configmap is already in the desired state"
             return ret
 
-        ret["changes"] = {"old": configmap, "new": res}
-        ret["result"] = True
-        ret["comment"] = "ConfigMap updated"
+        ret["changes"] = _changes(configmap, res)
+        if __opts__["test"]:
+            ret["result"] = None
+            ret["comment"] = "The configmap is going to be updated"
+        else:
+            ret["result"] = True
+            ret["comment"] = "ConfigMap updated"
 
     except CommandExecutionError as err:
-        log.error(str(err), exc_info_on_loglevel=logging.DEBUG)
         ret["result"] = False
         ret["comment"] = str(err)
         ret["changes"] = {}

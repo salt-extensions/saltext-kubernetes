@@ -328,6 +328,36 @@ def test_patch_nonexistent_secret(kubernetes, secret):
         )
 
 
+def test_patch_preserves_keys_replace_removes_keys(kubernetes, secret, secret_data):
+    """
+    Test that patch preserves unspecified keys while replace removes them.
+    """
+    # Add an extra key via patch
+    kubernetes.patch_secret(
+        name=secret["name"],
+        namespace=secret["namespace"],
+        patch={"data": {"extra": "data"}},
+        wait=True,
+    )
+    res = kubernetes.show_secret(secret["name"], secret["namespace"], decode=True)
+    # Patch should preserve original key and add extra
+    assert "key" in res["data"]
+    assert res["data"]["extra"] == "data"
+
+    # Replace with only the extra key
+    kubernetes.replace_secret(
+        name=secret["name"],
+        namespace=secret["namespace"],
+        data={"extra": "data"},
+        secret_type=secret_data[1],
+        wait=True,
+    )
+    res = kubernetes.show_secret(secret["name"], secret["namespace"], decode=True)
+    # Replace should have removed the original key
+    assert "key" not in res["data"]
+    assert res["data"]["extra"] == "data"
+
+
 def test_delete_existing_secret(kubernetes, secret):
     """
     Test deleting a secret that exists returns expected result
@@ -635,6 +665,38 @@ def test_patch_nonexistent_deployment(kubernetes, deployment):
         )
 
 
+def test_patch_preserves_spec_replace_is_full_deployment(kubernetes, deployment):
+    """
+    Test that patch merges into spec while replace overwrites it entirely.
+    """
+    # Patch to add an annotation via spec.template.metadata
+    kubernetes.patch_deployment(
+        deployment["name"],
+        deployment["namespace"],
+        {"spec": {"template": {"metadata": {"annotations": {"note": "patched"}}}}},
+        wait=True,
+    )
+    res = kubernetes.show_deployment(deployment["name"], deployment["namespace"])
+    # Patch should have preserved replicas and added the annotation
+    assert res["spec"]["replicas"] == 1
+    assert res["spec"]["template"]["metadata"]["annotations"]["note"] == "patched"
+
+    # Replace with original spec (no annotation) — should drop the annotation
+    kubernetes.replace_deployment(
+        name=deployment["name"],
+        namespace=deployment["namespace"],
+        metadata={},
+        spec=deployment["spec"],
+        source=None,
+        template=None,
+        saltenv="base",
+        wait=True,
+    )
+    res = kubernetes.show_deployment(deployment["name"], deployment["namespace"])
+    # Replace should have dropped the annotation
+    assert not res["spec"]["template"]["metadata"].get("annotations", {})
+
+
 def test_delete_existing_deployment(kubernetes, deployment):
     """
     Test deleting a deployment that exists returns expected result
@@ -871,6 +933,42 @@ def test_patch_nonexistent_service(kubernetes, service):
         )
 
 
+def test_patch_preserves_ports_replace_drops_them_service(kubernetes, service):
+    """
+    Test that patch merges into spec while replace overwrites it entirely.
+    """
+    # Patch to add a second port (original has port 80)
+    kubernetes.patch_service(
+        name=service["name"],
+        namespace=service["namespace"],
+        patch={"spec": {"ports": [{"name": "http", "port": 80}, {"name": "extra", "port": 9090}]}},
+        wait=True,
+    )
+    res = kubernetes.show_service(service["name"], service["namespace"])
+    ports = {p["port"] for p in res["spec"]["ports"]}
+    assert 80 in ports
+    assert 9090 in ports
+
+    # Replace with spec that only has port 8080 — should drop both old ports
+    old_service = kubernetes.show_service(service["name"], service["namespace"])
+    new_spec = {"ports": [{"port": 8080}], "selector": {"app": "nginx"}, "type": "ClusterIP"}
+    kubernetes.replace_service(
+        name=service["name"],
+        namespace=service["namespace"],
+        metadata={},
+        spec=new_spec,
+        old_service=old_service,
+        source=None,
+        template=None,
+        saltenv="base",
+        wait=True,
+    )
+    res = kubernetes.show_service(service["name"], service["namespace"])
+    ports = {p["port"] for p in res["spec"]["ports"]}
+    # Replace should have only the new port
+    assert ports == {8080}
+
+
 def test_delete_existing_service(kubernetes, service):
     """
     Test deleting a service that exists returns expected result
@@ -1105,6 +1203,35 @@ def test_patch_nonexistent_configmap(kubernetes, configmap):
             patch=patch,
             wait=True,
         )
+
+
+def test_patch_preserves_keys_replace_removes_keys_configmap(kubernetes, configmap):
+    """
+    Test that patch preserves unspecified keys while replace removes them.
+    """
+    # Add an extra key via patch
+    kubernetes.patch_configmap(
+        name=configmap["name"],
+        namespace=configmap["namespace"],
+        patch={"data": {"extra": "data"}},
+        wait=True,
+    )
+    res = kubernetes.show_configmap(configmap["name"], configmap["namespace"])
+    # Patch should preserve original key and add extra
+    assert "key" in res["data"]
+    assert res["data"]["extra"] == "data"
+
+    # Replace with only the extra key
+    kubernetes.replace_configmap(
+        name=configmap["name"],
+        namespace=configmap["namespace"],
+        data={"extra": "data"},
+        wait=True,
+    )
+    res = kubernetes.show_configmap(configmap["name"], configmap["namespace"])
+    # Replace should have removed the original key
+    assert "key" not in res["data"]
+    assert res["data"]["extra"] == "data"
 
 
 def test_delete_existing_configmap(kubernetes, configmap):

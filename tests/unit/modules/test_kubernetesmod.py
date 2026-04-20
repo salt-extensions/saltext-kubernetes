@@ -69,8 +69,12 @@ def mock_api():
     Mock kubernetes API connection for testing error handling paths.
     Patches _setup_conn, _cleanup, and the kubernetes client module.
     """
-    with patch("saltext.kubernetes.modules.kubernetesmod._setup_conn", return_value={}):
-        with patch("saltext.kubernetes.modules.kubernetesmod._cleanup"):
+    with patch(
+        "saltext.kubernetes.modules.kubernetesmod._setup_conn",
+        autospec=True,
+        return_value={},
+    ):
+        with patch("saltext.kubernetes.modules.kubernetesmod._cleanup", autospec=True):
             with patch("saltext.kubernetes.modules.kubernetesmod.kubernetes") as mock_k8s:
                 yield mock_k8s
 
@@ -316,56 +320,45 @@ def test_pod_with_invalid_spec(invalid_spec, expected_error):
         func(invalid_spec)
 
 
-def test_deployments_handles_api_exception():
+def test_deployments_handles_api_exception(mock_api):
     """
     Test that deployments() handles ApiException properly
     """
-    with patch("saltext.kubernetes.modules.kubernetesmod._setup_conn", return_value={}):
-        with patch("saltext.kubernetes.modules.kubernetesmod._cleanup"):
-            with patch("saltext.kubernetes.modules.kubernetesmod.kubernetes") as mock_k8s:
-                # Simulate API exception (e.g., network error, auth failure)
-                mock_k8s.client.AppsV1Api().list_namespaced_deployment.side_effect = ApiException(
-                    status=500, reason="Internal Server Error"
-                )
+    # Simulate API exception (e.g., network error, auth failure)
+    mock_api.client.AppsV1Api().list_namespaced_deployment.side_effect = ApiException(
+        status=500, reason="Internal Server Error"
+    )
 
-                with pytest.raises(CommandExecutionError):
-                    kubernetes.deployments()
+    with pytest.raises(CommandExecutionError):
+        kubernetes.deployments()
 
 
-def test_deployments_handles_404_gracefully():
+def test_deployments_handles_404_gracefully(mock_api):
     """
     Test that deployments() returns empty list for 404 (namespace not found)
     """
-    with patch("saltext.kubernetes.modules.kubernetesmod._setup_conn", return_value={}):
-        with patch("saltext.kubernetes.modules.kubernetesmod._cleanup"):
-            with patch("saltext.kubernetes.modules.kubernetesmod.kubernetes") as mock_k8s:
-                # Simulate 404 - namespace doesn't exist
-                mock_k8s.client.AppsV1Api().list_namespaced_deployment.side_effect = ApiException(
-                    status=404, reason="Not Found"
-                )
+    # Simulate 404 - namespace doesn't exist
+    mock_api.client.AppsV1Api().list_namespaced_deployment.side_effect = ApiException(
+        status=404, reason="Not Found"
+    )
 
-                result = kubernetes.deployments("nonexistent-namespace")
-                assert result == []
+    result = kubernetes.deployments("nonexistent-namespace")
+    assert result == []
 
 
-def test_deployments_handles_empty_response():
+def test_deployments_handles_empty_response(mock_api):
     """
     Test that deployments() handles response with no items gracefully
     """
-    with patch("saltext.kubernetes.modules.kubernetesmod._setup_conn", return_value={}):
-        with patch("saltext.kubernetes.modules.kubernetesmod._cleanup"):
-            with patch("saltext.kubernetes.modules.kubernetesmod.kubernetes") as mock_k8s:
-                with patch(
-                    "saltext.kubernetes.modules.kubernetesmod.ApiClient"
-                ) as mock_api_client_class:
-                    mock_api_client_instance = Mock()
-                    mock_api_client_instance.sanitize_for_serialization.return_value = {}
-                    mock_api_client_class.return_value = mock_api_client_instance
+    with patch("saltext.kubernetes.modules.kubernetesmod.ApiClient") as mock_api_client_class:
+        mock_api_client_instance = Mock()
+        mock_api_client_instance.sanitize_for_serialization.return_value = {}
+        mock_api_client_class.return_value = mock_api_client_instance
 
-                    mock_k8s.client.AppsV1Api().list_namespaced_deployment.return_value = Mock()
+        mock_api.client.AppsV1Api().list_namespaced_deployment.return_value = Mock()
 
-                    result = kubernetes.deployments()
-                    assert result == []
+        result = kubernetes.deployments()
+        assert result == []
 
 
 def test_patch_deployment_validates_patch_parameter():
@@ -376,58 +369,46 @@ def test_patch_deployment_validates_patch_parameter():
         kubernetes.patch_deployment("test", "default", patch="not-a-dict")
 
 
-def test_patch_deployment_handles_missing_deployment():
+def test_patch_deployment_handles_missing_deployment(mock_api):
     """
     Test patch_deployment handles case where deployment doesn't exist
     """
-    with patch("saltext.kubernetes.modules.kubernetesmod._setup_conn", return_value={}):
-        with patch("saltext.kubernetes.modules.kubernetesmod._cleanup"):
-            with patch("saltext.kubernetes.modules.kubernetesmod.kubernetes") as mock_k8s:
-                # Simulate deployment not found
-                mock_k8s.client.AppsV1Api().patch_namespaced_deployment.side_effect = ApiException(
-                    status=404, reason="Not Found"
-                )
+    # Simulate deployment not found
+    mock_api.client.AppsV1Api().patch_namespaced_deployment.side_effect = ApiException(
+        status=404, reason="Not Found"
+    )
 
-                with pytest.raises(CommandExecutionError):
-                    kubernetes.patch_deployment(
-                        "nonexistent", "default", patch={"spec": {"replicas": 3}}
-                    )
+    with pytest.raises(CommandExecutionError):
+        kubernetes.patch_deployment("nonexistent", "default", patch={"spec": {"replicas": 3}})
 
 
-def test_delete_deployment_handles_already_deleted():
+def test_delete_deployment_handles_already_deleted(mock_api):
     """
     Test delete_deployment returns None when deployment is already deleted (404)
     """
-    mock_exc = ApiException(status=404, reason="Not Found")
-
-    with patch("saltext.kubernetes.modules.kubernetesmod._setup_conn", return_value={}):
-        with patch("saltext.kubernetes.modules.kubernetesmod._cleanup"):
-            with patch("saltext.kubernetes.modules.kubernetesmod.kubernetes") as mock_k8s:
-                mock_k8s.client.V1DeleteOptions.return_value = MagicMock()
-                mock_k8s.client.AppsV1Api.return_value.delete_namespaced_deployment.side_effect = (
-                    mock_exc
-                )
-                result = kubernetes.delete_deployment("already-deleted", "default")
-                assert result is None
+    mock_api.client.V1DeleteOptions.return_value = MagicMock()
+    mock_api.client.AppsV1Api.return_value.delete_namespaced_deployment.side_effect = ApiException(
+        status=404, reason="Not Found"
+    )
+    result = kubernetes.delete_deployment("already-deleted", "default")
+    assert result is None
 
 
 def test_patch_deployment_handles_source_rendering_error():
     """
     Test patch_deployment handles template rendering errors gracefully
     """
-    with patch("saltext.kubernetes.modules.kubernetesmod._setup_conn", return_value={}):
-        with patch("saltext.kubernetes.modules.kubernetesmod._cleanup"):
-            with patch.dict(
-                kubernetes.__salt__,
-                {
-                    "cp.cache_file": MagicMock(return_value=None),
-                },
-            ):
-                with patch.dict(kubernetes.__opts__, {"saltenv": "base"}):
-                    with pytest.raises(CommandExecutionError, match="Source file.*not found"):
-                        kubernetes.patch_deployment(
-                            "test", "default", patch=None, source="salt://bad-template.yml"
-                        )
+    with patch.dict(
+        kubernetes.__salt__,
+        {
+            "cp.cache_file": MagicMock(return_value=None),
+        },
+    ):
+        with patch.dict(kubernetes.__opts__, {"saltenv": "base"}):
+            with pytest.raises(CommandExecutionError, match="Source file.*not found"):
+                kubernetes.patch_deployment(
+                    "test", "default", patch=None, source="salt://bad-template.yml"
+                )
 
 
 def test_patch_deployment_handles_invalid_yaml():
@@ -441,21 +422,17 @@ def test_patch_deployment_handles_invalid_yaml():
         tmpfile = f.name
 
     try:
-        with patch("saltext.kubernetes.modules.kubernetesmod._setup_conn", return_value={}):
-            with patch("saltext.kubernetes.modules.kubernetesmod._cleanup"):
-                with patch.dict(
-                    kubernetes.__salt__,
-                    {
-                        "cp.cache_file": MagicMock(return_value=tmpfile),
-                    },
-                ):
-                    with patch.dict(kubernetes.__opts__, {"saltenv": "base"}):
-                        with pytest.raises(
-                            CommandExecutionError, match="did not render to a dictionary"
-                        ):
-                            kubernetes.patch_deployment(
-                                "test", "default", patch=None, source="salt://invalid.yml"
-                            )
+        with patch.dict(
+            kubernetes.__salt__,
+            {
+                "cp.cache_file": MagicMock(return_value=tmpfile),
+            },
+        ):
+            with patch.dict(kubernetes.__opts__, {"saltenv": "base"}):
+                with pytest.raises(CommandExecutionError, match="did not render to a dictionary"):
+                    kubernetes.patch_deployment(
+                        "test", "default", patch=None, source="salt://invalid.yml"
+                    )
     finally:
         os.unlink(tmpfile)
 
@@ -468,20 +445,15 @@ def test_patch_service_validates_patch_parameter():
         kubernetes.patch_service("test", "default", patch="not-a-dict")
 
 
-def test_patch_service_handles_missing_service():
+def test_patch_service_handles_missing_service(mock_api):
     """
     Test patch_service handles case where service doesn't exist
     """
-    with patch("saltext.kubernetes.modules.kubernetesmod._setup_conn", return_value={}):
-        with patch("saltext.kubernetes.modules.kubernetesmod._cleanup"):
-            with patch("saltext.kubernetes.modules.kubernetesmod.kubernetes") as mock_k8s:
-                mock_k8s.client.CoreV1Api().patch_namespaced_service.side_effect = ApiException(
-                    status=404, reason="Not Found"
-                )
-                with pytest.raises(CommandExecutionError):
-                    kubernetes.patch_service(
-                        "nonexistent", "default", patch={"spec": {"type": "ClusterIP"}}
-                    )
+    mock_api.client.CoreV1Api().patch_namespaced_service.side_effect = ApiException(
+        status=404, reason="Not Found"
+    )
+    with pytest.raises(CommandExecutionError):
+        kubernetes.patch_service("nonexistent", "default", patch={"spec": {"type": "ClusterIP"}})
 
 
 def test_patch_secret_validates_patch_parameter():
@@ -492,20 +464,15 @@ def test_patch_secret_validates_patch_parameter():
         kubernetes.patch_secret("test", "default", patch="not-a-dict")
 
 
-def test_patch_secret_handles_missing_secret():
+def test_patch_secret_handles_missing_secret(mock_api):
     """
     Test patch_secret handles case where secret doesn't exist
     """
-    with patch("saltext.kubernetes.modules.kubernetesmod._setup_conn", return_value={}):
-        with patch("saltext.kubernetes.modules.kubernetesmod._cleanup"):
-            with patch("saltext.kubernetes.modules.kubernetesmod.kubernetes") as mock_k8s:
-                mock_k8s.client.CoreV1Api().patch_namespaced_secret.side_effect = ApiException(
-                    status=404, reason="Not Found"
-                )
-                with pytest.raises(CommandExecutionError):
-                    kubernetes.patch_secret(
-                        "nonexistent", "default", patch={"data": {"key": "val"}}
-                    )
+    mock_api.client.CoreV1Api().patch_namespaced_secret.side_effect = ApiException(
+        status=404, reason="Not Found"
+    )
+    with pytest.raises(CommandExecutionError):
+        kubernetes.patch_secret("nonexistent", "default", patch={"data": {"key": "val"}})
 
 
 def test_patch_configmap_validates_patch_parameter():
@@ -516,20 +483,15 @@ def test_patch_configmap_validates_patch_parameter():
         kubernetes.patch_configmap("test", "default", patch="not-a-dict")
 
 
-def test_patch_configmap_handles_missing_configmap():
+def test_patch_configmap_handles_missing_configmap(mock_api):
     """
     Test patch_configmap handles case where configmap doesn't exist
     """
-    with patch("saltext.kubernetes.modules.kubernetesmod._setup_conn", return_value={}):
-        with patch("saltext.kubernetes.modules.kubernetesmod._cleanup"):
-            with patch("saltext.kubernetes.modules.kubernetesmod.kubernetes") as mock_k8s:
-                mock_k8s.client.CoreV1Api().patch_namespaced_config_map.side_effect = ApiException(
-                    status=404, reason="Not Found"
-                )
-                with pytest.raises(CommandExecutionError):
-                    kubernetes.patch_configmap(
-                        "nonexistent", "default", patch={"data": {"key": "val"}}
-                    )
+    mock_api.client.CoreV1Api().patch_namespaced_config_map.side_effect = ApiException(
+        status=404, reason="Not Found"
+    )
+    with pytest.raises(CommandExecutionError):
+        kubernetes.patch_configmap("nonexistent", "default", patch={"data": {"key": "val"}})
 
 
 def test_setup_conn_missing_config():
@@ -642,20 +604,16 @@ def test_patch_service_handles_source_not_found():
     """
     Test patch_service raises when source file is not found
     """
-    with patch("saltext.kubernetes.modules.kubernetesmod._setup_conn", return_value={}):
-        with patch("saltext.kubernetes.modules.kubernetesmod._cleanup"):
-            with patch.dict(
-                kubernetes.__salt__,
-                {"cp.cache_file": MagicMock(return_value=None)},
-            ):
-                with patch.dict(kubernetes.__opts__, {"saltenv": "base"}):
-                    with pytest.raises(CommandExecutionError, match="Source file.*not found"):
-                        kubernetes.patch_service(
-                            "test", "default", patch=None, source="salt://missing.yml"
-                        )
+    with patch.dict(
+        kubernetes.__salt__,
+        {"cp.cache_file": MagicMock(return_value=None)},
+    ):
+        with patch.dict(kubernetes.__opts__, {"saltenv": "base"}):
+            with pytest.raises(CommandExecutionError, match="Source file.*not found"):
+                kubernetes.patch_service("test", "default", patch=None, source="salt://missing.yml")
 
 
-def test_create_configmap_invalid_data_type(mock_api):
+def test_create_configmap_invalid_data_type():
     """
     Test create_configmap raises when data is not a dictionary
     """
@@ -672,17 +630,15 @@ def test_create_configmap_source_missing_data_key():
         tmpfile = f.name
 
     try:
-        with patch("saltext.kubernetes.modules.kubernetesmod._setup_conn", return_value={}):
-            with patch("saltext.kubernetes.modules.kubernetesmod._cleanup"):
-                with patch.dict(
-                    kubernetes.__salt__,
-                    {"cp.cache_file": MagicMock(return_value=tmpfile)},
-                ):
-                    with patch.dict(kubernetes.__opts__, {"saltenv": "base"}):
-                        with pytest.raises(CommandExecutionError, match="data"):
-                            kubernetes.create_configmap(
-                                "test", "default", data=None, source="salt://test.yml"
-                            )
+        with patch.dict(
+            kubernetes.__salt__,
+            {"cp.cache_file": MagicMock(return_value=tmpfile)},
+        ):
+            with patch.dict(kubernetes.__opts__, {"saltenv": "base"}):
+                with pytest.raises(CommandExecutionError, match="data"):
+                    kubernetes.create_configmap(
+                        "test", "default", data=None, source="salt://test.yml"
+                    )
     finally:
         os.unlink(tmpfile)
 
