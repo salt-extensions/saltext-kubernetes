@@ -361,12 +361,59 @@ def test_deployments_handles_empty_response(mock_api):
         assert result == []
 
 
+def test_statefulsets_handles_api_exception(mock_api):
+    """
+    Test that statefulsets() handles ApiException properly
+    """
+    mock_api.client.AppsV1Api().list_namespaced_stateful_set.side_effect = ApiException(
+        status=500, reason="Internal Server Error"
+    )
+
+    with pytest.raises(CommandExecutionError):
+        kubernetes.statefulsets()
+
+
+def test_statefulsets_handles_404_gracefully(mock_api):
+    """
+    Test that statefulsets() returns empty list for 404 (namespace not found)
+    """
+    mock_api.client.AppsV1Api().list_namespaced_stateful_set.side_effect = ApiException(
+        status=404, reason="Not Found"
+    )
+
+    result = kubernetes.statefulsets("nonexistent-namespace")
+    assert result == []
+
+
+def test_statefulsets_handles_empty_response(mock_api):
+    """
+    Test that statefulsets() handles response with no items gracefully
+    """
+    with patch("saltext.kubernetes.modules.kubernetesmod.ApiClient") as mock_api_client_class:
+        mock_api_client_instance = Mock()
+        mock_api_client_instance.sanitize_for_serialization.return_value = {}
+        mock_api_client_class.return_value = mock_api_client_instance
+
+        mock_api.client.AppsV1Api().list_namespaced_stateful_set.return_value = Mock()
+
+        result = kubernetes.statefulsets()
+        assert result == []
+
+
 def test_patch_deployment_validates_patch_parameter():
     """
     Test patch_deployment raises error when patch is not a dictionary
     """
     with pytest.raises(CommandExecutionError, match="Patch must be a dictionary"):
         kubernetes.patch_deployment("test", "default", patch="not-a-dict")
+
+
+def test_patch_statefulset_validates_patch_parameter():
+    """
+    Test patch_statefulset raises error when patch is not a dictionary
+    """
+    with pytest.raises(CommandExecutionError, match="Patch must be a dictionary"):
+        kubernetes.patch_statefulset("test", "default", patch="not-a-dict")
 
 
 def test_patch_deployment_handles_missing_deployment(mock_api):
@@ -382,6 +429,18 @@ def test_patch_deployment_handles_missing_deployment(mock_api):
         kubernetes.patch_deployment("nonexistent", "default", patch={"spec": {"replicas": 3}})
 
 
+def test_patch_statefulset_handles_missing_statefulset(mock_api):
+    """
+    Test patch_statefulset handles case where statefulset doesn't exist
+    """
+    mock_api.client.AppsV1Api().patch_namespaced_stateful_set.side_effect = ApiException(
+        status=404, reason="Not Found"
+    )
+
+    with pytest.raises(CommandExecutionError):
+        kubernetes.patch_statefulset("nonexistent", "default", patch={"spec": {"replicas": 3}})
+
+
 def test_delete_deployment_handles_already_deleted(mock_api):
     """
     Test delete_deployment returns None when deployment is already deleted (404)
@@ -391,6 +450,18 @@ def test_delete_deployment_handles_already_deleted(mock_api):
         status=404, reason="Not Found"
     )
     result = kubernetes.delete_deployment("already-deleted", "default")
+    assert result is None
+
+
+def test_delete_statefulset_handles_already_deleted(mock_api):
+    """
+    Test delete_statefulset returns None when statefulset is already deleted (404)
+    """
+    mock_api.client.V1DeleteOptions.return_value = MagicMock()
+    mock_api.client.AppsV1Api.return_value.delete_namespaced_stateful_set.side_effect = (
+        ApiException(status=404, reason="Not Found")
+    )
+    result = kubernetes.delete_statefulset("already-deleted", "default")
     assert result is None
 
 
@@ -431,6 +502,47 @@ def test_patch_deployment_handles_invalid_yaml():
             with patch.dict(kubernetes.__opts__, {"saltenv": "base"}):
                 with pytest.raises(CommandExecutionError, match="did not render to a dictionary"):
                     kubernetes.patch_deployment(
+                        "test", "default", patch=None, source="salt://invalid.yml"
+                    )
+    finally:
+        os.unlink(tmpfile)
+
+
+def test_patch_statefulset_handles_source_rendering_error():
+    """
+    Test patch_statefulset handles template rendering errors gracefully
+    """
+    with patch.dict(
+        kubernetes.__salt__,
+        {
+            "cp.cache_file": MagicMock(return_value=None),
+        },
+    ):
+        with patch.dict(kubernetes.__opts__, {"saltenv": "base"}):
+            with pytest.raises(CommandExecutionError, match="Source file.*not found"):
+                kubernetes.patch_statefulset(
+                    "test", "default", patch=None, source="salt://bad-template.yml"
+                )
+
+
+def test_patch_statefulset_handles_invalid_yaml():
+    """
+    Test patch_statefulset raises error when source file does not render to a dictionary
+    """
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".yml", delete=False) as f:
+        f.write("- item1\n- item2\n")
+        tmpfile = f.name
+
+    try:
+        with patch.dict(
+            kubernetes.__salt__,
+            {
+                "cp.cache_file": MagicMock(return_value=tmpfile),
+            },
+        ):
+            with patch.dict(kubernetes.__opts__, {"saltenv": "base"}):
+                with pytest.raises(CommandExecutionError, match="did not render to a dictionary"):
+                    kubernetes.patch_statefulset(
                         "test", "default", patch=None, source="salt://invalid.yml"
                     )
     finally:
@@ -578,6 +690,20 @@ def test_create_service_handles_conflict(mock_api):
             kubernetes.create_service("test", "default", {}, {}, None, None, None)
 
 
+def test_create_statefulset_handles_conflict(mock_api):
+    """
+    Test create_statefulset raises for 409 conflict (already exists)
+    """
+    with patch(
+        "saltext.kubernetes.modules.kubernetesmod.__create_object_body", return_value=MagicMock()
+    ):
+        mock_api.client.AppsV1Api().create_namespaced_stateful_set.side_effect = ApiException(
+            status=409, reason="AlreadyExists"
+        )
+        with pytest.raises(CommandExecutionError, match="already exists"):
+            kubernetes.create_statefulset("test", "default", {}, {}, None, None, None)
+
+
 def test_patch_deployment_handles_conflict(mock_api):
     """
     Test patch_deployment raises for 409 conflict (concurrent modification)
@@ -598,6 +724,66 @@ def test_patch_configmap_handles_conflict(mock_api):
     )
     with pytest.raises(CommandExecutionError, match="Conflict when patching"):
         kubernetes.patch_configmap("test", "default", patch={"data": {"key": "val"}})
+
+
+def test_patch_statefulset_handles_conflict(mock_api):
+    """
+    Test patch_statefulset raises for 409 conflict (concurrent modification)
+    """
+    mock_api.client.AppsV1Api().patch_namespaced_stateful_set.side_effect = ApiException(
+        status=409, reason="Conflict"
+    )
+    with pytest.raises(CommandExecutionError, match="Conflict when patching"):
+        kubernetes.patch_statefulset("test", "default", patch={"spec": {"replicas": 3}})
+
+
+@pytest.mark.parametrize(
+    "invalid_spec,expected_error",
+    [
+        ({"template": {}}, "serviceName"),
+        ({"serviceName": "svc"}, "template"),
+        ({"serviceName": "svc", "template": "not-a-dict"}, "Template must be a dictionary"),
+        (
+            {
+                "serviceName": "svc",
+                "template": {
+                    "metadata": {"labels": {"app": "nginx"}},
+                    "spec": {"containers": [{"name": "nginx"}]},
+                },
+            },
+            "Invalid pod spec in statefulset template",
+        ),
+        (
+            {
+                "serviceName": "svc",
+                "replicas": "invalid",
+                "selector": {"matchLabels": {"app": "nginx"}},
+                "template": {
+                    "metadata": {"labels": {"app": "nginx"}},
+                    "spec": {"containers": [{"name": "nginx", "image": "nginx:latest"}]},
+                },
+            },
+            "replicas must be an integer",
+        ),
+        (
+            {
+                "serviceName": "svc",
+                "selector": "invalid",
+                "template": {
+                    "metadata": {"labels": {"app": "nginx"}},
+                    "spec": {"containers": [{"name": "nginx", "image": "nginx:latest"}]},
+                },
+            },
+            "Selector must be a dictionary",
+        ),
+        ("not-a-dict", "must be a dictionary"),
+    ],
+)
+def test_statefulset_invalid_spec(invalid_spec, expected_error):
+    """Test statefulset spec validation raises appropriate errors"""
+    func = getattr(kubernetes, "__dict_to_statefulset_spec")
+    with pytest.raises(CommandExecutionError, match=expected_error):
+        func(invalid_spec)
 
 
 def test_patch_service_handles_source_not_found():

@@ -486,6 +486,97 @@ def test_deployment_present_dry_run_fallback():
             assert "dependencies not created yet" in ret["comment"]
 
 
+def test_statefulset_present_handles_show_statefulset_error():
+    """
+    Test statefulset_present handles CommandExecutionError from show_statefulset
+    """
+    with patch.dict(
+        kubernetes.__salt__,
+        {
+            "kubernetes.show_statefulset": MagicMock(
+                side_effect=CommandExecutionError("Connection failed")
+            )
+        },
+    ):
+        with patch.dict(kubernetes.__opts__, {"test": False}):
+            ret = kubernetes.statefulset_present("test-statefulset")
+
+            assert ret["result"] is False
+            assert "Connection failed" in ret["comment"]
+            assert not ret["changes"]
+
+
+def test_statefulset_present_handles_create_statefulset_error():
+    """
+    Test statefulset_present handles CommandExecutionError from create_statefulset
+    """
+    with patch.dict(
+        kubernetes.__salt__,
+        {
+            "kubernetes.show_statefulset": MagicMock(return_value=None),
+            "kubernetes.create_statefulset": MagicMock(
+                side_effect=CommandExecutionError("Invalid spec")
+            ),
+        },
+    ):
+        with patch.dict(kubernetes.__opts__, {"test": False}):
+            ret = kubernetes.statefulset_present("test-statefulset", spec={"invalid": "spec"})
+
+            assert ret["result"] is False
+            assert "Invalid spec" in ret["comment"]
+
+
+def test_statefulset_present_handles_patch_statefulset_error():
+    """
+    Test statefulset_present handles CommandExecutionError from patch_statefulset
+    """
+    existing_statefulset = {"metadata": {"name": "test"}, "spec": {"replicas": 1}}
+
+    with patch.dict(
+        kubernetes.__salt__,
+        {
+            "kubernetes.show_statefulset": MagicMock(return_value=existing_statefulset),
+            "kubernetes.patch_statefulset": MagicMock(
+                side_effect=CommandExecutionError("Patch failed")
+            ),
+        },
+    ):
+        with patch.dict(kubernetes.__opts__, {"test": False}):
+            ret = kubernetes.statefulset_present("test-statefulset", spec={"replicas": 3})
+
+            assert ret["result"] is False
+            assert "Patch failed" in ret["comment"]
+
+
+def test_statefulset_present_dry_run_fallback():
+    """
+    Test that statefulset_present falls back gracefully when dry_run fails in test mode
+    """
+    with patch.dict(
+        kubernetes.__salt__,
+        {
+            "kubernetes.show_statefulset": MagicMock(return_value=None),
+            "kubernetes.create_statefulset": MagicMock(
+                side_effect=CommandExecutionError("Dry run failed")
+            ),
+        },
+    ):
+        with patch.dict(kubernetes.__opts__, {"test": True}):
+            ret = kubernetes.statefulset_present(
+                "test-statefulset",
+                spec={
+                    "serviceName": "test-service",
+                    "template": {
+                        "spec": {"containers": [{"name": "nginx", "image": "nginx:latest"}]}
+                    },
+                },
+            )
+
+            assert ret["result"] is None
+            assert "Dry run failed" in ret["comment"]
+            assert "dependencies not created yet" in ret["comment"]
+
+
 @pytest.mark.parametrize(
     "state_func,show_func",
     [
@@ -494,6 +585,7 @@ def test_deployment_present_dry_run_fallback():
         ("secret_absent", "show_secret"),
         ("configmap_absent", "show_configmap"),
         ("pod_absent", "show_pod"),
+        ("statefulset_absent", "show_statefulset"),
     ],
 )
 def test_absent_handles_show_error(state_func, show_func):
@@ -519,6 +611,7 @@ def test_absent_handles_show_error(state_func, show_func):
         ("secret_absent", "show_secret", "delete_secret"),
         ("configmap_absent", "show_configmap", "delete_configmap"),
         ("pod_absent", "show_pod", "delete_pod"),
+        ("statefulset_absent", "show_statefulset", "delete_statefulset"),
     ],
 )
 def test_absent_handles_delete_error(state_func, show_func, delete_func):
@@ -548,6 +641,7 @@ def test_absent_handles_delete_error(state_func, show_func, delete_func):
         ("configmap_present", "show_configmap"),
         ("pod_present", "show_pod"),
         ("namespace_present", "show_namespace"),
+        ("statefulset_present", "show_statefulset"),
     ],
 )
 def test_present_handles_show_error(state_func, show_func):

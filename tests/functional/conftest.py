@@ -242,6 +242,52 @@ def deployment(kubernetes_exe, deployment_spec, request):
         assert kubernetes_exe.show_deployment(name=name, namespace=namespace) is None
 
 
+@pytest.fixture
+def statefulset_spec():
+    """
+    Fixture providing a basic statefulset spec
+    """
+    return {
+        "serviceName": "statefulset-service",
+        "replicas": 1,
+        "selector": {"matchLabels": {"app": "nginx"}},
+        "template": {
+            "metadata": {"labels": {"app": "nginx"}},
+            "spec": {"containers": [{"name": "nginx", "image": "nginx:latest"}]},
+        },
+    }
+
+
+@pytest.fixture(params=[True])
+def statefulset(kubernetes_exe, statefulset_spec, request):
+    """
+    Fixture to create a test statefulset.
+
+    If request.param is True, statefulset is created before the test.
+    If request.param is False, statefulset is not created.
+    """
+    name = random_string("statefulset-", uppercase=False)
+    namespace = "default"
+
+    if request.param:
+        res = kubernetes_exe.create_statefulset(
+            name=name,
+            namespace=namespace,
+            metadata={},
+            spec=statefulset_spec,
+            wait=True,
+        )
+        assert isinstance(res, dict)
+        assert res["metadata"]["name"] == name
+        assert res["spec"]["replicas"] == statefulset_spec["replicas"]
+
+    try:
+        yield {"name": name, "namespace": namespace, "spec": statefulset_spec}
+    finally:
+        kubernetes_exe.delete_statefulset(name=name, namespace=namespace, wait=True)
+        assert kubernetes_exe.show_statefulset(name=name, namespace=namespace) is None
+
+
 @pytest.fixture(params=[True])
 def secret(kubernetes_exe, secret_data, request):
     """

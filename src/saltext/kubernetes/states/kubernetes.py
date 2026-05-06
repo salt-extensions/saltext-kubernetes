@@ -388,6 +388,249 @@ def deployment_present(
     return ret
 
 
+def statefulset_absent(name, namespace="default", wait=False, timeout=60, **kwargs):
+    """
+    .. versionadded:: 2.1.0
+
+    Ensures that the named statefulset is absent from the given namespace.
+
+    name
+        The name of the statefulset
+
+    namespace
+        The name of the namespace
+
+    wait
+        If set to True, the function will wait until the statefulset is deleted.
+
+    timeout
+        The time in seconds to wait for the statefulset to be deleted.
+
+    Example:
+
+    .. code-block:: yaml
+
+        my-statefulset:
+          kubernetes.statefulset_absent:
+            - namespace: default
+    """
+
+    ret = {"name": name, "changes": {}, "result": False, "comment": ""}
+
+    try:
+        statefulset = __salt__["kubernetes.show_statefulset"](name, namespace, **kwargs)
+
+        if statefulset is None:
+            ret["result"] = True
+            ret["comment"] = "The statefulset does not exist"
+            return ret
+
+        if __opts__["test"]:
+            ret["result"] = None
+            ret["comment"] = "The statefulset is going to be deleted"
+            ret["changes"] = {
+                "old": "present",
+                "new": "absent",
+            }
+            return ret
+
+        __salt__["kubernetes.delete_statefulset"](
+            name, namespace, wait=wait, timeout=timeout, **kwargs
+        )
+
+        ret["result"] = True
+        ret["changes"] = {"old": "present", "new": "absent"}
+        ret["comment"] = f"StatefulSet {name} deleted"
+
+    except CommandExecutionError as err:
+        log.error(str(err), exc_info_on_loglevel=logging.DEBUG)
+        ret["result"] = False
+        ret["comment"] = str(err)
+        ret["changes"] = {}
+
+    return ret
+
+
+def statefulset_present(
+    name,
+    namespace="default",
+    metadata=None,
+    spec=None,
+    source="",
+    template="",
+    template_context=None,
+    wait=False,
+    timeout=60,
+    **kwargs,
+):
+    """
+    .. versionadded:: 2.1.0
+
+    Ensures that the named statefulset is present inside of the specified
+    namespace with the given metadata and spec.
+    If the statefulset exists, it will be patched with the desired state.
+
+    name
+        The name of the statefulset.
+
+    namespace
+        The namespace holding the statefulset. The 'default' one is going to be
+        used unless a different one is specified.
+
+    metadata
+        The metadata of the statefulset object.
+
+    spec
+        The spec of the statefulset object.
+
+    source
+        A file containing the definition of the statefulset (metadata and
+        spec) in the official kubernetes format.
+
+    template
+        Template engine to be used to render the source file.
+
+    template_context
+        Variables to be passed into the template.
+
+    wait
+        If set to True, the function will wait until the statefulset is ready.
+
+    timeout
+        The time in seconds to wait for the statefulset to be ready.
+
+    Example:
+
+    .. code-block:: yaml
+
+        my-statefulset:
+          kubernetes.statefulset_present:
+            - namespace: default
+            - metadata:
+                app: myapp
+            - spec:
+                serviceName: my-service
+                replicas: 3
+                selector:
+                  matchLabels:
+                    app: myapp
+                template:
+                  metadata:
+                    labels:
+                      app: myapp
+                  spec:
+                    containers:
+                    - name: myapp
+                      image: myapp:latest
+                      ports:
+                      - containerPort: 8080
+    """
+    ret = {"name": name, "changes": {}, "result": False, "comment": ""}
+
+    if (metadata or spec) and source:
+        return _error(ret, "'source' cannot be used in combination with 'metadata' or 'spec'")
+
+    if metadata is None:
+        metadata = {}
+
+    if spec is None:
+        spec = {}
+
+    try:
+        statefulset = __salt__["kubernetes.show_statefulset"](name, namespace, **kwargs)
+
+        if statefulset is None:
+            try:
+                res = __salt__["kubernetes.create_statefulset"](
+                    name=name,
+                    namespace=namespace,
+                    metadata=metadata,
+                    spec=spec,
+                    source=source,
+                    template=template,
+                    saltenv=__env__,
+                    template_context=template_context,
+                    dry_run=bool(__opts__["test"]),
+                    wait=wait if not __opts__["test"] else False,
+                    timeout=timeout,
+                    **kwargs,
+                )
+            except CommandExecutionError as err:
+                if not __opts__["test"]:
+                    raise
+                ret["result"] = None
+                ret["comment"] = (
+                    "The statefulset is going to be created. "
+                    f"Dry run failed, possibly due to dependencies not created yet: {err}"
+                )
+                return ret
+
+            ret["changes"] = {"old": {}, "new": res}
+            if __opts__["test"]:
+                ret["result"] = None
+                ret["comment"] = "The statefulset is going to be created"
+            else:
+                ret["result"] = True
+                ret["comment"] = "StatefulSet created"
+            return ret
+
+        # StatefulSet exists — build the patch object
+        if source:
+            patch_kwargs = {
+                "source": source,
+                "template": template,
+                "template_context": template_context,
+            }
+        else:
+            patch_obj = {}
+            if metadata:
+                patch_obj["metadata"] = metadata
+            if spec:
+                patch_obj["spec"] = spec
+            patch_kwargs = {"patch": patch_obj}
+
+        try:
+            res = __salt__["kubernetes.patch_statefulset"](
+                name,
+                namespace,
+                dry_run=bool(__opts__["test"]),
+                wait=wait,
+                timeout=timeout,
+                **patch_kwargs,
+                **kwargs,
+            )
+        except CommandExecutionError as err:
+            if not __opts__["test"]:
+                raise
+            ret["result"] = None
+            ret["comment"] = (
+                "The statefulset is going to be updated. "
+                f"Dry run failed, possibly due to dependencies not created yet: {err}"
+            )
+            return ret
+
+        if res == statefulset:
+            ret["result"] = True
+            ret["comment"] = "The statefulset is already in the desired state"
+            return ret
+
+        ret["changes"] = _changes(statefulset, res)
+        if __opts__["test"]:
+            ret["result"] = None
+            ret["comment"] = "The statefulset is going to be updated"
+        else:
+            ret["result"] = True
+            ret["comment"] = "StatefulSet updated"
+
+    except CommandExecutionError as err:
+        log.error(str(err), exc_info_on_loglevel=logging.DEBUG)
+        ret["result"] = False
+        ret["comment"] = str(err)
+        ret["changes"] = {}
+
+    return ret
+
+
 def service_present(
     name,
     namespace="default",

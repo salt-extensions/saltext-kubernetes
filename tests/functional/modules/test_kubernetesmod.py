@@ -763,6 +763,208 @@ def test_list_deployments_in_nonexistent_namespace(kubernetes, namespace):
     assert res == []
 
 
+def test_statefulsets(kubernetes, statefulset):
+    """
+    Test that the statefulsets function returns a list of statefulsets in the specified namespace
+    """
+    res = kubernetes.statefulsets(statefulset["namespace"])
+    assert isinstance(res, list)
+    assert statefulset["name"] in res
+
+
+@pytest.mark.parametrize("statefulset", [False], indirect=True)
+def test_create_statefulset(kubernetes, statefulset):
+    """
+    Test creating a statefulset returns expected result
+    """
+    res = kubernetes.create_statefulset(
+        name=statefulset["name"],
+        namespace=statefulset["namespace"],
+        metadata={},
+        spec=statefulset["spec"],
+        source=None,
+        template=None,
+        saltenv="base",
+        wait=True,
+    )
+    assert isinstance(res, dict)
+    assert res["metadata"]["name"] == statefulset["name"]
+    assert res["metadata"]["namespace"] == statefulset["namespace"]
+
+
+def test_create_existing_statefulset(kubernetes, statefulset):
+    """
+    Test creating a statefulset that already exists raises appropriate error
+    """
+    with pytest.raises(CommandExecutionError, match=".*already exists.*"):
+        kubernetes.create_statefulset(
+            name=statefulset["name"],
+            namespace=statefulset["namespace"],
+            metadata={},
+            spec=statefulset["spec"],
+            source=None,
+            template=None,
+            saltenv="base",
+            wait=True,
+        )
+
+
+def test_show_statefulset(kubernetes, statefulset):
+    """
+    Test showing a statefulset returns expected result
+    """
+    res = kubernetes.show_statefulset(statefulset["name"], statefulset["namespace"])
+    assert isinstance(res, dict)
+    assert res["metadata"]["name"] == statefulset["name"]
+    assert res["metadata"]["namespace"] == statefulset["namespace"]
+    assert res["spec"]["replicas"] == statefulset["spec"]["replicas"]
+    assert res["spec"]["selector"] == statefulset["spec"]["selector"]
+
+
+@pytest.mark.parametrize("statefulset", [False], indirect=True)
+def test_show_nonexistent_statefulset(kubernetes, statefulset):
+    """
+    Test showing a statefulset that doesn't exist returns None
+    """
+    res = kubernetes.show_statefulset(statefulset["name"], statefulset["namespace"])
+    assert res is None
+
+
+def test_replace_statefulset(kubernetes, statefulset):
+    """
+    Test replacing a statefulset with new spec
+    """
+    new_spec = statefulset["spec"].copy()
+    new_spec["replicas"] = 2
+
+    res = kubernetes.replace_statefulset(
+        name=statefulset["name"],
+        namespace=statefulset["namespace"],
+        metadata={},
+        spec=new_spec,
+        source=None,
+        template=None,
+        saltenv="base",
+        wait=True,
+    )
+    assert isinstance(res, dict)
+    assert res["spec"]["replicas"] == 2
+
+
+@pytest.mark.parametrize("statefulset", [False], indirect=True)
+def test_replace_nonexistent_statefulset(kubernetes, statefulset):
+    """
+    Test replacing a statefulset that doesn't exist raises appropriate error
+    """
+    new_spec = statefulset["spec"].copy()
+    new_spec["replicas"] = 2
+
+    with pytest.raises(CommandExecutionError, match=".*not found.*"):
+        kubernetes.replace_statefulset(
+            name=statefulset["name"],
+            namespace=statefulset["namespace"],
+            metadata={},
+            spec=new_spec,
+            source=None,
+            template=None,
+            saltenv="base",
+            wait=True,
+        )
+
+
+def test_patch_statefulset(kubernetes, statefulset):
+    """
+    Test patching a statefulset to change the number of replicas.
+    """
+    patch = {
+        "spec": {
+            "replicas": 2,
+        }
+    }
+    res = kubernetes.patch_statefulset(
+        statefulset["name"],
+        statefulset["namespace"],
+        patch,
+        wait=True,
+        timeout=120,
+    )
+    assert isinstance(res, dict)
+    assert res["spec"]["replicas"] == 2
+
+
+@pytest.mark.parametrize("statefulset", [False], indirect=True)
+def test_patch_nonexistent_statefulset(kubernetes, statefulset):
+    """
+    Test patching a statefulset that doesn't exist raises appropriate error
+    """
+    patch = {"spec": {"replicas": 2}}
+    with pytest.raises(CommandExecutionError, match=".*not found.*"):
+        kubernetes.patch_statefulset(
+            statefulset["name"],
+            statefulset["namespace"],
+            patch,
+            wait=True,
+            timeout=120,
+        )
+
+
+def test_patch_preserves_spec_replace_is_full_statefulset(kubernetes, statefulset):
+    """
+    Test that patch merges into spec while replace overwrites it entirely.
+    """
+    kubernetes.patch_statefulset(
+        statefulset["name"],
+        statefulset["namespace"],
+        {"spec": {"template": {"metadata": {"annotations": {"note": "patched"}}}}},
+        wait=True,
+    )
+    res = kubernetes.show_statefulset(statefulset["name"], statefulset["namespace"])
+    assert res["spec"]["replicas"] == 1
+    assert res["spec"]["template"]["metadata"]["annotations"]["note"] == "patched"
+
+    kubernetes.replace_statefulset(
+        name=statefulset["name"],
+        namespace=statefulset["namespace"],
+        metadata={},
+        spec=statefulset["spec"],
+        source=None,
+        template=None,
+        saltenv="base",
+        wait=True,
+    )
+    res = kubernetes.show_statefulset(statefulset["name"], statefulset["namespace"])
+    assert not res["spec"]["template"]["metadata"].get("annotations", {})
+
+
+def test_delete_existing_statefulset(kubernetes, statefulset):
+    """
+    Test deleting a statefulset that exists returns expected result
+    """
+    res = kubernetes.delete_statefulset(statefulset["name"], statefulset["namespace"], wait=True)
+    assert isinstance(res, dict)
+
+    deleted_statefulset = kubernetes.show_statefulset(statefulset["name"], statefulset["namespace"])
+    assert deleted_statefulset is None
+
+
+@pytest.mark.parametrize("statefulset", [False], indirect=True)
+def test_delete_nonexistent_statefulset(kubernetes, statefulset):
+    """
+    Test deleting a statefulset that doesn't exist returns None
+    """
+    res = kubernetes.delete_statefulset(statefulset["name"], statefulset["namespace"])
+    assert res is None
+
+
+@pytest.mark.parametrize("namespace", [False], indirect=True)
+def test_list_statefulsets_in_nonexistent_namespace(kubernetes, namespace):
+    """
+    Test listing statefulsets in a namespace that doesn't exist returns empty list
+    """
+    res = kubernetes.statefulsets(namespace)
+    assert res == []
+
+
 @pytest.fixture
 def service_spec(request):
     """

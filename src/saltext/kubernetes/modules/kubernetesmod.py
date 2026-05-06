@@ -506,6 +506,39 @@ def configmaps(namespace="default", **kwargs):
         _cleanup(**cfg)
 
 
+def statefulsets(namespace="default", **kwargs):
+    """
+    .. versionadded:: 2.1.0
+
+    Return a list of kubernetes statefulsets defined in the namespace
+
+    namespace
+        The namespace to list statefulsets from. Defaults to ``default``.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.statefulsets
+        salt '*' kubernetes.statefulsets namespace=default
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        api_instance = kubernetes.client.AppsV1Api()
+        api_response = api_instance.list_namespaced_stateful_set(namespace)
+
+        return [
+            statefulset["metadata"]["name"]
+            for statefulset in ApiClient().sanitize_for_serialization(api_response).get("items", [])
+        ]
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            return []  # Return empty list for nonexistent namespace
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
 def show_deployment(name, namespace="default", **kwargs):
     """
     Return the kubernetes deployment defined by name and namespace
@@ -696,6 +729,39 @@ def show_configmap(name, namespace="default", **kwargs):
     try:
         api_instance = kubernetes.client.CoreV1Api()
         api_response = api_instance.read_namespaced_config_map(name, namespace)
+
+        return ApiClient().sanitize_for_serialization(api_response)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            return None
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def show_statefulset(name, namespace="default", **kwargs):
+    """
+    .. versionadded:: 2.1.0
+
+    Return the kubernetes statefulset defined by name and namespace.
+
+    name
+        The name of the statefulset
+
+    namespace
+        The namespace to look for the statefulset. Defaults to ``default``.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.show_statefulset my-statefulset default
+        salt '*' kubernetes.show_statefulset name=my-statefulset namespace=default
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        api_instance = kubernetes.client.AppsV1Api()
+        api_response = api_instance.read_namespaced_stateful_set(name, namespace)
 
         return ApiClient().sanitize_for_serialization(api_response)
     except (ApiException, HTTPError) as exc:
@@ -1004,6 +1070,59 @@ def delete_configmap(name, namespace="default", wait=False, timeout=60, **kwargs
             return None
         else:
             raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def delete_statefulset(name, namespace="default", wait=False, timeout=60, **kwargs):
+    """
+    .. versionadded:: 2.1.0
+
+    Deletes the kubernetes statefulset defined by name and namespace
+
+    name
+        The name of the statefulset
+
+    namespace
+        The namespace to delete the statefulset from. Defaults to ``default``.
+
+    wait
+        .. versionadded:: 2.0.0
+
+        Wait for statefulset deletion to complete (default: False)
+
+    timeout
+        .. versionadded:: 2.0.0
+
+        Timeout in seconds to wait for deletion (default: 60)
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.delete_statefulset my-statefulset default
+        salt '*' kubernetes.delete_statefulset name=my-statefulset namespace=default
+    """
+    cfg = _setup_conn(**kwargs)
+    body = kubernetes.client.V1DeleteOptions(orphan_dependents=True)
+
+    try:
+        api_instance = kubernetes.client.AppsV1Api()
+        api_response = api_instance.delete_namespaced_stateful_set(
+            name=name, namespace=namespace, body=body
+        )
+
+        if wait:
+            if not _wait_for_resource_status(
+                api_instance, "statefulset", name, namespace, "deleted", timeout
+            ):
+                raise CommandExecutionError(f"Timeout waiting for statefulset {name} to be deleted")
+
+        return ApiClient().sanitize_for_serialization(api_response)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            return None
+        raise CommandExecutionError(exc) from exc
     finally:
         _cleanup(**cfg)
 
@@ -1651,6 +1770,117 @@ def create_namespace(name, **kwargs):
         _cleanup(**cfg)
 
 
+def create_statefulset(
+    name,
+    namespace="default",
+    metadata=None,
+    spec=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    dry_run=False,
+    wait=False,
+    timeout=60,
+    **kwargs,
+):
+    """
+    .. versionadded:: 2.1.0
+
+    Creates a statefulset with the specified name, namespace, metadata, and spec.
+
+    name
+        The name of the statefulset
+
+    namespace
+        The namespace to create the statefulset in. Defaults to ``default``.
+
+    metadata
+        StatefulSet metadata dict
+
+    spec
+        StatefulSet spec dict following kubernetes API conventions
+
+    source
+        File path to statefulset definition
+
+    template
+        Template engine to use to render the source file
+
+    saltenv
+        Salt environment to pull the source file from
+
+        .. versionchanged:: 2.0.0
+            Defaults to the value of the :conf_minion:`saltenv` minion option or ``base``.
+
+    template_context
+        .. versionadded:: 2.0.0
+
+        Variables to make available in templated files
+
+    dry_run
+        .. versionadded:: 2.0.0
+
+        If True, only simulates the creation of the statefulset
+
+    wait
+        .. versionadded:: 2.0.0
+
+        Wait for statefulset to become ready (default: False)
+
+    timeout
+        .. versionadded:: 2.0.0
+
+        Timeout in seconds to wait for statefulset (default: 60)
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.create_statefulset name=my-statefulset namespace=default spec='{"replicas": 3}' wait=True
+    """
+    body = __create_object_body(
+        kind="StatefulSet",
+        obj_class=kubernetes.client.V1StatefulSet,
+        spec_creator=__dict_to_statefulset_spec,
+        name=name,
+        namespace=namespace,
+        metadata=metadata,
+        spec=spec,
+        source=source,
+        template=template,
+        saltenv=saltenv,
+        template_context=template_context,
+    )
+
+    cfg = _setup_conn(**kwargs)
+
+    try:
+        api_instance = kubernetes.client.AppsV1Api()
+        api_response = api_instance.create_namespaced_stateful_set(
+            namespace, body, dry_run="All" if dry_run else None
+        )
+
+        if wait:
+            if not _wait_for_resource_status(
+                api_instance, "statefulset", name, namespace, "ready", timeout
+            ):
+                raise CommandExecutionError(
+                    f"Timeout waiting for statefulset {name} to become ready"
+                )
+
+        return ApiClient().sanitize_for_serialization(api_response)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException):
+            if exc.status == 404:
+                raise CommandExecutionError(f"StatefulSet {namespace}/{name} not found") from exc
+            if exc.status == 409:
+                raise CommandExecutionError(f"StatefulSet {name} already exists") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
 def replace_deployment(
     name,
     metadata,
@@ -2106,6 +2336,99 @@ def replace_configmap(
         _cleanup(**cfg)
 
 
+def replace_statefulset(
+    name,
+    namespace,
+    spec,
+    metadata=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    wait=False,
+    timeout=60,
+    **kwargs,
+):
+    """
+    .. versionadded:: 2.1.0
+
+    Replaces an existing statefulset with a new one defined by name and
+    namespace with the specified spec.
+
+    name
+        The name of the statefulset
+
+    namespace
+        The namespace of the statefulset
+
+    spec
+        A dictionary representing the spec of the statefulset
+
+    metadata
+        A dictionary representing the metadata of the statefulset
+
+    source
+        File path to statefulset definition
+
+    template
+        Template engine to use to render the source file
+
+    saltenv
+        Salt environment to pull the source file from
+
+    template_context
+        Variables to make available in templated files
+
+    wait
+        Wait for statefulset to become ready (default: False)
+
+    timeout
+        Timeout in seconds to wait for statefulset (default: 60)
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt 'minion1' kubernetes.replace_statefulset \
+            name=my-statefulset namespace=default spec='{"replicas": 3}'
+    """
+    body = __create_object_body(
+        kind="StatefulSet",
+        obj_class=kubernetes.client.V1StatefulSet,
+        spec_creator=__dict_to_statefulset_spec,
+        name=name,
+        namespace=namespace,
+        metadata=metadata,
+        spec=spec,
+        source=source,
+        template=template,
+        saltenv=saltenv,
+        template_context=template_context,
+    )
+
+    cfg = _setup_conn(**kwargs)
+
+    try:
+        api_instance = kubernetes.client.AppsV1Api()
+        api_response = api_instance.replace_namespaced_stateful_set(name, namespace, body)
+
+        if wait:
+            if not _wait_for_resource_status(
+                api_instance, "statefulset", name, namespace, "ready", timeout
+            ):
+                raise CommandExecutionError(
+                    f"Timeout waiting for statefulset {name} to become ready"
+                )
+
+        return ApiClient().sanitize_for_serialization(api_response)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            raise CommandExecutionError(f"StatefulSet {namespace}/{name} not found") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
 def patch_service(
     name,
     namespace,
@@ -2478,6 +2801,99 @@ def patch_deployment(
             raise CommandExecutionError(f"Deployment {namespace}/{name} not found") from exc
         if isinstance(exc, ApiException) and exc.status == 409:
             raise CommandExecutionError(f"Conflict when patching deployment {name}") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def patch_statefulset(
+    name,
+    namespace,
+    patch=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    dry_run=False,
+    wait=False,
+    timeout=60,
+    **kwargs,
+):
+    """
+    .. versionadded:: 2.1.0
+
+    Patches an existing statefulset with the provided patch dictionary.
+
+    name
+        The name of the statefulset
+
+    namespace
+        The namespace of the statefulset
+
+    patch
+        A dictionary representing the patch to apply to the statefulset
+
+    source
+        File path to patch definition
+
+    template
+        Template engine to use to render the source file
+
+    saltenv
+        Salt environment to pull the source file from
+
+    template_context
+        Variables to make available in templated files
+
+    dry_run
+        If True, only simulates the patch without applying it (default: False)
+
+    wait
+        Wait for statefulset to become ready (default: False)
+
+    timeout
+        Timeout in seconds to wait for statefulset (default: 60)
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.patch_statefulset \
+            name=my-statefulset \
+            namespace=default \
+            patch='{"spec": {"replicas": 5}}'
+    """
+    if source:
+        rendered = __read_and_render_yaml_file(source, template, saltenv, template_context)
+        if not isinstance(rendered, dict):
+            raise CommandExecutionError("The source file did not render to a dictionary")
+        patch = rendered
+
+    if not isinstance(patch, dict):
+        raise CommandExecutionError("Patch must be a dictionary")
+
+    cfg = _setup_conn(**kwargs)
+
+    try:
+        api_instance = kubernetes.client.AppsV1Api()
+        api_response = api_instance.patch_namespaced_stateful_set(
+            name, namespace, patch, dry_run="All" if dry_run else None
+        )
+
+        if wait:
+            if not _wait_for_resource_status(
+                api_instance, "statefulset", name, namespace, "ready", timeout
+            ):
+                raise CommandExecutionError(
+                    f"Timeout waiting for statefulset {name} to become ready"
+                )
+
+        return ApiClient().sanitize_for_serialization(api_response)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            raise CommandExecutionError(f"StatefulSet {namespace}/{name} not found") from exc
+        if isinstance(exc, ApiException) and exc.status == 409:
+            raise CommandExecutionError(f"Conflict when patching statefulset {name}") from exc
         raise CommandExecutionError(exc) from exc
     finally:
         _cleanup(**cfg)
@@ -2884,6 +3300,79 @@ def __dict_to_service_spec(spec):
     return spec_obj
 
 
+def __dict_to_statefulset_spec(spec):
+    """
+    .. versionadded:: 2.1.0
+
+    Converts a dictionary into kubernetes V1StatefulSetSpec instance.
+    """
+    if not isinstance(spec, dict):
+        raise CommandExecutionError(
+            f"StatefulSet spec must be a dictionary, not {type(spec).__name__}"
+        )
+
+    processed_spec = spec.copy()
+
+    # Validate required fields (accept both camelCase and snake_case input)
+    if "serviceName" not in processed_spec and "service_name" not in processed_spec:
+        raise CommandExecutionError("StatefulSet spec must include 'serviceName'")
+
+    # Validate required template field
+    if "template" not in processed_spec:
+        raise CommandExecutionError("StatefulSet spec must include template with pod specification")
+
+    template = processed_spec["template"]
+    if not isinstance(template, dict):
+        raise CommandExecutionError(f"Template must be a dictionary, not {type(template).__name__}")
+
+    template_metadata = template.get("metadata", {})
+    template_spec = template.get("spec", {})
+
+    # Validate template has pod spec
+    if not template_spec:
+        raise CommandExecutionError("Template must include pod specification")
+
+    # Create pod spec
+    try:
+        pod_spec = __dict_to_pod_spec(template_spec)
+    except (CommandExecutionError, ValueError) as exc:
+        raise CommandExecutionError(f"Invalid pod spec in statefulset template: {exc}") from exc
+
+    # Create pod template
+    pod_template = kubernetes.client.V1PodTemplateSpec(
+        metadata=kubernetes.client.V1ObjectMeta(**template_metadata), spec=pod_spec
+    )
+    processed_spec["template"] = pod_template
+
+    # Handle selector - optional for StatefulSet but validate if provided
+    if "selector" in processed_spec:
+        selector = processed_spec["selector"]
+        if not isinstance(selector, dict):
+            raise CommandExecutionError(
+                f"Selector must be a dictionary, not {type(selector).__name__}"
+            )
+        if "matchLabels" in selector:
+            processed_spec["selector"] = {"match_labels": selector["matchLabels"]}
+        processed_spec["selector"] = kubernetes.client.V1LabelSelector(**processed_spec["selector"])
+
+    # Handle replicas conversion
+    if "replicas" in processed_spec:
+        try:
+            processed_spec["replicas"] = int(processed_spec["replicas"])
+        except (TypeError, ValueError) as exc:
+            raise CommandExecutionError(f"replicas must be an integer: {exc}") from exc
+
+    # Convert serviceName (camelCase from YAML/user input) to service_name (Python client)
+    if "serviceName" in processed_spec:
+        processed_spec["service_name"] = processed_spec.pop("serviceName")
+
+    # Create final spec
+    try:
+        return kubernetes.client.V1StatefulSetSpec(**processed_spec)
+    except (TypeError, ValueError) as exc:
+        raise CommandExecutionError(f"Invalid statefulset spec: {exc}") from exc
+
+
 def __enforce_only_strings_dict(dictionary):
     """
     Returns a dictionary that has string keys and values.
@@ -2945,6 +3434,8 @@ def _wait_for_resource_status(
                         api_instance.read_namespaced_secret(name, namespace)
                     elif resource_type == "configmap":
                         api_instance.read_namespaced_config_map(name, namespace)
+                    elif resource_type == "statefulset":
+                        api_instance.read_namespaced_stateful_set(name, namespace)
                 except ApiException as e:
                     if e.status == 404:
                         # Resource is gone, deletion successful
@@ -2955,8 +3446,14 @@ def _wait_for_resource_status(
             return False
 
         # For creation/ready status watching
+        # statefulset maps to list_namespaced_stateful_set (compound word in k8s client)
+        list_method_name = (
+            "list_namespaced_stateful_set"
+            if resource_type == "statefulset"
+            else f"list_namespaced_{resource_type}"
+        )
         for event in w.stream(
-            func=getattr(api_instance, f"list_namespaced_{resource_type}"),
+            func=getattr(api_instance, list_method_name),
             namespace=namespace,
             field_selector=f"metadata.name={name}",
             timeout_seconds=timeout,
