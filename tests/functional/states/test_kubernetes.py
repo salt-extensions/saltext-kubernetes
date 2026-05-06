@@ -525,6 +525,220 @@ def test_deployment_absent_idempotency(kubernetes, deployment, testmode):
 
 
 @pytest.fixture
+def statefulset_template(state_tree):
+    sls = "k8s/statefulset-template"
+    contents = dedent("""
+        apiVersion: apps/v1
+        kind: StatefulSet
+        metadata:
+          name: {{ name }}
+          namespace: {{ namespace }}
+          labels: {{ labels | json }}
+        spec:
+          serviceName: {{ service_name }}
+          replicas: {{ replicas }}
+          selector:
+            matchLabels:
+              app: {{ app_label }}
+          template:
+            metadata:
+              labels: {{ labels | json }}
+            spec:
+              containers:
+              - name: {{ name }}
+                image: {{ image }}
+                ports:
+                - containerPort: 80
+        """).strip()
+
+    with pytest.helpers.temp_file(f"{sls}.yml.jinja", contents, state_tree):
+        yield f"salt://{sls}.yml.jinja"
+
+
+@pytest.mark.parametrize("statefulset", [False], indirect=True)
+def test_statefulset_present(kubernetes, statefulset, testmode, kubernetes_exe):
+    """
+    Test kubernetes.statefulset_present creates a statefulset
+    """
+    ret = kubernetes.statefulset_present(
+        name=statefulset["name"],
+        namespace=statefulset["namespace"],
+        spec=statefulset["spec"],
+        wait=True,
+        test=testmode,
+    )
+
+    assert ret.result in (None, True)
+    assert (ret.result is None) is testmode
+    if not testmode:
+        assert ret.changes["new"]["spec"]["replicas"] == statefulset["spec"]["replicas"]
+        statefulset_state = kubernetes_exe.show_statefulset(
+            name=statefulset["name"], namespace=statefulset["namespace"]
+        )
+        assert statefulset_state["metadata"]["name"] == statefulset["name"]
+        assert statefulset_state["spec"]["replicas"] == statefulset["spec"]["replicas"]
+    else:
+        assert ret.changes["new"]["spec"]["replicas"] == statefulset["spec"]["replicas"]
+        statefulset_state = kubernetes_exe.show_statefulset(
+            name=statefulset["name"], namespace=statefulset["namespace"]
+        )
+        assert statefulset_state is None
+
+
+def test_statefulset_present_idempotency(kubernetes, statefulset, testmode):
+    """
+    Test kubernetes.statefulset_present is idempotent
+    """
+    ret = kubernetes.statefulset_present(
+        name=statefulset["name"],
+        namespace=statefulset["namespace"],
+        spec=statefulset["spec"],
+        wait=True,
+        test=testmode,
+    )
+    assert ret.result is True
+    assert "The statefulset is already in the desired state" in ret.comment
+    assert not ret.changes
+
+
+def test_statefulset_present_patch(kubernetes, statefulset, kubernetes_exe, testmode):
+    """
+    Test kubernetes.statefulset_present patches a statefulset
+    """
+    statefulset["spec"]["replicas"] = 2
+
+    ret = kubernetes.statefulset_present(
+        name=statefulset["name"],
+        namespace=statefulset["namespace"],
+        spec=statefulset["spec"],
+        wait=True,
+        test=testmode,
+    )
+    assert ret.result in (None, True)
+    assert (ret.result is None) is testmode
+    assert ret.changes["new"]["spec"]["replicas"] == 2
+
+    statefulset_state = kubernetes_exe.show_statefulset(
+        name=statefulset["name"], namespace=statefulset["namespace"]
+    )
+    assert statefulset_state["metadata"]["name"] == statefulset["name"]
+    assert (statefulset_state["spec"]["replicas"] == 2) is not testmode
+
+
+def test_statefulset_present_patch_source(
+    kubernetes, statefulset, statefulset_template, kubernetes_exe
+):
+    """
+    Test kubernetes.statefulset_present patches a statefulset using source/template
+    """
+    template_context = {
+        "name": statefulset["name"],
+        "namespace": statefulset["namespace"],
+        "service_name": statefulset["spec"]["serviceName"],
+        "replicas": statefulset["spec"]["replicas"],
+        "app_label": "nginx",
+        "image": "nginx:1.27",
+        "labels": {"app": "nginx"},
+    }
+
+    ret = kubernetes.statefulset_present(
+        name=statefulset["name"],
+        namespace=statefulset["namespace"],
+        source=statefulset_template,
+        template="jinja",
+        template_context=template_context,
+        wait=True,
+    )
+    assert ret.result is True
+
+    statefulset_state = kubernetes_exe.show_statefulset(
+        name=statefulset["name"], namespace=statefulset["namespace"]
+    )
+    assert statefulset_state["metadata"]["name"] == statefulset["name"]
+    assert statefulset_state["spec"]["template"]["spec"]["containers"][0]["image"] == "nginx:1.27"
+
+
+@pytest.mark.parametrize("statefulset", [False], indirect=True)
+def test_statefulset_present_template_context(
+    kubernetes, statefulset, statefulset_template, kubernetes_exe
+):
+    """
+    Test kubernetes.statefulset_present with template_context
+    """
+    template_context = {
+        "name": statefulset["name"],
+        "namespace": statefulset["namespace"],
+        "service_name": statefulset["spec"]["serviceName"],
+        "replicas": statefulset["spec"]["replicas"],
+        "app_label": "test",
+        "image": "nginx:latest",
+        "labels": {"app": "test"},
+    }
+
+    ret = kubernetes.statefulset_present(
+        name=statefulset["name"],
+        namespace=statefulset["namespace"],
+        source=statefulset_template,
+        template="jinja",
+        template_context=template_context,
+        wait=True,
+    )
+    assert ret.result is True
+
+    statefulset_state = kubernetes_exe.show_statefulset(
+        name=statefulset["name"], namespace=statefulset["namespace"]
+    )
+    assert statefulset_state["metadata"]["name"] == statefulset["name"]
+    assert statefulset_state["spec"]["replicas"] == statefulset["spec"]["replicas"]
+    assert statefulset_state["metadata"]["labels"]["app"] == "test"
+    assert statefulset_state["spec"]["selector"]["matchLabels"]["app"] == "test"
+    assert statefulset_state["spec"]["template"]["spec"]["containers"][0]["image"] == "nginx:latest"
+
+
+def test_statefulset_absent(kubernetes, statefulset, testmode, kubernetes_exe):
+    """
+    Test kubernetes.statefulset_absent deletes a statefulset
+    """
+    ret = kubernetes.statefulset_absent(
+        name=statefulset["name"],
+        namespace=statefulset["namespace"],
+        wait=True,
+        test=testmode,
+    )
+
+    assert ret.result in (None, True)
+    assert (ret.result is None) is testmode
+
+    if not testmode:
+        assert ret.changes["new"] == "absent"
+        statefulset_state = kubernetes_exe.show_statefulset(
+            name=statefulset["name"], namespace=statefulset["namespace"]
+        )
+        assert statefulset_state is None
+    else:
+        assert ret.changes["new"] == "absent"
+        assert "The statefulset is going to be deleted" in ret.comment
+        statefulset_state = kubernetes_exe.show_statefulset(
+            name=statefulset["name"], namespace=statefulset["namespace"]
+        )
+        assert statefulset_state is not None
+        assert statefulset_state["metadata"]["name"] == statefulset["name"]
+
+
+@pytest.mark.parametrize("statefulset", [False], indirect=True)
+def test_statefulset_absent_idempotency(kubernetes, statefulset, testmode):
+    """
+    Test kubernetes.statefulset_absent is idempotent
+    """
+    ret = kubernetes.statefulset_absent(
+        name=statefulset["name"], namespace=statefulset["namespace"], wait=True, test=testmode
+    )
+    assert ret.result is True
+    assert "does not exist" in ret.comment
+    assert not ret.changes
+
+
+@pytest.fixture
 def secret_data():
     return {"key": "value"}, "Opaque"
 
