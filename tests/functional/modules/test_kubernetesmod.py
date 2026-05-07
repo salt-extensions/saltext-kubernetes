@@ -965,6 +965,208 @@ def test_list_statefulsets_in_nonexistent_namespace(kubernetes, namespace):
     assert res == []
 
 
+def test_replicasets(kubernetes, replicaset):
+    """
+    Test that the replicasets function returns a list of replicasets in the specified namespace
+    """
+    res = kubernetes.replicasets(replicaset["namespace"])
+    assert isinstance(res, list)
+    assert replicaset["name"] in res
+
+
+@pytest.mark.parametrize("replicaset", [False], indirect=True)
+def test_create_replicaset(kubernetes, replicaset):
+    """
+    Test creating a replicaset returns expected result
+    """
+    res = kubernetes.create_replicaset(
+        name=replicaset["name"],
+        namespace=replicaset["namespace"],
+        metadata={},
+        spec=replicaset["spec"],
+        source=None,
+        template=None,
+        saltenv="base",
+        wait=True,
+    )
+    assert isinstance(res, dict)
+    assert res["metadata"]["name"] == replicaset["name"]
+    assert res["metadata"]["namespace"] == replicaset["namespace"]
+
+
+def test_create_existing_replicaset(kubernetes, replicaset):
+    """
+    Test creating a replicaset that already exists raises appropriate error
+    """
+    with pytest.raises(CommandExecutionError, match=".*already exists.*"):
+        kubernetes.create_replicaset(
+            name=replicaset["name"],
+            namespace=replicaset["namespace"],
+            metadata={},
+            spec=replicaset["spec"],
+            source=None,
+            template=None,
+            saltenv="base",
+            wait=True,
+        )
+
+
+def test_show_replicaset(kubernetes, replicaset):
+    """
+    Test showing a replicaset returns expected result
+    """
+    res = kubernetes.show_replicaset(replicaset["name"], replicaset["namespace"])
+    assert isinstance(res, dict)
+    assert res["metadata"]["name"] == replicaset["name"]
+    assert res["metadata"]["namespace"] == replicaset["namespace"]
+    assert res["spec"]["replicas"] == replicaset["spec"]["replicas"]
+    assert res["spec"]["selector"] == replicaset["spec"]["selector"]
+
+
+@pytest.mark.parametrize("replicaset", [False], indirect=True)
+def test_show_nonexistent_replicaset(kubernetes, replicaset):
+    """
+    Test showing a replicaset that doesn't exist returns None
+    """
+    res = kubernetes.show_replicaset(replicaset["name"], replicaset["namespace"])
+    assert res is None
+
+
+def test_replace_replicaset(kubernetes, replicaset):
+    """
+    Test replacing a replicaset with new spec
+    """
+    new_spec = replicaset["spec"].copy()
+    new_spec["replicas"] = 2
+
+    res = kubernetes.replace_replicaset(
+        name=replicaset["name"],
+        namespace=replicaset["namespace"],
+        metadata={},
+        spec=new_spec,
+        source=None,
+        template=None,
+        saltenv="base",
+        wait=True,
+    )
+    assert isinstance(res, dict)
+    assert res["spec"]["replicas"] == 2
+
+
+@pytest.mark.parametrize("replicaset", [False], indirect=True)
+def test_replace_nonexistent_replicaset(kubernetes, replicaset):
+    """
+    Test replacing a replicaset that doesn't exist raises appropriate error
+    """
+    new_spec = replicaset["spec"].copy()
+    new_spec["replicas"] = 2
+
+    with pytest.raises(CommandExecutionError, match=".*not found.*"):
+        kubernetes.replace_replicaset(
+            name=replicaset["name"],
+            namespace=replicaset["namespace"],
+            metadata={},
+            spec=new_spec,
+            source=None,
+            template=None,
+            saltenv="base",
+            wait=True,
+        )
+
+
+def test_patch_replicaset(kubernetes, replicaset):
+    """
+    Test patching a replicaset to change the number of replicas.
+    """
+    patch = {
+        "spec": {
+            "replicas": 2,
+        }
+    }
+    res = kubernetes.patch_replicaset(
+        replicaset["name"],
+        replicaset["namespace"],
+        patch,
+        wait=True,
+        timeout=120,
+    )
+    assert isinstance(res, dict)
+    assert res["spec"]["replicas"] == 2
+
+
+@pytest.mark.parametrize("replicaset", [False], indirect=True)
+def test_patch_nonexistent_replicaset(kubernetes, replicaset):
+    """
+    Test patching a replicaset that doesn't exist raises appropriate error
+    """
+    patch = {"spec": {"replicas": 2}}
+    with pytest.raises(CommandExecutionError, match=".*not found.*"):
+        kubernetes.patch_replicaset(
+            replicaset["name"],
+            replicaset["namespace"],
+            patch,
+            wait=True,
+            timeout=120,
+        )
+
+
+def test_patch_preserves_spec_replace_is_full_replicaset(kubernetes, replicaset):
+    """
+    Test that patch merges into spec while replace overwrites it entirely.
+    """
+    kubernetes.patch_replicaset(
+        replicaset["name"],
+        replicaset["namespace"],
+        {"spec": {"template": {"metadata": {"annotations": {"note": "patched"}}}}},
+        wait=True,
+    )
+    res = kubernetes.show_replicaset(replicaset["name"], replicaset["namespace"])
+    assert res["spec"]["replicas"] == 1
+    assert res["spec"]["template"]["metadata"]["annotations"]["note"] == "patched"
+
+    kubernetes.replace_replicaset(
+        name=replicaset["name"],
+        namespace=replicaset["namespace"],
+        metadata={},
+        spec=replicaset["spec"],
+        source=None,
+        template=None,
+        saltenv="base",
+        wait=True,
+    )
+    res = kubernetes.show_replicaset(replicaset["name"], replicaset["namespace"])
+    assert not res["spec"]["template"]["metadata"].get("annotations", {})
+
+
+def test_delete_existing_replicaset(kubernetes, replicaset):
+    """
+    Test deleting a replicaset that exists returns expected result
+    """
+    res = kubernetes.delete_replicaset(replicaset["name"], replicaset["namespace"], wait=True)
+    assert isinstance(res, dict)
+
+    deleted_replicaset = kubernetes.show_replicaset(replicaset["name"], replicaset["namespace"])
+    assert deleted_replicaset is None
+
+
+@pytest.mark.parametrize("replicaset", [False], indirect=True)
+def test_delete_nonexistent_replicaset(kubernetes, replicaset):
+    """
+    Test deleting a replicaset that doesn't exist returns None
+    """
+    res = kubernetes.delete_replicaset(replicaset["name"], replicaset["namespace"])
+    assert res is None
+
+
+@pytest.mark.parametrize("namespace", [False], indirect=True)
+def test_list_replicasets_in_nonexistent_namespace(kubernetes, namespace):
+    """
+    Test listing replicasets in a namespace that doesn't exist returns empty list
+    """
+    res = kubernetes.replicasets(namespace)
+    assert res == []
+
+
 @pytest.fixture
 def service_spec(request):
     """

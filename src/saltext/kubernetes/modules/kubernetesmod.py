@@ -539,6 +539,39 @@ def statefulsets(namespace="default", **kwargs):
         _cleanup(**cfg)
 
 
+def replicasets(namespace="default", **kwargs):
+    """
+    .. versionadded:: 2.1.0
+
+    Return a list of kubernetes replicasets defined in the namespace
+
+    namespace
+        The namespace to list replicasets from. Defaults to ``default``.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.replicasets
+        salt '*' kubernetes.replicasets namespace=default
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        api_instance = kubernetes.client.AppsV1Api()
+        api_response = api_instance.list_namespaced_replica_set(namespace)
+
+        return [
+            replicaset["metadata"]["name"]
+            for replicaset in ApiClient().sanitize_for_serialization(api_response).get("items", [])
+        ]
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            return []
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
 def show_deployment(name, namespace="default", **kwargs):
     """
     Return the kubernetes deployment defined by name and namespace
@@ -762,6 +795,39 @@ def show_statefulset(name, namespace="default", **kwargs):
     try:
         api_instance = kubernetes.client.AppsV1Api()
         api_response = api_instance.read_namespaced_stateful_set(name, namespace)
+
+        return ApiClient().sanitize_for_serialization(api_response)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            return None
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def show_replicaset(name, namespace="default", **kwargs):
+    """
+    .. versionadded:: 2.1.0
+
+    Return the kubernetes replicaset defined by name and namespace.
+
+    name
+        The name of the replicaset
+
+    namespace
+        The namespace to look for the replicaset. Defaults to ``default``.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.show_replicaset my-replicaset default
+        salt '*' kubernetes.show_replicaset name=my-replicaset namespace=default
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        api_instance = kubernetes.client.AppsV1Api()
+        api_response = api_instance.read_namespaced_replica_set(name, namespace)
 
         return ApiClient().sanitize_for_serialization(api_response)
     except (ApiException, HTTPError) as exc:
@@ -1117,6 +1183,59 @@ def delete_statefulset(name, namespace="default", wait=False, timeout=60, **kwar
                 api_instance, "statefulset", name, namespace, "deleted", timeout
             ):
                 raise CommandExecutionError(f"Timeout waiting for statefulset {name} to be deleted")
+
+        return ApiClient().sanitize_for_serialization(api_response)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            return None
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def delete_replicaset(name, namespace="default", wait=False, timeout=60, **kwargs):
+    """
+    .. versionadded:: 2.1.0
+
+    Deletes the kubernetes replicaset defined by name and namespace
+
+    name
+        The name of the replicaset
+
+    namespace
+        The namespace to delete the replicaset from. Defaults to ``default``.
+
+    wait
+        .. versionadded:: 2.0.0
+
+        Wait for replicaset deletion to complete (default: False)
+
+    timeout
+        .. versionadded:: 2.0.0
+
+        Timeout in seconds to wait for deletion (default: 60)
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.delete_replicaset my-replicaset default
+        salt '*' kubernetes.delete_replicaset name=my-replicaset namespace=default
+    """
+    cfg = _setup_conn(**kwargs)
+    body = kubernetes.client.V1DeleteOptions(orphan_dependents=True)
+
+    try:
+        api_instance = kubernetes.client.AppsV1Api()
+        api_response = api_instance.delete_namespaced_replica_set(
+            name=name, namespace=namespace, body=body
+        )
+
+        if wait:
+            if not _wait_for_resource_status(
+                api_instance, "replicaset", name, namespace, "deleted", timeout
+            ):
+                raise CommandExecutionError(f"Timeout waiting for replicaset {name} to be deleted")
 
         return ApiClient().sanitize_for_serialization(api_response)
     except (ApiException, HTTPError) as exc:
@@ -1718,7 +1837,7 @@ def create_configmap(
 
         if wait:
             if not _wait_for_resource_status(
-                api_instance, "config_map", name, namespace, "ready", timeout
+                api_instance, "configmap", name, namespace, "ready", timeout
             ):
                 raise CommandExecutionError(f"Timeout waiting for configmap {name} to become ready")
 
@@ -1876,6 +1995,114 @@ def create_statefulset(
                 raise CommandExecutionError(f"StatefulSet {namespace}/{name} not found") from exc
             if exc.status == 409:
                 raise CommandExecutionError(f"StatefulSet {name} already exists") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def create_replicaset(
+    name,
+    namespace="default",
+    metadata=None,
+    spec=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    dry_run=False,
+    wait=False,
+    timeout=60,
+    **kwargs,
+):
+    """
+    .. versionadded:: 2.1.0
+
+    Creates a replicaset with the specified name, namespace, metadata, and spec.
+
+    name
+        The name of the replicaset
+
+    namespace
+        The namespace to create the replicaset in. Defaults to ``default``.
+
+    metadata
+        ReplicaSet metadata dict
+
+    spec
+        ReplicaSet spec dict following kubernetes API conventions
+
+    source
+        File path to replicaset definition
+
+    template
+        Template engine to use to render the source file
+
+    saltenv
+        Salt environment to pull the source file from
+
+    template_context
+        .. versionadded:: 2.0.0
+
+        Variables to make available in templated files
+
+    dry_run
+        .. versionadded:: 2.0.0
+
+        If True, only simulates the creation of the replicaset
+
+    wait
+        .. versionadded:: 2.0.0
+
+        Wait for replicaset to become ready (default: False)
+
+    timeout
+        .. versionadded:: 2.0.0
+
+        Timeout in seconds to wait for replicaset (default: 60)
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.create_replicaset name=my-rs namespace=default spec='{"replicas": 3}' wait=True
+    """
+    body = __create_object_body(
+        kind="ReplicaSet",
+        obj_class=kubernetes.client.V1ReplicaSet,
+        spec_creator=__dict_to_replicaset_spec,
+        name=name,
+        namespace=namespace,
+        metadata=metadata,
+        spec=spec,
+        source=source,
+        template=template,
+        saltenv=saltenv,
+        template_context=template_context,
+    )
+
+    cfg = _setup_conn(**kwargs)
+
+    try:
+        api_instance = kubernetes.client.AppsV1Api()
+        api_response = api_instance.create_namespaced_replica_set(
+            namespace, body, dry_run="All" if dry_run else None
+        )
+
+        if wait:
+            if not _wait_for_resource_status(
+                api_instance, "replicaset", name, namespace, "ready", timeout
+            ):
+                raise CommandExecutionError(
+                    f"Timeout waiting for replicaset {name} to become ready"
+                )
+
+        return ApiClient().sanitize_for_serialization(api_response)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException):
+            if exc.status == 404:
+                raise CommandExecutionError(f"ReplicaSet {namespace}/{name} not found") from exc
+            if exc.status == 409:
+                raise CommandExecutionError(f"ReplicaSet {name} already exists") from exc
         raise CommandExecutionError(exc) from exc
     finally:
         _cleanup(**cfg)
@@ -2323,7 +2550,7 @@ def replace_configmap(
 
         if wait:
             if not _wait_for_resource_status(
-                api_instance, "config_map", name, namespace, "ready", timeout
+                api_instance, "configmap", name, namespace, "ready", timeout
             ):
                 raise CommandExecutionError(f"Timeout waiting for configmap {name} to be ready")
 
@@ -2424,6 +2651,99 @@ def replace_statefulset(
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
             raise CommandExecutionError(f"StatefulSet {namespace}/{name} not found") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def replace_replicaset(
+    name,
+    namespace,
+    spec,
+    metadata=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    wait=False,
+    timeout=60,
+    **kwargs,
+):
+    """
+    .. versionadded:: 2.1.0
+
+    Replaces an existing replicaset with a new one defined by name and
+    namespace with the specified spec.
+
+    name
+        The name of the replicaset
+
+    namespace
+        The namespace of the replicaset
+
+    spec
+        A dictionary representing the spec of the replicaset
+
+    metadata
+        A dictionary representing the metadata of the replicaset
+
+    source
+        File path to replicaset definition
+
+    template
+        Template engine to use to render the source file
+
+    saltenv
+        Salt environment to pull the source file from
+
+    template_context
+        Variables to make available in templated files
+
+    wait
+        Wait for replicaset to become ready (default: False)
+
+    timeout
+        Timeout in seconds to wait for replicaset (default: 60)
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt 'minion1' kubernetes.replace_replicaset \
+            name=my-replicaset namespace=default spec='{"replicas": 3}'
+    """
+    body = __create_object_body(
+        kind="ReplicaSet",
+        obj_class=kubernetes.client.V1ReplicaSet,
+        spec_creator=__dict_to_replicaset_spec,
+        name=name,
+        namespace=namespace,
+        metadata=metadata,
+        spec=spec,
+        source=source,
+        template=template,
+        saltenv=saltenv,
+        template_context=template_context,
+    )
+
+    cfg = _setup_conn(**kwargs)
+
+    try:
+        api_instance = kubernetes.client.AppsV1Api()
+        api_response = api_instance.replace_namespaced_replica_set(name, namespace, body)
+
+        if wait:
+            if not _wait_for_resource_status(
+                api_instance, "replicaset", name, namespace, "ready", timeout
+            ):
+                raise CommandExecutionError(
+                    f"Timeout waiting for replicaset {name} to become ready"
+                )
+
+        return ApiClient().sanitize_for_serialization(api_response)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            raise CommandExecutionError(f"ReplicaSet {namespace}/{name} not found") from exc
         raise CommandExecutionError(exc) from exc
     finally:
         _cleanup(**cfg)
@@ -2698,7 +3018,7 @@ def patch_configmap(
 
         if wait:
             if not _wait_for_resource_status(
-                api_instance, "config_map", name, namespace, "ready", timeout
+                api_instance, "configmap", name, namespace, "ready", timeout
             ):
                 raise CommandExecutionError(f"Timeout waiting for configmap {name} to become ready")
 
@@ -2894,6 +3214,99 @@ def patch_statefulset(
             raise CommandExecutionError(f"StatefulSet {namespace}/{name} not found") from exc
         if isinstance(exc, ApiException) and exc.status == 409:
             raise CommandExecutionError(f"Conflict when patching statefulset {name}") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def patch_replicaset(
+    name,
+    namespace,
+    patch=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    dry_run=False,
+    wait=False,
+    timeout=60,
+    **kwargs,
+):
+    """
+    .. versionadded:: 2.1.0
+
+    Patches an existing replicaset with the provided patch dictionary.
+
+    name
+        The name of the replicaset
+
+    namespace
+        The namespace of the replicaset
+
+    patch
+        A dictionary representing the patch to apply to the replicaset
+
+    source
+        File path to patch definition
+
+    template
+        Template engine to use to render the source file
+
+    saltenv
+        Salt environment to pull the source file from
+
+    template_context
+        Variables to make available in templated files
+
+    dry_run
+        If True, only simulates the patch without applying it (default: False)
+
+    wait
+        Wait for replicaset to become ready (default: False)
+
+    timeout
+        Timeout in seconds to wait for replicaset (default: 60)
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.patch_replicaset \
+            name=my-replicaset \
+            namespace=default \
+            patch='{"spec": {"replicas": 5}}'
+    """
+    if source:
+        rendered = __read_and_render_yaml_file(source, template, saltenv, template_context)
+        if not isinstance(rendered, dict):
+            raise CommandExecutionError("The source file did not render to a dictionary")
+        patch = rendered
+
+    if not isinstance(patch, dict):
+        raise CommandExecutionError("Patch must be a dictionary")
+
+    cfg = _setup_conn(**kwargs)
+
+    try:
+        api_instance = kubernetes.client.AppsV1Api()
+        api_response = api_instance.patch_namespaced_replica_set(
+            name, namespace, patch, dry_run="All" if dry_run else None
+        )
+
+        if wait:
+            if not _wait_for_resource_status(
+                api_instance, "replicaset", name, namespace, "ready", timeout
+            ):
+                raise CommandExecutionError(
+                    f"Timeout waiting for replicaset {name} to become ready"
+                )
+
+        return ApiClient().sanitize_for_serialization(api_response)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            raise CommandExecutionError(f"ReplicaSet {namespace}/{name} not found") from exc
+        if isinstance(exc, ApiException) and exc.status == 409:
+            raise CommandExecutionError(f"Conflict when patching replicaset {name}") from exc
         raise CommandExecutionError(exc) from exc
     finally:
         _cleanup(**cfg)
@@ -3373,6 +3786,66 @@ def __dict_to_statefulset_spec(spec):
         raise CommandExecutionError(f"Invalid statefulset spec: {exc}") from exc
 
 
+def __dict_to_replicaset_spec(spec):
+    """
+    .. versionadded:: 2.1.0
+
+    Converts a dictionary into kubernetes V1ReplicaSetSpec instance.
+    """
+    if not isinstance(spec, dict):
+        raise CommandExecutionError(
+            f"ReplicaSet spec must be a dictionary, not {type(spec).__name__}"
+        )
+
+    processed_spec = spec.copy()
+
+    if "template" not in processed_spec:
+        raise CommandExecutionError("ReplicaSet spec must include template with pod specification")
+
+    template = processed_spec["template"]
+    template_metadata = template.get("metadata", {})
+    template_labels = template_metadata.get("labels", {})
+
+    if "selector" not in processed_spec:
+        if not template_labels:
+            raise CommandExecutionError(
+                "Template must include labels when selector is not specified"
+            )
+        processed_spec["selector"] = {"match_labels": template_labels}
+    else:
+        selector = processed_spec["selector"]
+        if not selector or not selector.get("matchLabels"):
+            raise CommandExecutionError("ReplicaSet selector must include matchLabels")
+        if not all(template_labels.get(k) == v for k, v in selector["matchLabels"].items()):
+            raise CommandExecutionError("selector.matchLabels must match template metadata.labels")
+
+    if "matchLabels" in processed_spec["selector"]:
+        processed_spec["selector"] = {"match_labels": processed_spec["selector"]["matchLabels"]}
+
+    try:
+        pod_spec = __dict_to_pod_spec(template["spec"])
+    except (CommandExecutionError, ValueError) as exc:
+        raise CommandExecutionError(f"Invalid pod spec in replicaset template: {exc}") from exc
+
+    pod_template = kubernetes.client.V1PodTemplateSpec(
+        metadata=kubernetes.client.V1ObjectMeta(**template_metadata), spec=pod_spec
+    )
+    processed_spec["template"] = pod_template
+
+    processed_spec["selector"] = kubernetes.client.V1LabelSelector(**processed_spec["selector"])
+
+    if "replicas" in processed_spec:
+        try:
+            processed_spec["replicas"] = int(processed_spec["replicas"])
+        except (TypeError, ValueError) as exc:
+            raise CommandExecutionError(f"replicas must be an integer: {exc}") from exc
+
+    try:
+        return kubernetes.client.V1ReplicaSetSpec(**processed_spec)
+    except (TypeError, ValueError) as exc:
+        raise CommandExecutionError(f"Invalid replicaset spec: {exc}") from exc
+
+
 def __enforce_only_strings_dict(dictionary):
     """
     Returns a dictionary that has string keys and values.
@@ -3419,23 +3892,29 @@ def _wait_for_resource_status(
         start_time = time.time()
 
         if expected_status == "deleted":
+            method = None
+            if resource_type != "namespace":
+                # Compound resource names map differently in the k8s client.
+                method_name = {
+                    "statefulset": "read_namespaced_stateful_set",
+                    "replicaset": "read_namespaced_replica_set",
+                    "configmap": "read_namespaced_config_map",
+                }.get(resource_type, f"read_namespaced_{resource_type}")
+
+                try:
+                    method = getattr(api_instance, method_name)
+                except AttributeError as exc:
+                    raise CommandExecutionError(
+                        f"Unsupported resource type for wait operation: {resource_type}"
+                    ) from exc
+
             # For deletion, periodically check if the resource still exists until timeout
             while time.time() - start_time < timeout:
                 try:
-                    if resource_type == "deployment":
-                        api_instance.read_namespaced_deployment(name, namespace)
-                    elif resource_type == "namespace":
+                    if resource_type == "namespace":
                         api_instance.read_namespace(name)
-                    elif resource_type == "service":
-                        api_instance.read_namespaced_service(name, namespace)
-                    elif resource_type == "pod":
-                        api_instance.read_namespaced_pod(name, namespace)
-                    elif resource_type == "secret":
-                        api_instance.read_namespaced_secret(name, namespace)
-                    elif resource_type == "configmap":
-                        api_instance.read_namespaced_config_map(name, namespace)
-                    elif resource_type == "statefulset":
-                        api_instance.read_namespaced_stateful_set(name, namespace)
+                    else:
+                        method(name, namespace)
                 except ApiException as e:
                     if e.status == 404:
                         # Resource is gone, deletion successful
@@ -3445,15 +3924,22 @@ def _wait_for_resource_status(
             # Timed out waiting for deletion
             return False
 
-        # For creation/ready status watching
-        # statefulset maps to list_namespaced_stateful_set (compound word in k8s client)
-        list_method_name = (
-            "list_namespaced_stateful_set"
-            if resource_type == "statefulset"
-            else f"list_namespaced_{resource_type}"
-        )
+        # Compound resource names map differently in the k8s client.
+        method_name = {
+            "statefulset": "list_namespaced_stateful_set",
+            "replicaset": "list_namespaced_replica_set",
+            "configmap": "list_namespaced_config_map",
+        }.get(resource_type, f"list_namespaced_{resource_type}")
+
+        try:
+            list_method = getattr(api_instance, method_name)
+        except AttributeError as exc:
+            raise CommandExecutionError(
+                f"Unsupported resource type for wait operation: {resource_type}"
+            ) from exc
+
         for event in w.stream(
-            func=getattr(api_instance, list_method_name),
+            func=list_method,
             namespace=namespace,
             field_selector=f"metadata.name={name}",
             timeout_seconds=timeout,

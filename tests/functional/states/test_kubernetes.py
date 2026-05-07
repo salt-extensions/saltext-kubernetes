@@ -739,6 +739,217 @@ def test_statefulset_absent_idempotency(kubernetes, statefulset, testmode):
 
 
 @pytest.fixture
+def replicaset_template(state_tree):
+    sls = "k8s/replicaset-template"
+    contents = dedent("""
+        apiVersion: apps/v1
+        kind: ReplicaSet
+        metadata:
+          name: {{ name }}
+          namespace: {{ namespace }}
+          labels: {{ labels | json }}
+        spec:
+          replicas: {{ replicas }}
+          selector:
+            matchLabels:
+              app: {{ app_label }}
+          template:
+            metadata:
+              labels: {{ labels | json }}
+            spec:
+              containers:
+              - name: {{ name }}
+                image: {{ image }}
+                ports:
+                - containerPort: 80
+        """).strip()
+
+    with pytest.helpers.temp_file(f"{sls}.yml.jinja", contents, state_tree):
+        yield f"salt://{sls}.yml.jinja"
+
+
+@pytest.mark.parametrize("replicaset", [False], indirect=True)
+def test_replicaset_present(kubernetes, replicaset, testmode, kubernetes_exe):
+    """
+    Test kubernetes.replicaset_present creates a replicaset
+    """
+    ret = kubernetes.replicaset_present(
+        name=replicaset["name"],
+        namespace=replicaset["namespace"],
+        spec=replicaset["spec"],
+        wait=True,
+        test=testmode,
+    )
+
+    assert ret.result in (None, True)
+    assert (ret.result is None) is testmode
+    if not testmode:
+        assert ret.changes["new"]["spec"]["replicas"] == replicaset["spec"]["replicas"]
+        replicaset_state = kubernetes_exe.show_replicaset(
+            name=replicaset["name"], namespace=replicaset["namespace"]
+        )
+        assert replicaset_state["metadata"]["name"] == replicaset["name"]
+        assert replicaset_state["spec"]["replicas"] == replicaset["spec"]["replicas"]
+    else:
+        assert ret.changes["new"]["spec"]["replicas"] == replicaset["spec"]["replicas"]
+        replicaset_state = kubernetes_exe.show_replicaset(
+            name=replicaset["name"], namespace=replicaset["namespace"]
+        )
+        assert replicaset_state is None
+
+
+def test_replicaset_present_idempotency(kubernetes, replicaset, testmode):
+    """
+    Test kubernetes.replicaset_present is idempotent
+    """
+    ret = kubernetes.replicaset_present(
+        name=replicaset["name"],
+        namespace=replicaset["namespace"],
+        spec=replicaset["spec"],
+        wait=True,
+        test=testmode,
+    )
+    assert ret.result is True
+    assert "The replicaset is already in the desired state" in ret.comment
+    assert not ret.changes
+
+
+def test_replicaset_present_patch(kubernetes, replicaset, kubernetes_exe, testmode):
+    """
+    Test kubernetes.replicaset_present patches a replicaset
+    """
+    replicaset["spec"]["replicas"] = 2
+
+    ret = kubernetes.replicaset_present(
+        name=replicaset["name"],
+        namespace=replicaset["namespace"],
+        spec=replicaset["spec"],
+        wait=True,
+        test=testmode,
+    )
+    assert ret.result in (None, True)
+    assert (ret.result is None) is testmode
+    assert ret.changes["new"]["spec"]["replicas"] == 2
+
+    replicaset_state = kubernetes_exe.show_replicaset(
+        name=replicaset["name"], namespace=replicaset["namespace"]
+    )
+    assert replicaset_state["metadata"]["name"] == replicaset["name"]
+    assert (replicaset_state["spec"]["replicas"] == 2) is not testmode
+
+
+def test_replicaset_present_patch_source(
+    kubernetes, replicaset, replicaset_template, kubernetes_exe
+):
+    """
+    Test kubernetes.replicaset_present patches a replicaset using source/template
+    """
+    template_context = {
+        "name": replicaset["name"],
+        "namespace": replicaset["namespace"],
+        "replicas": replicaset["spec"]["replicas"],
+        "app_label": "nginx",
+        "image": "nginx:1.27",
+        "labels": {"app": "nginx"},
+    }
+
+    ret = kubernetes.replicaset_present(
+        name=replicaset["name"],
+        namespace=replicaset["namespace"],
+        source=replicaset_template,
+        template="jinja",
+        template_context=template_context,
+        wait=True,
+    )
+    assert ret.result is True
+
+    replicaset_state = kubernetes_exe.show_replicaset(
+        name=replicaset["name"], namespace=replicaset["namespace"]
+    )
+    assert replicaset_state["metadata"]["name"] == replicaset["name"]
+    assert replicaset_state["spec"]["template"]["spec"]["containers"][0]["image"] == "nginx:1.27"
+
+
+@pytest.mark.parametrize("replicaset", [False], indirect=True)
+def test_replicaset_present_template_context(
+    kubernetes, replicaset, replicaset_template, kubernetes_exe
+):
+    """
+    Test kubernetes.replicaset_present with template_context
+    """
+    template_context = {
+        "name": replicaset["name"],
+        "namespace": replicaset["namespace"],
+        "replicas": replicaset["spec"]["replicas"],
+        "app_label": "test",
+        "image": "nginx:latest",
+        "labels": {"app": "test"},
+    }
+
+    ret = kubernetes.replicaset_present(
+        name=replicaset["name"],
+        namespace=replicaset["namespace"],
+        source=replicaset_template,
+        template="jinja",
+        template_context=template_context,
+        wait=True,
+    )
+    assert ret.result is True
+
+    replicaset_state = kubernetes_exe.show_replicaset(
+        name=replicaset["name"], namespace=replicaset["namespace"]
+    )
+    assert replicaset_state["metadata"]["name"] == replicaset["name"]
+    assert replicaset_state["spec"]["replicas"] == replicaset["spec"]["replicas"]
+    assert replicaset_state["metadata"]["labels"]["app"] == "test"
+    assert replicaset_state["spec"]["selector"]["matchLabels"]["app"] == "test"
+    assert replicaset_state["spec"]["template"]["spec"]["containers"][0]["image"] == "nginx:latest"
+
+
+def test_replicaset_absent(kubernetes, replicaset, testmode, kubernetes_exe):
+    """
+    Test kubernetes.replicaset_absent deletes a replicaset
+    """
+    ret = kubernetes.replicaset_absent(
+        name=replicaset["name"],
+        namespace=replicaset["namespace"],
+        wait=True,
+        test=testmode,
+    )
+
+    assert ret.result in (None, True)
+    assert (ret.result is None) is testmode
+
+    if not testmode:
+        assert ret.changes["new"] == "absent"
+        replicaset_state = kubernetes_exe.show_replicaset(
+            name=replicaset["name"], namespace=replicaset["namespace"]
+        )
+        assert replicaset_state is None
+    else:
+        assert ret.changes["new"] == "absent"
+        assert "The replicaset is going to be deleted" in ret.comment
+        replicaset_state = kubernetes_exe.show_replicaset(
+            name=replicaset["name"], namespace=replicaset["namespace"]
+        )
+        assert replicaset_state is not None
+        assert replicaset_state["metadata"]["name"] == replicaset["name"]
+
+
+@pytest.mark.parametrize("replicaset", [False], indirect=True)
+def test_replicaset_absent_idempotency(kubernetes, replicaset, testmode):
+    """
+    Test kubernetes.replicaset_absent is idempotent
+    """
+    ret = kubernetes.replicaset_absent(
+        name=replicaset["name"], namespace=replicaset["namespace"], wait=True, test=testmode
+    )
+    assert ret.result is True
+    assert "does not exist" in ret.comment
+    assert not ret.changes
+
+
+@pytest.fixture
 def secret_data():
     return {"key": "value"}, "Opaque"
 
