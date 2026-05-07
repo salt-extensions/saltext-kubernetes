@@ -288,6 +288,51 @@ def statefulset(kubernetes_exe, statefulset_spec, request):
         assert kubernetes_exe.show_statefulset(name=name, namespace=namespace) is None
 
 
+@pytest.fixture
+def replicaset_spec():
+    """
+    Fixture providing a basic replicaset spec
+    """
+    return {
+        "replicas": 1,
+        "selector": {"matchLabels": {"app": "nginx"}},
+        "template": {
+            "metadata": {"labels": {"app": "nginx"}},
+            "spec": {"containers": [{"name": "nginx", "image": "nginx:latest"}]},
+        },
+    }
+
+
+@pytest.fixture(params=[True])
+def replicaset(kubernetes_exe, replicaset_spec, request):
+    """
+    Fixture to create a test replicaset.
+
+    If request.param is True, replicaset is created before the test.
+    If request.param is False, replicaset is not created.
+    """
+    name = random_string("replicaset-", uppercase=False)
+    namespace = "default"
+
+    if request.param:
+        res = kubernetes_exe.create_replicaset(
+            name=name,
+            namespace=namespace,
+            metadata={},
+            spec=replicaset_spec,
+            wait=True,
+        )
+        assert isinstance(res, dict)
+        assert res["metadata"]["name"] == name
+        assert res["spec"]["replicas"] == replicaset_spec["replicas"]
+
+    try:
+        yield {"name": name, "namespace": namespace, "spec": replicaset_spec}
+    finally:
+        kubernetes_exe.delete_replicaset(name=name, namespace=namespace, wait=True)
+        assert kubernetes_exe.show_replicaset(name=name, namespace=namespace) is None
+
+
 @pytest.fixture(params=[True])
 def secret(kubernetes_exe, secret_data, request):
     """
