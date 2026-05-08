@@ -950,6 +950,209 @@ def test_replicaset_absent_idempotency(kubernetes, replicaset, testmode):
 
 
 @pytest.fixture
+def daemonset_template(state_tree):
+    sls = "k8s/daemonset-template"
+    contents = dedent("""
+        apiVersion: apps/v1
+        kind: DaemonSet
+        metadata:
+          name: {{ name }}
+          namespace: {{ namespace }}
+          labels: {{ labels | json }}
+        spec:
+          selector:
+            matchLabels:
+              app: {{ app_label }}
+          template:
+            metadata:
+              labels: {{ labels | json }}
+            spec:
+              containers:
+              - name: {{ name }}
+                image: {{ image }}
+                ports:
+                - containerPort: 80
+        """).strip()
+
+    with pytest.helpers.temp_file(f"{sls}.yml.jinja", contents, state_tree):
+        yield f"salt://{sls}.yml.jinja"
+
+
+@pytest.mark.parametrize("daemonset", [False], indirect=True)
+def test_daemonset_present(kubernetes, daemonset, testmode, kubernetes_exe):
+    """
+    Test kubernetes.daemonset_present creates a daemonset
+    """
+    ret = kubernetes.daemonset_present(
+        name=daemonset["name"],
+        namespace=daemonset["namespace"],
+        spec=daemonset["spec"],
+        wait=True,
+        test=testmode,
+    )
+
+    assert ret.result in (None, True)
+    assert (ret.result is None) is testmode
+    if not testmode:
+        daemonset_state = kubernetes_exe.show_daemonset(
+            name=daemonset["name"], namespace=daemonset["namespace"]
+        )
+        assert daemonset_state["metadata"]["name"] == daemonset["name"]
+    else:
+        daemonset_state = kubernetes_exe.show_daemonset(
+            name=daemonset["name"], namespace=daemonset["namespace"]
+        )
+        assert daemonset_state is None
+
+
+def test_daemonset_present_idempotency(kubernetes, daemonset, testmode):
+    """
+    Test kubernetes.daemonset_present is idempotent
+    """
+    ret = kubernetes.daemonset_present(
+        name=daemonset["name"],
+        namespace=daemonset["namespace"],
+        spec=daemonset["spec"],
+        wait=True,
+        test=testmode,
+    )
+    assert ret.result is True
+    assert "The daemonset is already in the desired state" in ret.comment
+    assert not ret.changes
+
+
+def test_daemonset_present_patch(kubernetes, daemonset, kubernetes_exe, testmode):
+    """
+    Test kubernetes.daemonset_present patches a daemonset
+    """
+    daemonset["spec"]["template"]["spec"]["containers"][0]["image"] = "nginx:1.27"
+
+    ret = kubernetes.daemonset_present(
+        name=daemonset["name"],
+        namespace=daemonset["namespace"],
+        spec=daemonset["spec"],
+        wait=True,
+        test=testmode,
+    )
+    assert ret.result in (None, True)
+    assert (ret.result is None) is testmode
+
+    daemonset_state = kubernetes_exe.show_daemonset(
+        name=daemonset["name"], namespace=daemonset["namespace"]
+    )
+    assert daemonset_state["metadata"]["name"] == daemonset["name"]
+    assert (
+        daemonset_state["spec"]["template"]["spec"]["containers"][0]["image"] == "nginx:1.27"
+    ) is not testmode
+
+
+def test_daemonset_present_patch_source(kubernetes, daemonset, daemonset_template, kubernetes_exe):
+    """
+    Test kubernetes.daemonset_present patches a daemonset using source/template
+    """
+    template_context = {
+        "name": daemonset["name"],
+        "namespace": daemonset["namespace"],
+        "app_label": "nginx",
+        "image": "nginx:1.27",
+        "labels": {"app": "nginx"},
+    }
+
+    ret = kubernetes.daemonset_present(
+        name=daemonset["name"],
+        namespace=daemonset["namespace"],
+        source=daemonset_template,
+        template="jinja",
+        template_context=template_context,
+        wait=True,
+    )
+    assert ret.result is True
+
+    daemonset_state = kubernetes_exe.show_daemonset(
+        name=daemonset["name"], namespace=daemonset["namespace"]
+    )
+    assert daemonset_state["metadata"]["name"] == daemonset["name"]
+    assert daemonset_state["spec"]["template"]["spec"]["containers"][0]["image"] == "nginx:1.27"
+
+
+@pytest.mark.parametrize("daemonset", [False], indirect=True)
+def test_daemonset_present_template_context(
+    kubernetes, daemonset, daemonset_template, kubernetes_exe
+):
+    """
+    Test kubernetes.daemonset_present with template_context
+    """
+    template_context = {
+        "name": daemonset["name"],
+        "namespace": daemonset["namespace"],
+        "app_label": "test",
+        "image": "nginx:latest",
+        "labels": {"app": "test"},
+    }
+
+    ret = kubernetes.daemonset_present(
+        name=daemonset["name"],
+        namespace=daemonset["namespace"],
+        source=daemonset_template,
+        template="jinja",
+        template_context=template_context,
+        wait=True,
+    )
+    assert ret.result is True
+
+    daemonset_state = kubernetes_exe.show_daemonset(
+        name=daemonset["name"], namespace=daemonset["namespace"]
+    )
+    assert daemonset_state["metadata"]["name"] == daemonset["name"]
+    assert daemonset_state["metadata"]["labels"]["app"] == "test"
+    assert daemonset_state["spec"]["selector"]["matchLabels"]["app"] == "test"
+    assert daemonset_state["spec"]["template"]["spec"]["containers"][0]["image"] == "nginx:latest"
+
+
+def test_daemonset_absent(kubernetes, daemonset, testmode, kubernetes_exe):
+    """
+    Test kubernetes.daemonset_absent deletes a daemonset
+    """
+    ret = kubernetes.daemonset_absent(
+        name=daemonset["name"],
+        namespace=daemonset["namespace"],
+        wait=True,
+        test=testmode,
+    )
+
+    assert ret.result in (None, True)
+    assert (ret.result is None) is testmode
+
+    if not testmode:
+        assert ret.changes["new"] == "absent"
+        daemonset_state = kubernetes_exe.show_daemonset(
+            name=daemonset["name"], namespace=daemonset["namespace"]
+        )
+        assert daemonset_state is None
+    else:
+        assert ret.changes["new"] == "absent"
+        assert "The daemonset is going to be deleted" in ret.comment
+        daemonset_state = kubernetes_exe.show_daemonset(
+            name=daemonset["name"], namespace=daemonset["namespace"]
+        )
+        assert daemonset_state is not None
+        assert daemonset_state["metadata"]["name"] == daemonset["name"]
+
+
+@pytest.mark.parametrize("daemonset", [False], indirect=True)
+def test_daemonset_absent_idempotency(kubernetes, daemonset, testmode):
+    """
+    Test kubernetes.daemonset_absent is idempotent
+    """
+    ret = kubernetes.daemonset_absent(
+        name=daemonset["name"], namespace=daemonset["namespace"], wait=True, test=testmode
+    )
+    assert ret.result is True
+    assert "does not exist" in ret.comment
+    assert not ret.changes
+
+
+@pytest.fixture
 def secret_data():
     return {"key": "value"}, "Opaque"
 

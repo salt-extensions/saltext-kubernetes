@@ -669,6 +669,107 @@ def test_replicaset_present_dry_run_fallback():
             assert "dependencies not created yet" in ret["comment"]
 
 
+def test_daemonset_present_handles_show_daemonset_error():
+    """
+    Test daemonset_present handles CommandExecutionError from show_daemonset
+    """
+    with patch.dict(
+        kubernetes.__salt__,
+        {
+            "kubernetes.show_daemonset": MagicMock(
+                side_effect=CommandExecutionError("Connection failed")
+            )
+        },
+    ):
+        with patch.dict(kubernetes.__opts__, {"test": False}):
+            ret = kubernetes.daemonset_present("test-daemonset")
+
+            assert ret["result"] is False
+            assert "Connection failed" in ret["comment"]
+            assert not ret["changes"]
+
+
+def test_daemonset_present_handles_create_daemonset_error():
+    """
+    Test daemonset_present handles CommandExecutionError from create_daemonset
+    """
+    with patch.dict(
+        kubernetes.__salt__,
+        {
+            "kubernetes.show_daemonset": MagicMock(return_value=None),
+            "kubernetes.create_daemonset": MagicMock(
+                side_effect=CommandExecutionError("Invalid spec")
+            ),
+        },
+    ):
+        with patch.dict(kubernetes.__opts__, {"test": False}):
+            ret = kubernetes.daemonset_present("test-daemonset", spec={"invalid": "spec"})
+
+            assert ret["result"] is False
+            assert "Invalid spec" in ret["comment"]
+
+
+def test_daemonset_present_handles_patch_daemonset_error():
+    """
+    Test daemonset_present handles CommandExecutionError from patch_daemonset
+    """
+    existing_daemonset = {"metadata": {"name": "test"}, "spec": {"template": {}}}
+
+    with patch.dict(
+        kubernetes.__salt__,
+        {
+            "kubernetes.show_daemonset": MagicMock(return_value=existing_daemonset),
+            "kubernetes.patch_daemonset": MagicMock(
+                side_effect=CommandExecutionError("Patch failed")
+            ),
+        },
+    ):
+        with patch.dict(kubernetes.__opts__, {"test": False}):
+            ret = kubernetes.daemonset_present(
+                "test-daemonset",
+                spec={
+                    "selector": {"matchLabels": {"app": "test"}},
+                    "template": {
+                        "metadata": {"labels": {"app": "test"}},
+                        "spec": {"containers": [{"name": "nginx", "image": "nginx:latest"}]},
+                    },
+                },
+            )
+
+            assert ret["result"] is False
+            assert "Patch failed" in ret["comment"]
+
+
+def test_daemonset_present_dry_run_fallback():
+    """
+    Test that daemonset_present falls back gracefully when dry_run fails in test mode
+    """
+    with patch.dict(
+        kubernetes.__salt__,
+        {
+            "kubernetes.show_daemonset": MagicMock(return_value=None),
+            "kubernetes.create_daemonset": MagicMock(
+                side_effect=CommandExecutionError("Dry run failed")
+            ),
+        },
+    ):
+        with patch.dict(kubernetes.__opts__, {"test": True}):
+            ret = kubernetes.daemonset_present(
+                "test-daemonset",
+                spec={
+                    "selector": {"matchLabels": {"app": "test"}},
+                    "template": {
+                        "metadata": {"labels": {"app": "test"}},
+                        "spec": {"containers": [{"name": "nginx", "image": "nginx:latest"}]},
+                    },
+                },
+            )
+
+            assert ret["result"] is None
+            assert "Dry run failed" in ret["comment"]
+            assert "dependencies not created yet" in ret["comment"]
+
+
 @pytest.mark.parametrize(
     "state_func,show_func",
     [
@@ -679,6 +780,7 @@ def test_replicaset_present_dry_run_fallback():
         ("pod_absent", "show_pod"),
         ("statefulset_absent", "show_statefulset"),
         ("replicaset_absent", "show_replicaset"),
+        ("daemonset_absent", "show_daemonset"),
     ],
 )
 def test_absent_handles_show_error(state_func, show_func):
@@ -706,6 +808,7 @@ def test_absent_handles_show_error(state_func, show_func):
         ("pod_absent", "show_pod", "delete_pod"),
         ("statefulset_absent", "show_statefulset", "delete_statefulset"),
         ("replicaset_absent", "show_replicaset", "delete_replicaset"),
+        ("daemonset_absent", "show_daemonset", "delete_daemonset"),
     ],
 )
 def test_absent_handles_delete_error(state_func, show_func, delete_func):
@@ -737,6 +840,7 @@ def test_absent_handles_delete_error(state_func, show_func, delete_func):
         ("namespace_present", "show_namespace"),
         ("statefulset_present", "show_statefulset"),
         ("replicaset_present", "show_replicaset"),
+        ("daemonset_present", "show_daemonset"),
     ],
 )
 def test_present_handles_show_error(state_func, show_func):

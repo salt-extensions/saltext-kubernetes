@@ -333,6 +333,49 @@ def replicaset(kubernetes_exe, replicaset_spec, request):
         assert kubernetes_exe.show_replicaset(name=name, namespace=namespace) is None
 
 
+@pytest.fixture
+def daemonset_spec():
+    """
+    Fixture providing a basic daemonset spec
+    """
+    return {
+        "selector": {"matchLabels": {"app": "nginx"}},
+        "template": {
+            "metadata": {"labels": {"app": "nginx"}},
+            "spec": {"containers": [{"name": "nginx", "image": "nginx:latest"}]},
+        },
+    }
+
+
+@pytest.fixture(params=[True])
+def daemonset(kubernetes_exe, daemonset_spec, request):
+    """
+    Fixture to create a test daemonset.
+
+    If request.param is True, daemonset is created before the test.
+    If request.param is False, daemonset is not created.
+    """
+    name = random_string("daemonset-", uppercase=False)
+    namespace = "default"
+
+    if request.param:
+        res = kubernetes_exe.create_daemonset(
+            name=name,
+            namespace=namespace,
+            metadata={},
+            spec=daemonset_spec,
+            wait=True,
+        )
+        assert isinstance(res, dict)
+        assert res["metadata"]["name"] == name
+
+    try:
+        yield {"name": name, "namespace": namespace, "spec": daemonset_spec}
+    finally:
+        kubernetes_exe.delete_daemonset(name=name, namespace=namespace, wait=True)
+        assert kubernetes_exe.show_daemonset(name=name, namespace=namespace) is None
+
+
 @pytest.fixture(params=[True])
 def secret(kubernetes_exe, secret_data, request):
     """
