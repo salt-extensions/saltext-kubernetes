@@ -1153,6 +1153,185 @@ def test_daemonset_absent_idempotency(kubernetes, daemonset, testmode):
 
 
 @pytest.fixture
+def storageclass_template(state_tree):
+    sls = "k8s/storageclass-template"
+    contents = dedent("""
+        apiVersion: storage.k8s.io/v1
+        kind: StorageClass
+        metadata:
+          name: {{ name }}
+          labels: {{ labels | json }}
+        provisioner: {{ provisioner }}
+        reclaimPolicy: {{ reclaim_policy }}
+        volumeBindingMode: {{ volume_binding_mode }}
+        """).strip()
+
+    with pytest.helpers.temp_file(f"{sls}.yml.jinja", contents, state_tree):
+        yield f"salt://{sls}.yml.jinja"
+
+
+@pytest.mark.parametrize("storageclass", [False], indirect=True)
+def test_storageclass_present(kubernetes, storageclass, testmode, kubernetes_exe):
+    """
+    Test kubernetes.storageclass_present creates a storageclass
+    """
+    ret = kubernetes.storageclass_present(
+        name=storageclass["name"],
+        spec=storageclass["spec"],
+        wait=True,
+        test=testmode,
+    )
+
+    assert ret.result in (None, True)
+    assert (ret.result is None) is testmode
+    if not testmode:
+        storageclass_state = kubernetes_exe.show_storageclass(name=storageclass["name"])
+        assert storageclass_state["metadata"]["name"] == storageclass["name"]
+        assert storageclass_state["provisioner"] == storageclass["spec"]["provisioner"]
+    else:
+        storageclass_state = kubernetes_exe.show_storageclass(name=storageclass["name"])
+        assert storageclass_state is None
+
+
+def test_storageclass_present_idempotency(kubernetes, storageclass, testmode):
+    """
+    Test kubernetes.storageclass_present is idempotent
+    """
+    ret = kubernetes.storageclass_present(
+        name=storageclass["name"],
+        spec=storageclass["spec"],
+        wait=True,
+        test=testmode,
+    )
+    assert ret.result is True
+    assert "The storageclass is already in the desired state" in ret.comment
+    assert not ret.changes
+
+
+def test_storageclass_present_patch(kubernetes, storageclass, kubernetes_exe, testmode):
+    """
+    Test kubernetes.storageclass_present patches a storageclass
+    """
+    metadata = {"labels": {"app": "patched"}}
+
+    ret = kubernetes.storageclass_present(
+        name=storageclass["name"],
+        metadata=metadata,
+        wait=True,
+        test=testmode,
+    )
+    assert ret.result in (None, True)
+    assert (ret.result is None) is testmode
+
+    storageclass_state = kubernetes_exe.show_storageclass(name=storageclass["name"])
+    assert storageclass_state["metadata"]["name"] == storageclass["name"]
+    labels = storageclass_state["metadata"].get("labels") or {}
+    assert (labels.get("app") == "patched") is not testmode
+
+
+def test_storageclass_present_patch_source(
+    kubernetes, storageclass, storageclass_template, kubernetes_exe
+):
+    """
+    Test kubernetes.storageclass_present patches a storageclass using source/template
+    """
+    template_context = {
+        "name": storageclass["name"],
+        "labels": {"app": "storage"},
+        "provisioner": storageclass["spec"]["provisioner"],
+        "reclaim_policy": "Delete",
+        "volume_binding_mode": storageclass["spec"]["volumeBindingMode"],
+    }
+
+    ret = kubernetes.storageclass_present(
+        name=storageclass["name"],
+        source=storageclass_template,
+        template="jinja",
+        template_context=template_context,
+        wait=True,
+    )
+    assert ret.result is True
+
+    storageclass_state = kubernetes_exe.show_storageclass(name=storageclass["name"])
+    assert storageclass_state["metadata"]["name"] == storageclass["name"]
+    assert storageclass_state["metadata"]["labels"]["app"] == "storage"
+    assert storageclass_state["reclaimPolicy"] == "Delete"
+    assert storageclass_state["provisioner"] == "kubernetes.io/no-provisioner"
+    assert storageclass_state["volumeBindingMode"] == "WaitForFirstConsumer"
+
+
+@pytest.mark.parametrize("storageclass", [False], indirect=True)
+def test_storageclass_present_template_context(
+    kubernetes, storageclass, storageclass_template, kubernetes_exe
+):
+    """
+    Test kubernetes.storageclass_present with template_context
+    """
+    template_context = {
+        "name": storageclass["name"],
+        "labels": {"app": "test"},
+        "provisioner": storageclass["spec"]["provisioner"],
+        "reclaim_policy": "Delete",
+        "volume_binding_mode": "WaitForFirstConsumer",
+    }
+
+    ret = kubernetes.storageclass_present(
+        name=storageclass["name"],
+        source=storageclass_template,
+        template="jinja",
+        template_context=template_context,
+        wait=True,
+    )
+    assert ret.result is True
+
+    storageclass_state = kubernetes_exe.show_storageclass(name=storageclass["name"])
+    assert storageclass_state["metadata"]["name"] == storageclass["name"]
+    assert storageclass_state["metadata"]["labels"]["app"] == "test"
+    assert storageclass_state["reclaimPolicy"] == "Delete"
+    assert storageclass_state["volumeBindingMode"] == "WaitForFirstConsumer"
+
+
+def test_storageclass_absent(kubernetes, storageclass, testmode, kubernetes_exe):
+    """
+    Test kubernetes.storageclass_absent deletes a storageclass
+    """
+    ret = kubernetes.storageclass_absent(
+        name=storageclass["name"],
+        wait=True,
+        test=testmode,
+    )
+
+    assert ret.result in (None, True)
+    assert (ret.result is None) is testmode
+
+    if not testmode:
+        assert ret.changes["new"] == "absent"
+        storageclass_state = kubernetes_exe.show_storageclass(name=storageclass["name"])
+        assert storageclass_state is None
+    else:
+        assert ret.changes["new"] == "absent"
+        assert "The storageclass is going to be deleted" in ret.comment
+        storageclass_state = kubernetes_exe.show_storageclass(name=storageclass["name"])
+        assert storageclass_state is not None
+        assert storageclass_state["metadata"]["name"] == storageclass["name"]
+
+
+@pytest.mark.parametrize("storageclass", [False], indirect=True)
+def test_storageclass_absent_idempotency(kubernetes, storageclass, testmode):
+    """
+    Test kubernetes.storageclass_absent is idempotent
+    """
+    ret = kubernetes.storageclass_absent(
+        name=storageclass["name"],
+        wait=True,
+        test=testmode,
+    )
+    assert ret.result is True
+    assert "does not exist" in ret.comment
+    assert not ret.changes
+
+
+@pytest.fixture
 def secret_data():
     return {"key": "value"}, "Opaque"
 

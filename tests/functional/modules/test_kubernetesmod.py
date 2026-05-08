@@ -1372,6 +1372,184 @@ def test_list_daemonsets_in_nonexistent_namespace(kubernetes, namespace):
     assert res == []
 
 
+def test_storageclasses(kubernetes, storageclass):
+    """
+    Test that the storageclasses function returns a list of storageclasses
+    """
+    res = kubernetes.storageclasses()
+    assert isinstance(res, list)
+    assert storageclass["name"] in res
+
+
+@pytest.mark.parametrize("storageclass", [False], indirect=True)
+def test_create_storageclass(kubernetes, storageclass):
+    """
+    Test creating a storageclass returns expected result
+    """
+    res = kubernetes.create_storageclass(
+        name=storageclass["name"],
+        metadata={},
+        spec=storageclass["spec"],
+        source=None,
+        template=None,
+        saltenv="base",
+        wait=True,
+    )
+    assert isinstance(res, dict)
+    assert res["metadata"]["name"] == storageclass["name"]
+    assert res["provisioner"] == storageclass["spec"]["provisioner"]
+
+
+def test_create_existing_storageclass(kubernetes, storageclass):
+    """
+    Test creating a storageclass that already exists raises appropriate error
+    """
+    with pytest.raises(CommandExecutionError, match=".*already exists.*"):
+        kubernetes.create_storageclass(
+            name=storageclass["name"],
+            metadata={},
+            spec=storageclass["spec"],
+            source=None,
+            template=None,
+            saltenv="base",
+            wait=True,
+        )
+
+
+def test_show_storageclass(kubernetes, storageclass):
+    """
+    Test showing a storageclass returns expected result
+    """
+    res = kubernetes.show_storageclass(storageclass["name"])
+    assert isinstance(res, dict)
+    assert res["metadata"]["name"] == storageclass["name"]
+    assert res["provisioner"] == storageclass["spec"]["provisioner"]
+
+
+@pytest.mark.parametrize("storageclass", [False], indirect=True)
+def test_show_nonexistent_storageclass(kubernetes, storageclass):
+    """
+    Test showing a storageclass that doesn't exist returns None
+    """
+    res = kubernetes.show_storageclass(storageclass["name"])
+    assert res is None
+
+
+def test_replace_storageclass(kubernetes, storageclass):
+    """
+    Test replacing a storageclass with a spec change.
+    """
+    new_spec = storageclass["spec"].copy()
+    new_spec["allowVolumeExpansion"] = True
+
+    res = kubernetes.replace_storageclass(
+        name=storageclass["name"],
+        metadata={},
+        spec=new_spec,
+        source=None,
+        template=None,
+        saltenv="base",
+        wait=True,
+    )
+    assert isinstance(res, dict)
+    assert res["allowVolumeExpansion"] is True
+
+
+@pytest.mark.parametrize("storageclass", [False], indirect=True)
+def test_replace_nonexistent_storageclass(kubernetes, storageclass):
+    """
+    Test replacing a storageclass that doesn't exist raises appropriate error
+    """
+    with pytest.raises(CommandExecutionError, match=".*not found.*"):
+        kubernetes.replace_storageclass(
+            name=storageclass["name"],
+            metadata={},
+            spec=storageclass["spec"],
+            source=None,
+            template=None,
+            saltenv="base",
+            wait=True,
+        )
+
+
+def test_patch_storageclass(kubernetes, storageclass):
+    """
+    Test patching a storageclass metadata label.
+    """
+    patch = {
+        "metadata": {"labels": {"app": "storage"}},
+    }
+    res = kubernetes.patch_storageclass(
+        storageclass["name"],
+        patch,
+        wait=True,
+        timeout=120,
+    )
+    assert isinstance(res, dict)
+    assert res["metadata"]["labels"]["app"] == "storage"
+
+
+@pytest.mark.parametrize("storageclass", [False], indirect=True)
+def test_patch_nonexistent_storageclass(kubernetes, storageclass):
+    """
+    Test patching a storageclass that doesn't exist raises appropriate error
+    """
+    patch = {"reclaimPolicy": "Retain"}
+    with pytest.raises(CommandExecutionError, match=".*not found.*"):
+        kubernetes.patch_storageclass(
+            storageclass["name"],
+            patch,
+            wait=True,
+            timeout=120,
+        )
+
+
+def test_patch_preserves_spec_replace_is_full_storageclass(kubernetes, storageclass):
+    """
+    Test that patch merges into storageclass while replace overwrites it entirely.
+    """
+    kubernetes.patch_storageclass(
+        storageclass["name"],
+        {"allowVolumeExpansion": True},
+        wait=True,
+    )
+    res = kubernetes.show_storageclass(storageclass["name"])
+    assert res["allowVolumeExpansion"] is True
+    assert res["provisioner"] == storageclass["spec"]["provisioner"]
+
+    kubernetes.replace_storageclass(
+        name=storageclass["name"],
+        metadata={},
+        spec=storageclass["spec"],
+        source=None,
+        template=None,
+        saltenv="base",
+        wait=True,
+    )
+    res = kubernetes.show_storageclass(storageclass["name"])
+    assert not res.get("allowVolumeExpansion")
+
+
+def test_delete_existing_storageclass(kubernetes, storageclass):
+    """
+    Test deleting a storageclass that exists returns expected result
+    """
+    res = kubernetes.delete_storageclass(storageclass["name"], wait=True)
+    assert isinstance(res, dict)
+
+    deleted_storageclass = kubernetes.show_storageclass(storageclass["name"])
+    assert deleted_storageclass is None
+
+
+@pytest.mark.parametrize("storageclass", [False], indirect=True)
+def test_delete_nonexistent_storageclass(kubernetes, storageclass):
+    """
+    Test deleting a storageclass that doesn't exist returns None
+    """
+    res = kubernetes.delete_storageclass(storageclass["name"])
+    assert res is None
+
+
 @pytest.fixture
 def service_spec(request):
     """

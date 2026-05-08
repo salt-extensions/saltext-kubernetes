@@ -478,6 +478,45 @@ def test_daemonsets_handles_empty_response(mock_api):
         assert result == []
 
 
+def test_storageclasses_handles_api_exception(mock_api):
+    """
+    Test that storageclasses() handles ApiException properly
+    """
+    mock_api.client.StorageV1Api().list_storage_class.side_effect = ApiException(
+        status=500, reason="Internal Server Error"
+    )
+
+    with pytest.raises(CommandExecutionError):
+        kubernetes.storageclasses()
+
+
+def test_storageclasses_handles_404_gracefully(mock_api):
+    """
+    Test that storageclasses() returns empty list for 404
+    """
+    mock_api.client.StorageV1Api().list_storage_class.side_effect = ApiException(
+        status=404, reason="Not Found"
+    )
+
+    result = kubernetes.storageclasses()
+    assert result == []
+
+
+def test_storageclasses_handles_empty_response(mock_api):
+    """
+    Test that storageclasses() handles response with no items gracefully
+    """
+    with patch("saltext.kubernetes.modules.kubernetesmod.ApiClient") as mock_api_client_class:
+        mock_api_client_instance = Mock()
+        mock_api_client_instance.sanitize_for_serialization.return_value = {}
+        mock_api_client_class.return_value = mock_api_client_instance
+
+        mock_api.client.StorageV1Api().list_storage_class.return_value = Mock()
+
+        result = kubernetes.storageclasses()
+        assert result == []
+
+
 def test_patch_deployment_validates_patch_parameter():
     """
     Test patch_deployment raises error when patch is not a dictionary
@@ -508,6 +547,110 @@ def test_patch_daemonset_validates_patch_parameter():
     """
     with pytest.raises(CommandExecutionError, match="Patch must be a dictionary"):
         kubernetes.patch_daemonset("test", "default", patch="not-a-dict")
+
+
+def test_patch_storageclass_validates_patch_parameter():
+    """
+    Test patch_storageclass raises error when patch is not a dictionary
+    """
+    with pytest.raises(CommandExecutionError, match="Patch must be a dictionary"):
+        kubernetes.patch_storageclass("test", patch="not-a-dict")
+
+
+def test_patch_storageclass_accepts_spec_wrapped_patch(mock_api):
+    """
+    Test patch_storageclass supports patches with fields nested under `spec`.
+    """
+    with patch("saltext.kubernetes.modules.kubernetesmod.ApiClient") as mock_api_client_class:
+        mock_api_client_instance = Mock()
+        mock_api_client_instance.sanitize_for_serialization.return_value = {
+            "metadata": {"name": "test"},
+            "reclaimPolicy": "Retain",
+        }
+        mock_api_client_class.return_value = mock_api_client_instance
+
+        mock_api.client.StorageV1Api().patch_storage_class.return_value = Mock()
+
+        res = kubernetes.patch_storageclass("test", patch={"spec": {"reclaimPolicy": "Retain"}})
+        mock_api.client.StorageV1Api().patch_storage_class.assert_called_once_with(
+            "test", {"reclaimPolicy": "Retain"}, dry_run=None
+        )
+        assert res["reclaimPolicy"] == "Retain"
+
+
+def test_patch_storageclass_source_flattens_storageclass_object(mock_api):
+    """
+    Test patch_storageclass source rendering strips object envelope fields.
+    """
+    with patch("saltext.kubernetes.modules.kubernetesmod.ApiClient") as mock_api_client_class:
+        mock_api_client_instance = Mock()
+        mock_api_client_instance.sanitize_for_serialization.return_value = {
+            "metadata": {"name": "test"},
+            "reclaimPolicy": "Retain",
+        }
+        mock_api_client_class.return_value = mock_api_client_instance
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yml", delete=False) as f:
+            f.write("""
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: test
+  labels:
+    app: storage
+provisioner: kubernetes.io/no-provisioner
+reclaimPolicy: Retain
+""")
+            tmpfile = f.name
+
+        try:
+            with patch.dict(
+                kubernetes.__salt__,
+                {"cp.cache_file": MagicMock(return_value=tmpfile)},
+            ):
+                with patch.dict(kubernetes.__opts__, {"saltenv": "base"}):
+                    mock_api.client.StorageV1Api().patch_storage_class.return_value = Mock()
+
+                    kubernetes.patch_storageclass("test", source="salt://storageclass.yml")
+        finally:
+            os.unlink(tmpfile)
+
+    mock_api.client.StorageV1Api().patch_storage_class.assert_called_once_with(
+        "test",
+        {
+            "metadata": {"labels": {"app": "storage"}},
+            "provisioner": "kubernetes.io/no-provisioner",
+            "reclaimPolicy": "Retain",
+        },
+        dry_run=None,
+    )
+
+
+def test_replace_storageclass_includes_resource_version(mock_api):
+    """
+    Test replace_storageclass includes the current resourceVersion on update.
+    """
+    with patch("saltext.kubernetes.modules.kubernetesmod.ApiClient") as mock_api_client_class:
+        mock_api_client_instance = Mock()
+        mock_api_client_instance.sanitize_for_serialization.return_value = {
+            "metadata": {"name": "test"}
+        }
+        mock_api_client_class.return_value = mock_api_client_instance
+
+        current = Mock()
+        current.metadata.resource_version = "12345"
+        mock_api.client.StorageV1Api().read_storage_class.return_value = current
+        mock_api.client.StorageV1Api().replace_storage_class.return_value = Mock()
+
+        kubernetes.replace_storageclass(
+            name="test",
+            metadata={},
+            spec={"provisioner": "kubernetes.io/no-provisioner"},
+        )
+
+    replace_call = mock_api.client.StorageV1Api().replace_storage_class.call_args
+    assert replace_call.args[0] == "test"
+    assert replace_call.args[1].metadata.resource_version == "12345"
 
 
 def test_patch_deployment_handles_missing_deployment(mock_api):
@@ -559,6 +702,18 @@ def test_patch_daemonset_handles_missing_daemonset(mock_api):
         kubernetes.patch_daemonset("nonexistent", "default", patch={"spec": {"template": {}}})
 
 
+def test_patch_storageclass_handles_missing_storageclass(mock_api):
+    """
+    Test patch_storageclass handles case where storageclass doesn't exist
+    """
+    mock_api.client.StorageV1Api().patch_storage_class.side_effect = ApiException(
+        status=404, reason="Not Found"
+    )
+
+    with pytest.raises(CommandExecutionError):
+        kubernetes.patch_storageclass("nonexistent", patch={"reclaimPolicy": "Retain"})
+
+
 def test_delete_deployment_handles_already_deleted(mock_api):
     """
     Test delete_deployment returns None when deployment is already deleted (404)
@@ -604,6 +759,18 @@ def test_delete_daemonset_handles_already_deleted(mock_api):
         status=404, reason="Not Found"
     )
     result = kubernetes.delete_daemonset("already-deleted", "default")
+    assert result is None
+
+
+def test_delete_storageclass_handles_already_deleted(mock_api):
+    """
+    Test delete_storageclass returns None when storageclass is already deleted (404)
+    """
+    mock_api.client.V1DeleteOptions.return_value = MagicMock()
+    mock_api.client.StorageV1Api.return_value.delete_storage_class.side_effect = ApiException(
+        status=404, reason="Not Found"
+    )
+    result = kubernetes.delete_storageclass("already-deleted")
     assert result is None
 
 
@@ -749,6 +916,21 @@ def test_patch_daemonset_handles_source_rendering_error():
                 )
 
 
+def test_patch_storageclass_handles_source_rendering_error():
+    """
+    Test patch_storageclass handles template rendering errors gracefully
+    """
+    with patch.dict(
+        kubernetes.__salt__,
+        {
+            "cp.cache_file": MagicMock(return_value=None),
+        },
+    ):
+        with patch.dict(kubernetes.__opts__, {"saltenv": "base"}):
+            with pytest.raises(CommandExecutionError, match="Source file.*not found"):
+                kubernetes.patch_storageclass("test", patch=None, source="salt://bad-template.yml")
+
+
 def test_patch_daemonset_handles_invalid_yaml():
     """
     Test patch_daemonset raises error when source file does not render to a dictionary
@@ -769,6 +951,28 @@ def test_patch_daemonset_handles_invalid_yaml():
                     kubernetes.patch_daemonset(
                         "test", "default", patch=None, source="salt://invalid.yml"
                     )
+    finally:
+        os.unlink(tmpfile)
+
+
+def test_patch_storageclass_handles_invalid_yaml():
+    """
+    Test patch_storageclass raises error when source file does not render to a dictionary
+    """
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".yml", delete=False) as f:
+        f.write("- item1\n- item2\n")
+        tmpfile = f.name
+
+    try:
+        with patch.dict(
+            kubernetes.__salt__,
+            {
+                "cp.cache_file": MagicMock(return_value=tmpfile),
+            },
+        ):
+            with patch.dict(kubernetes.__opts__, {"saltenv": "base"}):
+                with pytest.raises(CommandExecutionError, match="did not render to a dictionary"):
+                    kubernetes.patch_storageclass("test", patch=None, source="salt://invalid.yml")
     finally:
         os.unlink(tmpfile)
 
@@ -956,6 +1160,19 @@ def test_create_daemonset_handles_conflict(mock_api):
             kubernetes.create_daemonset("test", "default", {}, {}, None, None, None)
 
 
+def test_create_storageclass_handles_conflict(mock_api):
+    """
+    Test create_storageclass raises for 409 conflict (already exists)
+    """
+    mock_api.client.StorageV1Api().create_storage_class.side_effect = ApiException(
+        status=409, reason="AlreadyExists"
+    )
+    with pytest.raises(CommandExecutionError, match="already exists"):
+        kubernetes.create_storageclass(
+            "test", metadata={}, spec={"provisioner": "kubernetes.io/no-provisioner"}
+        )
+
+
 def test_patch_deployment_handles_conflict(mock_api):
     """
     Test patch_deployment raises for 409 conflict (concurrent modification)
@@ -1009,6 +1226,17 @@ def test_patch_daemonset_handles_conflict(mock_api):
     )
     with pytest.raises(CommandExecutionError, match="Conflict when patching"):
         kubernetes.patch_daemonset("test", "default", patch={"spec": {"template": {}}})
+
+
+def test_patch_storageclass_handles_conflict(mock_api):
+    """
+    Test patch_storageclass raises for 409 conflict (concurrent modification)
+    """
+    mock_api.client.StorageV1Api().patch_storage_class.side_effect = ApiException(
+        status=409, reason="Conflict"
+    )
+    with pytest.raises(CommandExecutionError, match="Conflict when patching"):
+        kubernetes.patch_storageclass("test", patch={"reclaimPolicy": "Retain"})
 
 
 @pytest.mark.parametrize(
@@ -1123,6 +1351,36 @@ def test_replicaset_invalid_spec(invalid_spec, expected_error):
 def test_daemonset_invalid_spec(invalid_spec, expected_error):
     """Test daemonset spec validation raises appropriate errors"""
     func = getattr(kubernetes, "__dict_to_daemonset_spec")
+    with pytest.raises(CommandExecutionError, match=expected_error):
+        func(invalid_spec)
+
+
+@pytest.mark.parametrize(
+    "invalid_spec,expected_error",
+    [
+        ({}, "must include provisioner"),
+        ({"provisioner": "", "parameters": {}}, "must include provisioner"),
+        (
+            {"provisioner": "kubernetes.io/no-provisioner", "parameters": "invalid"},
+            "parameters must be a dictionary",
+        ),
+        (
+            {"provisioner": "kubernetes.io/no-provisioner", "mountOptions": "invalid"},
+            "mountOptions must be a list",
+        ),
+        (
+            {
+                "provisioner": "kubernetes.io/no-provisioner",
+                "allowedTopologies": "invalid",
+            },
+            "allowedTopologies must be a list",
+        ),
+        ("not-a-dict", "must be a dictionary"),
+    ],
+)
+def test_storageclass_invalid_spec(invalid_spec, expected_error):
+    """Test storageclass spec validation raises appropriate errors"""
+    func = getattr(kubernetes, "__dict_to_storageclass_spec")
     with pytest.raises(CommandExecutionError, match=expected_error):
         func(invalid_spec)
 

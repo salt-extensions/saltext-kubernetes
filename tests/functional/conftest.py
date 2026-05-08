@@ -376,6 +376,45 @@ def daemonset(kubernetes_exe, daemonset_spec, request):
         assert kubernetes_exe.show_daemonset(name=name, namespace=namespace) is None
 
 
+@pytest.fixture
+def storageclass_spec():
+    """
+    Fixture providing a basic storageclass spec
+    """
+    return {
+        "provisioner": "kubernetes.io/no-provisioner",
+        "volumeBindingMode": "WaitForFirstConsumer",
+    }
+
+
+@pytest.fixture(params=[True])
+def storageclass(kubernetes_exe, storageclass_spec, request):
+    """
+    Fixture to create a test storageclass.
+
+    If request.param is True, storageclass is created before the test.
+    If request.param is False, storageclass is not created.
+    """
+    name = random_string("storageclass-", uppercase=False)
+
+    if request.param:
+        res = kubernetes_exe.create_storageclass(
+            name=name,
+            metadata={},
+            spec=storageclass_spec,
+            wait=True,
+        )
+        assert isinstance(res, dict)
+        assert res["metadata"]["name"] == name
+        assert res["provisioner"] == storageclass_spec["provisioner"]
+
+    try:
+        yield {"name": name, "spec": storageclass_spec}
+    finally:
+        kubernetes_exe.delete_storageclass(name=name, wait=True)
+        assert kubernetes_exe.show_storageclass(name=name) is None
+
+
 @pytest.fixture(params=[True])
 def secret(kubernetes_exe, secret_data, request):
     """

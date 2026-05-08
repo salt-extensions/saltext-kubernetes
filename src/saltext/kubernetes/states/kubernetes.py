@@ -1091,6 +1091,219 @@ def daemonset_present(
     return ret
 
 
+def storageclass_absent(name, wait=False, timeout=60, **kwargs):
+    """
+    .. versionadded:: 2.1.0
+
+    Ensures that the named storageclass is absent.
+
+    name
+        The name of the storageclass
+
+    wait
+        Wait for storageclass to be deleted (default: False)
+
+    timeout
+        Timeout in seconds to wait for storageclass deletion (default: 60)
+
+    CLI Example:
+
+    .. code-block:: yaml
+
+        my-storageclass:
+          kubernetes.storageclass_absent:
+    """
+
+    ret = {"name": name, "changes": {}, "result": False, "comment": ""}
+
+    try:
+        storageclass = __salt__["kubernetes.show_storageclass"](name, **kwargs)
+
+        if storageclass is None:
+            ret["result"] = True
+            ret["comment"] = "The storageclass does not exist"
+            return ret
+
+        if __opts__["test"]:
+            ret["result"] = None
+            ret["comment"] = "The storageclass is going to be deleted"
+            ret["changes"] = {
+                "old": "present",
+                "new": "absent",
+            }
+            return ret
+
+        __salt__["kubernetes.delete_storageclass"](name, wait=wait, timeout=timeout, **kwargs)
+
+        ret["result"] = True
+        ret["changes"] = {"old": "present", "new": "absent"}
+        ret["comment"] = f"StorageClass {name} deleted"
+
+    except CommandExecutionError as err:
+        log.error(str(err), exc_info_on_loglevel=logging.DEBUG)
+        ret["result"] = False
+        ret["comment"] = str(err)
+        ret["changes"] = {}
+
+    return ret
+
+
+def storageclass_present(
+    name,
+    metadata=None,
+    spec=None,
+    source="",
+    template="",
+    template_context=None,
+    wait=False,
+    timeout=60,
+    **kwargs,
+):
+    """
+    .. versionadded:: 2.1.0
+
+    Ensures that the named storageclass is present with the given metadata and spec.
+    If the storageclass exists, it will be patched with the desired state.
+
+    name
+        The name of the storageclass
+
+    metadata
+        Metadata for the storageclass
+
+    spec
+        Specification for the storageclass
+
+    source
+        File path to storageclass definition
+
+    template
+        Template engine to use to render the source file
+
+    template_context
+        Variables to make available in templated files
+
+    wait
+        Wait for storageclass to become ready (default: False)
+
+    timeout
+        Timeout in seconds to wait for storageclass (default: 60)
+
+    CLI Example:
+
+    .. code-block:: yaml
+
+        my-storageclass:
+          kubernetes.storageclass_present:
+            metadata:
+              labels:
+                app: my-storageclass
+            spec:
+              provisioner: kubernetes.io/no-provisioner
+    """
+    ret = {"name": name, "changes": {}, "result": False, "comment": ""}
+
+    if (metadata or spec) and source:
+        return _error(ret, "'source' cannot be used in combination with 'metadata' or 'spec'")
+
+    if not source and metadata is None:
+        metadata = {}
+
+    if not source and spec is None:
+        spec = {}
+
+    try:
+        storageclass = __salt__["kubernetes.show_storageclass"](name, **kwargs)
+
+        if storageclass is None:
+            try:
+                res = __salt__["kubernetes.create_storageclass"](
+                    name=name,
+                    metadata=metadata,
+                    spec=spec,
+                    source=source,
+                    template=template,
+                    saltenv=__env__,
+                    template_context=template_context,
+                    dry_run=bool(__opts__["test"]),
+                    wait=wait if not __opts__["test"] else False,
+                    timeout=timeout,
+                    **kwargs,
+                )
+            except CommandExecutionError as err:
+                if not __opts__["test"]:
+                    raise
+                ret["result"] = None
+                ret["comment"] = (
+                    "The storageclass is going to be created. "
+                    f"Dry run failed, possibly due to dependencies not created yet: {err}"
+                )
+                return ret
+
+            ret["changes"] = {"old": {}, "new": res}
+            if __opts__["test"]:
+                ret["result"] = None
+                ret["comment"] = "The storageclass is going to be created"
+            else:
+                ret["result"] = True
+                ret["comment"] = "StorageClass created"
+            return ret
+
+        if source:
+            patch_kwargs = {
+                "source": source,
+                "template": template,
+                "template_context": template_context,
+            }
+        else:
+            patch_obj = {}
+            if metadata:
+                patch_obj["metadata"] = metadata
+            if spec:
+                patch_obj["spec"] = spec
+            patch_kwargs = {"patch": patch_obj}
+
+        try:
+            res = __salt__["kubernetes.patch_storageclass"](
+                name,
+                dry_run=bool(__opts__["test"]),
+                wait=wait,
+                timeout=timeout,
+                **patch_kwargs,
+                **kwargs,
+            )
+        except CommandExecutionError as err:
+            if not __opts__["test"]:
+                raise
+            ret["result"] = None
+            ret["comment"] = (
+                "The storageclass is going to be updated. "
+                f"Dry run failed, possibly due to dependencies not created yet: {err}"
+            )
+            return ret
+
+        if res == storageclass:
+            ret["result"] = True
+            ret["comment"] = "The storageclass is already in the desired state"
+            return ret
+
+        ret["changes"] = _changes(storageclass, res)
+        if __opts__["test"]:
+            ret["result"] = None
+            ret["comment"] = "The storageclass is going to be updated"
+        else:
+            ret["result"] = True
+            ret["comment"] = "StorageClass updated"
+
+    except CommandExecutionError as err:
+        log.error(str(err), exc_info_on_loglevel=logging.DEBUG)
+        ret["result"] = False
+        ret["comment"] = str(err)
+        ret["changes"] = {}
+
+    return ret
+
+
 def service_present(
     name,
     namespace="default",
