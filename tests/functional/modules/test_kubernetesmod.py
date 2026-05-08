@@ -1167,6 +1167,211 @@ def test_list_replicasets_in_nonexistent_namespace(kubernetes, namespace):
     assert res == []
 
 
+def test_daemonsets(kubernetes, daemonset):
+    """
+    Test that the daemonsets function returns a list of daemonsets in the specified namespace
+    """
+    res = kubernetes.daemonsets(daemonset["namespace"])
+    assert isinstance(res, list)
+    assert daemonset["name"] in res
+
+
+@pytest.mark.parametrize("daemonset", [False], indirect=True)
+def test_create_daemonset(kubernetes, daemonset):
+    """
+    Test creating a daemonset returns expected result
+    """
+    res = kubernetes.create_daemonset(
+        name=daemonset["name"],
+        namespace=daemonset["namespace"],
+        metadata={},
+        spec=daemonset["spec"],
+        source=None,
+        template=None,
+        saltenv="base",
+        wait=True,
+    )
+    assert isinstance(res, dict)
+    assert res["metadata"]["name"] == daemonset["name"]
+    assert res["metadata"]["namespace"] == daemonset["namespace"]
+
+
+def test_create_existing_daemonset(kubernetes, daemonset):
+    """
+    Test creating a daemonset that already exists raises appropriate error
+    """
+    with pytest.raises(CommandExecutionError, match=".*already exists.*"):
+        kubernetes.create_daemonset(
+            name=daemonset["name"],
+            namespace=daemonset["namespace"],
+            metadata={},
+            spec=daemonset["spec"],
+            source=None,
+            template=None,
+            saltenv="base",
+            wait=True,
+        )
+
+
+def test_show_daemonset(kubernetes, daemonset):
+    """
+    Test showing a daemonset returns expected result
+    """
+    res = kubernetes.show_daemonset(daemonset["name"], daemonset["namespace"])
+    assert isinstance(res, dict)
+    assert res["metadata"]["name"] == daemonset["name"]
+    assert res["metadata"]["namespace"] == daemonset["namespace"]
+
+
+@pytest.mark.parametrize("daemonset", [False], indirect=True)
+def test_show_nonexistent_daemonset(kubernetes, daemonset):
+    """
+    Test showing a daemonset that doesn't exist returns None
+    """
+    res = kubernetes.show_daemonset(daemonset["name"], daemonset["namespace"])
+    assert res is None
+
+
+def test_replace_daemonset(kubernetes, daemonset):
+    """
+    Test replacing a daemonset with new spec
+    """
+    new_spec = daemonset["spec"].copy()
+    new_spec["template"] = {
+        "metadata": {"labels": {"app": "nginx"}},
+        "spec": {"containers": [{"name": "nginx", "image": "nginx:1.27"}]},
+    }
+
+    res = kubernetes.replace_daemonset(
+        name=daemonset["name"],
+        namespace=daemonset["namespace"],
+        metadata={},
+        spec=new_spec,
+        source=None,
+        template=None,
+        saltenv="base",
+        wait=True,
+    )
+    assert isinstance(res, dict)
+    assert res["spec"]["template"]["spec"]["containers"][0]["image"] == "nginx:1.27"
+
+
+@pytest.mark.parametrize("daemonset", [False], indirect=True)
+def test_replace_nonexistent_daemonset(kubernetes, daemonset):
+    """
+    Test replacing a daemonset that doesn't exist raises appropriate error
+    """
+    with pytest.raises(CommandExecutionError, match=".*not found.*"):
+        kubernetes.replace_daemonset(
+            name=daemonset["name"],
+            namespace=daemonset["namespace"],
+            metadata={},
+            spec=daemonset["spec"],
+            source=None,
+            template=None,
+            saltenv="base",
+            wait=True,
+        )
+
+
+def test_patch_daemonset(kubernetes, daemonset):
+    """
+    Test patching a daemonset to update pod template metadata.
+    """
+    patch = {
+        "spec": {
+            "template": {
+                "metadata": {
+                    "annotations": {
+                        "patched": "true",
+                    }
+                }
+            }
+        }
+    }
+    res = kubernetes.patch_daemonset(
+        daemonset["name"],
+        daemonset["namespace"],
+        patch,
+        wait=True,
+        timeout=120,
+    )
+    assert isinstance(res, dict)
+    assert res["spec"]["template"]["metadata"]["annotations"]["patched"] == "true"
+
+
+@pytest.mark.parametrize("daemonset", [False], indirect=True)
+def test_patch_nonexistent_daemonset(kubernetes, daemonset):
+    """
+    Test patching a daemonset that doesn't exist raises appropriate error
+    """
+    patch = {"spec": {"template": {"metadata": {"annotations": {"patched": "true"}}}}}
+    with pytest.raises(CommandExecutionError, match=".*not found.*"):
+        kubernetes.patch_daemonset(
+            daemonset["name"],
+            daemonset["namespace"],
+            patch,
+            wait=True,
+            timeout=120,
+        )
+
+
+def test_patch_preserves_spec_replace_is_full_daemonset(kubernetes, daemonset):
+    """
+    Test that patch merges into spec while replace overwrites it entirely.
+    """
+    kubernetes.patch_daemonset(
+        daemonset["name"],
+        daemonset["namespace"],
+        {"spec": {"template": {"metadata": {"annotations": {"note": "patched"}}}}},
+        wait=True,
+    )
+    res = kubernetes.show_daemonset(daemonset["name"], daemonset["namespace"])
+    assert res["spec"]["template"]["metadata"]["annotations"]["note"] == "patched"
+
+    kubernetes.replace_daemonset(
+        name=daemonset["name"],
+        namespace=daemonset["namespace"],
+        metadata={},
+        spec=daemonset["spec"],
+        source=None,
+        template=None,
+        saltenv="base",
+        wait=True,
+    )
+    res = kubernetes.show_daemonset(daemonset["name"], daemonset["namespace"])
+    assert not res["spec"]["template"]["metadata"].get("annotations", {})
+
+
+def test_delete_existing_daemonset(kubernetes, daemonset):
+    """
+    Test deleting a daemonset that exists returns expected result
+    """
+    res = kubernetes.delete_daemonset(daemonset["name"], daemonset["namespace"], wait=True)
+    assert isinstance(res, dict)
+
+    deleted_daemonset = kubernetes.show_daemonset(daemonset["name"], daemonset["namespace"])
+    assert deleted_daemonset is None
+
+
+@pytest.mark.parametrize("daemonset", [False], indirect=True)
+def test_delete_nonexistent_daemonset(kubernetes, daemonset):
+    """
+    Test deleting a daemonset that doesn't exist returns None
+    """
+    res = kubernetes.delete_daemonset(daemonset["name"], daemonset["namespace"])
+    assert res is None
+
+
+@pytest.mark.parametrize("namespace", [False], indirect=True)
+def test_list_daemonsets_in_nonexistent_namespace(kubernetes, namespace):
+    """
+    Test listing daemonsets in a namespace that doesn't exist returns empty list
+    """
+    res = kubernetes.daemonsets(namespace)
+    assert res == []
+
+
 @pytest.fixture
 def service_spec(request):
     """

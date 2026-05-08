@@ -572,6 +572,39 @@ def replicasets(namespace="default", **kwargs):
         _cleanup(**cfg)
 
 
+def daemonsets(namespace="default", **kwargs):
+    """
+    .. versionadded:: 2.1.0
+
+    Return a list of kubernetes daemonsets defined in the namespace
+
+    namespace
+        The namespace to list daemonsets from. Defaults to ``default``.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.daemonsets
+        salt '*' kubernetes.daemonsets namespace=default
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        api_instance = kubernetes.client.AppsV1Api()
+        api_response = api_instance.list_namespaced_daemon_set(namespace)
+
+        return [
+            daemonset["metadata"]["name"]
+            for daemonset in ApiClient().sanitize_for_serialization(api_response).get("items", [])
+        ]
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            return []
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
 def show_deployment(name, namespace="default", **kwargs):
     """
     Return the kubernetes deployment defined by name and namespace
@@ -828,6 +861,39 @@ def show_replicaset(name, namespace="default", **kwargs):
     try:
         api_instance = kubernetes.client.AppsV1Api()
         api_response = api_instance.read_namespaced_replica_set(name, namespace)
+
+        return ApiClient().sanitize_for_serialization(api_response)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            return None
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def show_daemonset(name, namespace="default", **kwargs):
+    """
+    .. versionadded:: 2.1.0
+
+    Return the kubernetes daemonset defined by name and namespace.
+
+    name
+        The name of the daemonset
+
+    namespace
+        The namespace to look for the daemonset. Defaults to ``default``.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.show_daemonset my-daemonset default
+        salt '*' kubernetes.show_daemonset name=my-daemonset namespace=default
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        api_instance = kubernetes.client.AppsV1Api()
+        api_response = api_instance.read_namespaced_daemon_set(name, namespace)
 
         return ApiClient().sanitize_for_serialization(api_response)
     except (ApiException, HTTPError) as exc:
@@ -1153,13 +1219,9 @@ def delete_statefulset(name, namespace="default", wait=False, timeout=60, **kwar
         The namespace to delete the statefulset from. Defaults to ``default``.
 
     wait
-        .. versionadded:: 2.0.0
-
         Wait for statefulset deletion to complete (default: False)
 
     timeout
-        .. versionadded:: 2.0.0
-
         Timeout in seconds to wait for deletion (default: 60)
 
     CLI Example:
@@ -1206,13 +1268,9 @@ def delete_replicaset(name, namespace="default", wait=False, timeout=60, **kwarg
         The namespace to delete the replicaset from. Defaults to ``default``.
 
     wait
-        .. versionadded:: 2.0.0
-
         Wait for replicaset deletion to complete (default: False)
 
     timeout
-        .. versionadded:: 2.0.0
-
         Timeout in seconds to wait for deletion (default: 60)
 
     CLI Example:
@@ -1236,6 +1294,55 @@ def delete_replicaset(name, namespace="default", wait=False, timeout=60, **kwarg
                 api_instance, "replicaset", name, namespace, "deleted", timeout
             ):
                 raise CommandExecutionError(f"Timeout waiting for replicaset {name} to be deleted")
+
+        return ApiClient().sanitize_for_serialization(api_response)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            return None
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def delete_daemonset(name, namespace="default", wait=False, timeout=60, **kwargs):
+    """
+    .. versionadded:: 2.1.0
+
+    Deletes the kubernetes daemonset defined by name and namespace
+
+    name
+        The name of the daemonset
+
+    namespace
+        The namespace to delete the daemonset from. Defaults to ``default``.
+
+    wait
+        Wait for daemonset deletion to complete (default: False)
+
+    timeout
+        Timeout in seconds to wait for deletion (default: 60)
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.delete_daemonset my-daemonset default
+        salt '*' kubernetes.delete_daemonset name=my-daemonset namespace=default
+    """
+    cfg = _setup_conn(**kwargs)
+    body = kubernetes.client.V1DeleteOptions(orphan_dependents=True)
+
+    try:
+        api_instance = kubernetes.client.AppsV1Api()
+        api_response = api_instance.delete_namespaced_daemon_set(
+            name=name, namespace=namespace, body=body
+        )
+
+        if wait:
+            if not _wait_for_resource_status(
+                api_instance, "daemonset", name, namespace, "deleted", timeout
+            ):
+                raise CommandExecutionError(f"Timeout waiting for daemonset {name} to be deleted")
 
         return ApiClient().sanitize_for_serialization(api_response)
     except (ApiException, HTTPError) as exc:
@@ -1929,27 +2036,16 @@ def create_statefulset(
     saltenv
         Salt environment to pull the source file from
 
-        .. versionchanged:: 2.0.0
-            Defaults to the value of the :conf_minion:`saltenv` minion option or ``base``.
-
     template_context
-        .. versionadded:: 2.0.0
-
         Variables to make available in templated files
 
     dry_run
-        .. versionadded:: 2.0.0
-
         If True, only simulates the creation of the statefulset
 
     wait
-        .. versionadded:: 2.0.0
-
         Wait for statefulset to become ready (default: False)
 
     timeout
-        .. versionadded:: 2.0.0
-
         Timeout in seconds to wait for statefulset (default: 60)
 
     CLI Example:
@@ -2041,23 +2137,15 @@ def create_replicaset(
         Salt environment to pull the source file from
 
     template_context
-        .. versionadded:: 2.0.0
-
         Variables to make available in templated files
 
     dry_run
-        .. versionadded:: 2.0.0
-
         If True, only simulates the creation of the replicaset
 
     wait
-        .. versionadded:: 2.0.0
-
         Wait for replicaset to become ready (default: False)
 
     timeout
-        .. versionadded:: 2.0.0
-
         Timeout in seconds to wait for replicaset (default: 60)
 
     CLI Example:
@@ -2103,6 +2191,104 @@ def create_replicaset(
                 raise CommandExecutionError(f"ReplicaSet {namespace}/{name} not found") from exc
             if exc.status == 409:
                 raise CommandExecutionError(f"ReplicaSet {name} already exists") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def create_daemonset(
+    name,
+    namespace="default",
+    metadata=None,
+    spec=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    dry_run=False,
+    wait=False,
+    timeout=60,
+    **kwargs,
+):
+    """
+    .. versionadded:: 2.1.0
+
+    Creates a daemonset with the specified name, namespace, metadata, and spec.
+
+    name
+        The name of the daemonset
+
+    namespace
+        The namespace to create the daemonset in. Defaults to ``default``.
+
+    metadata
+        DaemonSet metadata dict
+
+    spec
+        DaemonSet spec dict following kubernetes API conventions
+
+    source
+        File path to daemonset definition
+
+    template
+        Template engine to use to render the source file
+
+    saltenv
+        Salt environment to pull the source file from
+
+    template_context
+        Variables to make available in templated files
+
+    dry_run
+        If True, only simulates the creation of the daemonset
+
+    wait
+        Wait for daemonset to become ready (default: False)
+
+    timeout
+        Timeout in seconds to wait for daemonset (default: 60)
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.create_daemonset name=my-ds namespace=default wait=True
+    """
+    body = __create_object_body(
+        kind="DaemonSet",
+        obj_class=kubernetes.client.V1DaemonSet,
+        spec_creator=__dict_to_daemonset_spec,
+        name=name,
+        namespace=namespace,
+        metadata=metadata,
+        spec=spec,
+        source=source,
+        template=template,
+        saltenv=saltenv,
+        template_context=template_context,
+    )
+
+    cfg = _setup_conn(**kwargs)
+
+    try:
+        api_instance = kubernetes.client.AppsV1Api()
+        api_response = api_instance.create_namespaced_daemon_set(
+            namespace, body, dry_run="All" if dry_run else None
+        )
+
+        if wait:
+            if not _wait_for_resource_status(
+                api_instance, "daemonset", name, namespace, "ready", timeout
+            ):
+                raise CommandExecutionError(f"Timeout waiting for daemonset {name} to become ready")
+
+        return ApiClient().sanitize_for_serialization(api_response)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException):
+            if exc.status == 404:
+                raise CommandExecutionError(f"DaemonSet {namespace}/{name} not found") from exc
+            if exc.status == 409:
+                raise CommandExecutionError(f"DaemonSet {name} already exists") from exc
         raise CommandExecutionError(exc) from exc
     finally:
         _cleanup(**cfg)
@@ -2749,6 +2935,97 @@ def replace_replicaset(
         _cleanup(**cfg)
 
 
+def replace_daemonset(
+    name,
+    namespace,
+    spec,
+    metadata=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    wait=False,
+    timeout=60,
+    **kwargs,
+):
+    """
+    .. versionadded:: 2.1.0
+
+    Replaces an existing daemonset with a new one defined by name and
+    namespace with the specified spec.
+
+    name
+        The name of the daemonset
+
+    namespace
+        The namespace of the daemonset
+
+    spec
+        A dictionary representing the spec of the daemonset
+
+    metadata
+        A dictionary representing the metadata of the daemonset
+
+    source
+        File path to daemonset definition
+
+    template
+        Template engine to use to render the source file
+
+    saltenv
+        Salt environment to pull the source file from
+
+    template_context
+        Variables to make available in templated files
+
+    wait
+        Wait for daemonset to become ready (default: False)
+
+    timeout
+        Timeout in seconds to wait for daemonset (default: 60)
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt 'minion1' kubernetes.replace_daemonset \
+            name=my-daemonset namespace=default spec='{"replicas": 3}'
+    """
+    body = __create_object_body(
+        kind="DaemonSet",
+        obj_class=kubernetes.client.V1DaemonSet,
+        spec_creator=__dict_to_daemonset_spec,
+        name=name,
+        namespace=namespace,
+        metadata=metadata,
+        spec=spec,
+        source=source,
+        template=template,
+        saltenv=saltenv,
+        template_context=template_context,
+    )
+
+    cfg = _setup_conn(**kwargs)
+
+    try:
+        api_instance = kubernetes.client.AppsV1Api()
+        api_response = api_instance.replace_namespaced_daemon_set(name, namespace, body)
+
+        if wait:
+            if not _wait_for_resource_status(
+                api_instance, "daemonset", name, namespace, "ready", timeout
+            ):
+                raise CommandExecutionError(f"Timeout waiting for daemonset {name} to become ready")
+
+        return ApiClient().sanitize_for_serialization(api_response)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            raise CommandExecutionError(f"DaemonSet {namespace}/{name} not found") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
 def patch_service(
     name,
     namespace,
@@ -3312,6 +3589,97 @@ def patch_replicaset(
         _cleanup(**cfg)
 
 
+def patch_daemonset(
+    name,
+    namespace,
+    patch=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    dry_run=False,
+    wait=False,
+    timeout=60,
+    **kwargs,
+):
+    """
+    .. versionadded:: 2.1.0
+
+    Patches an existing daemonset with the provided patch dictionary.
+
+    name
+        The name of the daemonset
+
+    namespace
+        The namespace of the daemonset
+
+    patch
+        A dictionary representing the patch to apply to the daemonset
+
+    source
+        File path to patch definition
+
+    template
+        Template engine to use to render the source file
+
+    saltenv
+        Salt environment to pull the source file from
+
+    template_context
+        Variables to make available in templated files
+
+    dry_run
+        If True, only simulates the patch without applying it (default: False)
+
+    wait
+        Wait for daemonset to become ready (default: False)
+
+    timeout
+        Timeout in seconds to wait for daemonset (default: 60)
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.patch_daemonset \
+            name=my-daemonset \
+            namespace=default \
+            patch='{"spec": {"replicas": 5}}'
+    """
+    if source:
+        rendered = __read_and_render_yaml_file(source, template, saltenv, template_context)
+        if not isinstance(rendered, dict):
+            raise CommandExecutionError("The source file did not render to a dictionary")
+        patch = rendered
+
+    if not isinstance(patch, dict):
+        raise CommandExecutionError("Patch must be a dictionary")
+
+    cfg = _setup_conn(**kwargs)
+
+    try:
+        api_instance = kubernetes.client.AppsV1Api()
+        api_response = api_instance.patch_namespaced_daemon_set(
+            name, namespace, patch, dry_run="All" if dry_run else None
+        )
+
+        if wait:
+            if not _wait_for_resource_status(
+                api_instance, "daemonset", name, namespace, "ready", timeout
+            ):
+                raise CommandExecutionError(f"Timeout waiting for daemonset {name} to become ready")
+
+        return ApiClient().sanitize_for_serialization(api_response)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            raise CommandExecutionError(f"DaemonSet {namespace}/{name} not found") from exc
+        if isinstance(exc, ApiException) and exc.status == 409:
+            raise CommandExecutionError(f"Conflict when patching daemonset {name}") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
 def __is_base64(value):
     """
     Check if a string is base64 encoded by attempting to decode it.
@@ -3846,6 +4214,60 @@ def __dict_to_replicaset_spec(spec):
         raise CommandExecutionError(f"Invalid replicaset spec: {exc}") from exc
 
 
+def __dict_to_daemonset_spec(spec):
+    """
+    .. versionadded:: 2.1.0
+
+    Converts a dictionary into kubernetes V1DaemonSetSpec instance.
+    """
+    if not isinstance(spec, dict):
+        raise CommandExecutionError(
+            f"DaemonSet spec must be a dictionary, not {type(spec).__name__}"
+        )
+
+    processed_spec = spec.copy()
+
+    if "template" not in processed_spec:
+        raise CommandExecutionError("DaemonSet spec must include template with pod specification")
+
+    template = processed_spec["template"]
+    template_metadata = template.get("metadata", {})
+    template_labels = template_metadata.get("labels", {})
+
+    if "selector" not in processed_spec:
+        if not template_labels:
+            raise CommandExecutionError(
+                "Template must include labels when selector is not specified"
+            )
+        processed_spec["selector"] = {"match_labels": template_labels}
+    else:
+        selector = processed_spec["selector"]
+        if not selector or not selector.get("matchLabels"):
+            raise CommandExecutionError("DaemonSet selector must include matchLabels")
+        if not all(template_labels.get(k) == v for k, v in selector["matchLabels"].items()):
+            raise CommandExecutionError("selector.matchLabels must match template metadata.labels")
+
+    if "matchLabels" in processed_spec["selector"]:
+        processed_spec["selector"] = {"match_labels": processed_spec["selector"]["matchLabels"]}
+
+    try:
+        pod_spec = __dict_to_pod_spec(template["spec"])
+    except (CommandExecutionError, ValueError) as exc:
+        raise CommandExecutionError(f"Invalid pod spec in daemonset template: {exc}") from exc
+
+    pod_template = kubernetes.client.V1PodTemplateSpec(
+        metadata=kubernetes.client.V1ObjectMeta(**template_metadata), spec=pod_spec
+    )
+    processed_spec["template"] = pod_template
+
+    processed_spec["selector"] = kubernetes.client.V1LabelSelector(**processed_spec["selector"])
+
+    try:
+        return kubernetes.client.V1DaemonSetSpec(**processed_spec)
+    except (TypeError, ValueError) as exc:
+        raise CommandExecutionError(f"Invalid daemonset spec: {exc}") from exc
+
+
 def __enforce_only_strings_dict(dictionary):
     """
     Returns a dictionary that has string keys and values.
@@ -3880,6 +4302,8 @@ def _wait_for_resource_status(
         Namespace of the resource
 
     expected_status
+        .. versionchanged:: 2.1.0
+
         Expected status to wait for ('created', 'deleted', 'ready')
 
     timeout
@@ -3898,6 +4322,7 @@ def _wait_for_resource_status(
                 method_name = {
                     "statefulset": "read_namespaced_stateful_set",
                     "replicaset": "read_namespaced_replica_set",
+                    "daemonset": "read_namespaced_daemon_set",
                     "configmap": "read_namespaced_config_map",
                 }.get(resource_type, f"read_namespaced_{resource_type}")
 
@@ -3928,6 +4353,7 @@ def _wait_for_resource_status(
         method_name = {
             "statefulset": "list_namespaced_stateful_set",
             "replicaset": "list_namespaced_replica_set",
+            "daemonset": "list_namespaced_daemon_set",
             "configmap": "list_namespaced_config_map",
         }.get(resource_type, f"list_namespaced_{resource_type}")
 

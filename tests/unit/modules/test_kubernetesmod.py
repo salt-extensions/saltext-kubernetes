@@ -439,6 +439,45 @@ def test_replicasets_handles_empty_response(mock_api):
         assert result == []
 
 
+def test_daemonsets_handles_api_exception(mock_api):
+    """
+    Test that daemonsets() handles ApiException properly
+    """
+    mock_api.client.AppsV1Api().list_namespaced_daemon_set.side_effect = ApiException(
+        status=500, reason="Internal Server Error"
+    )
+
+    with pytest.raises(CommandExecutionError):
+        kubernetes.daemonsets()
+
+
+def test_daemonsets_handles_404_gracefully(mock_api):
+    """
+    Test that daemonsets() returns empty list for 404 (namespace not found)
+    """
+    mock_api.client.AppsV1Api().list_namespaced_daemon_set.side_effect = ApiException(
+        status=404, reason="Not Found"
+    )
+
+    result = kubernetes.daemonsets("nonexistent-namespace")
+    assert result == []
+
+
+def test_daemonsets_handles_empty_response(mock_api):
+    """
+    Test that daemonsets() handles response with no items gracefully
+    """
+    with patch("saltext.kubernetes.modules.kubernetesmod.ApiClient") as mock_api_client_class:
+        mock_api_client_instance = Mock()
+        mock_api_client_instance.sanitize_for_serialization.return_value = {}
+        mock_api_client_class.return_value = mock_api_client_instance
+
+        mock_api.client.AppsV1Api().list_namespaced_daemon_set.return_value = Mock()
+
+        result = kubernetes.daemonsets()
+        assert result == []
+
+
 def test_patch_deployment_validates_patch_parameter():
     """
     Test patch_deployment raises error when patch is not a dictionary
@@ -461,6 +500,14 @@ def test_patch_replicaset_validates_patch_parameter():
     """
     with pytest.raises(CommandExecutionError, match="Patch must be a dictionary"):
         kubernetes.patch_replicaset("test", "default", patch="not-a-dict")
+
+
+def test_patch_daemonset_validates_patch_parameter():
+    """
+    Test patch_daemonset raises error when patch is not a dictionary
+    """
+    with pytest.raises(CommandExecutionError, match="Patch must be a dictionary"):
+        kubernetes.patch_daemonset("test", "default", patch="not-a-dict")
 
 
 def test_patch_deployment_handles_missing_deployment(mock_api):
@@ -500,6 +547,18 @@ def test_patch_replicaset_handles_missing_replicaset(mock_api):
         kubernetes.patch_replicaset("nonexistent", "default", patch={"spec": {"replicas": 3}})
 
 
+def test_patch_daemonset_handles_missing_daemonset(mock_api):
+    """
+    Test patch_daemonset handles case where daemonset doesn't exist
+    """
+    mock_api.client.AppsV1Api().patch_namespaced_daemon_set.side_effect = ApiException(
+        status=404, reason="Not Found"
+    )
+
+    with pytest.raises(CommandExecutionError):
+        kubernetes.patch_daemonset("nonexistent", "default", patch={"spec": {"template": {}}})
+
+
 def test_delete_deployment_handles_already_deleted(mock_api):
     """
     Test delete_deployment returns None when deployment is already deleted (404)
@@ -533,6 +592,18 @@ def test_delete_replicaset_handles_already_deleted(mock_api):
         status=404, reason="Not Found"
     )
     result = kubernetes.delete_replicaset("already-deleted", "default")
+    assert result is None
+
+
+def test_delete_daemonset_handles_already_deleted(mock_api):
+    """
+    Test delete_daemonset returns None when daemonset is already deleted (404)
+    """
+    mock_api.client.V1DeleteOptions.return_value = MagicMock()
+    mock_api.client.AppsV1Api.return_value.delete_namespaced_daemon_set.side_effect = ApiException(
+        status=404, reason="Not Found"
+    )
+    result = kubernetes.delete_daemonset("already-deleted", "default")
     assert result is None
 
 
@@ -655,6 +726,47 @@ def test_patch_replicaset_handles_invalid_yaml():
             with patch.dict(kubernetes.__opts__, {"saltenv": "base"}):
                 with pytest.raises(CommandExecutionError, match="did not render to a dictionary"):
                     kubernetes.patch_replicaset(
+                        "test", "default", patch=None, source="salt://invalid.yml"
+                    )
+    finally:
+        os.unlink(tmpfile)
+
+
+def test_patch_daemonset_handles_source_rendering_error():
+    """
+    Test patch_daemonset handles template rendering errors gracefully
+    """
+    with patch.dict(
+        kubernetes.__salt__,
+        {
+            "cp.cache_file": MagicMock(return_value=None),
+        },
+    ):
+        with patch.dict(kubernetes.__opts__, {"saltenv": "base"}):
+            with pytest.raises(CommandExecutionError, match="Source file.*not found"):
+                kubernetes.patch_daemonset(
+                    "test", "default", patch=None, source="salt://bad-template.yml"
+                )
+
+
+def test_patch_daemonset_handles_invalid_yaml():
+    """
+    Test patch_daemonset raises error when source file does not render to a dictionary
+    """
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".yml", delete=False) as f:
+        f.write("- item1\n- item2\n")
+        tmpfile = f.name
+
+    try:
+        with patch.dict(
+            kubernetes.__salt__,
+            {
+                "cp.cache_file": MagicMock(return_value=tmpfile),
+            },
+        ):
+            with patch.dict(kubernetes.__opts__, {"saltenv": "base"}):
+                with pytest.raises(CommandExecutionError, match="did not render to a dictionary"):
+                    kubernetes.patch_daemonset(
                         "test", "default", patch=None, source="salt://invalid.yml"
                     )
     finally:
@@ -830,6 +942,20 @@ def test_create_replicaset_handles_conflict(mock_api):
             kubernetes.create_replicaset("test", "default", {}, {}, None, None, None)
 
 
+def test_create_daemonset_handles_conflict(mock_api):
+    """
+    Test create_daemonset raises for 409 conflict (already exists)
+    """
+    with patch(
+        "saltext.kubernetes.modules.kubernetesmod.__create_object_body", return_value=MagicMock()
+    ):
+        mock_api.client.AppsV1Api().create_namespaced_daemon_set.side_effect = ApiException(
+            status=409, reason="AlreadyExists"
+        )
+        with pytest.raises(CommandExecutionError, match="already exists"):
+            kubernetes.create_daemonset("test", "default", {}, {}, None, None, None)
+
+
 def test_patch_deployment_handles_conflict(mock_api):
     """
     Test patch_deployment raises for 409 conflict (concurrent modification)
@@ -872,6 +998,17 @@ def test_patch_replicaset_handles_conflict(mock_api):
     )
     with pytest.raises(CommandExecutionError, match="Conflict when patching"):
         kubernetes.patch_replicaset("test", "default", patch={"spec": {"replicas": 3}})
+
+
+def test_patch_daemonset_handles_conflict(mock_api):
+    """
+    Test patch_daemonset raises for 409 conflict (concurrent modification)
+    """
+    mock_api.client.AppsV1Api().patch_namespaced_daemon_set.side_effect = ApiException(
+        status=409, reason="Conflict"
+    )
+    with pytest.raises(CommandExecutionError, match="Conflict when patching"):
+        kubernetes.patch_daemonset("test", "default", patch={"spec": {"template": {}}})
 
 
 @pytest.mark.parametrize(
@@ -958,6 +1095,34 @@ def test_statefulset_invalid_spec(invalid_spec, expected_error):
 def test_replicaset_invalid_spec(invalid_spec, expected_error):
     """Test replicaset spec validation raises appropriate errors"""
     func = getattr(kubernetes, "__dict_to_replicaset_spec")
+    with pytest.raises(CommandExecutionError, match=expected_error):
+        func(invalid_spec)
+
+
+@pytest.mark.parametrize(
+    "invalid_spec,expected_error",
+    [
+        ({"selector": {"matchLabels": {"app": "nginx"}}}, "template"),
+        (
+            {
+                "selector": {"matchLabels": {"app": "different"}},
+                "template": {
+                    "metadata": {"labels": {"app": "nginx"}},
+                    "spec": {"containers": [{"name": "nginx", "image": "nginx:latest"}]},
+                },
+            },
+            "must match template",
+        ),
+        (
+            {"template": {"spec": {"containers": [{"name": "nginx", "image": "nginx:latest"}]}}},
+            "Template must include labels",
+        ),
+        ("not-a-dict", "must be a dictionary"),
+    ],
+)
+def test_daemonset_invalid_spec(invalid_spec, expected_error):
+    """Test daemonset spec validation raises appropriate errors"""
+    func = getattr(kubernetes, "__dict_to_daemonset_spec")
     with pytest.raises(CommandExecutionError, match=expected_error):
         func(invalid_spec)
 
