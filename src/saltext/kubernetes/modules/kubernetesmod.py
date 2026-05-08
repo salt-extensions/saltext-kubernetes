@@ -605,6 +605,37 @@ def daemonsets(namespace="default", **kwargs):
         _cleanup(**cfg)
 
 
+def storageclasses(**kwargs):
+    """
+    .. versionadded:: 2.1.0
+
+    Return a list of kubernetes storageclasses.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.storageclasses
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        api_instance = kubernetes.client.StorageV1Api()
+        api_response = api_instance.list_storage_class()
+
+        return [
+            storageclass["metadata"]["name"]
+            for storageclass in ApiClient()
+            .sanitize_for_serialization(api_response)
+            .get("items", [])
+        ]
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            return []
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
 def show_deployment(name, namespace="default", **kwargs):
     """
     Return the kubernetes deployment defined by name and namespace
@@ -894,6 +925,36 @@ def show_daemonset(name, namespace="default", **kwargs):
     try:
         api_instance = kubernetes.client.AppsV1Api()
         api_response = api_instance.read_namespaced_daemon_set(name, namespace)
+
+        return ApiClient().sanitize_for_serialization(api_response)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            return None
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def show_storageclass(name, **kwargs):
+    """
+    .. versionadded:: 2.1.0
+
+    Return the kubernetes storageclass defined by name.
+
+    name
+        The name of the storageclass
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.show_storageclass my-storageclass
+        salt '*' kubernetes.show_storageclass name=my-storageclass
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        api_instance = kubernetes.client.StorageV1Api()
+        api_response = api_instance.read_storage_class(name)
 
         return ApiClient().sanitize_for_serialization(api_response)
     except (ApiException, HTTPError) as exc:
@@ -1343,6 +1404,52 @@ def delete_daemonset(name, namespace="default", wait=False, timeout=60, **kwargs
                 api_instance, "daemonset", name, namespace, "deleted", timeout
             ):
                 raise CommandExecutionError(f"Timeout waiting for daemonset {name} to be deleted")
+
+        return ApiClient().sanitize_for_serialization(api_response)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            return None
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def delete_storageclass(name, wait=False, timeout=60, **kwargs):
+    """
+    .. versionadded:: 2.1.0
+
+    Deletes the kubernetes storageclass defined by name
+
+    name
+        The name of the storageclass
+
+    wait
+        Wait for storageclass deletion to complete (default: False)
+
+    timeout
+        Timeout in seconds to wait for deletion (default: 60)
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.delete_storageclass my-storageclass
+        salt '*' kubernetes.delete_storageclass name=my-storageclass
+    """
+    cfg = _setup_conn(**kwargs)
+    body = kubernetes.client.V1DeleteOptions(orphan_dependents=True)
+
+    try:
+        api_instance = kubernetes.client.StorageV1Api()
+        api_response = api_instance.delete_storage_class(name=name, body=body)
+
+        if wait:
+            if not _wait_for_resource_status(
+                api_instance, "storageclass", name, None, "deleted", timeout
+            ):
+                raise CommandExecutionError(
+                    f"Timeout waiting for storageclass {name} to be deleted"
+                )
 
         return ApiClient().sanitize_for_serialization(api_response)
     except (ApiException, HTTPError) as exc:
@@ -2294,6 +2401,113 @@ def create_daemonset(
         _cleanup(**cfg)
 
 
+def create_storageclass(
+    name,
+    metadata=None,
+    spec=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    dry_run=False,
+    wait=False,
+    timeout=60,
+    **kwargs,
+):
+    """
+    .. versionadded:: 2.1.0
+
+    Creates a storageclass with the specified name, metadata, and spec.
+
+    name
+        The name of the storageclass
+
+    metadata
+        StorageClass metadata dict
+
+    spec
+        StorageClass spec dict following kubernetes API conventions
+
+    source
+        File path to storageclass definition
+
+    template
+        Template engine to use to render the source file
+
+    saltenv
+        Salt environment to pull the source file from
+
+    template_context
+        Variables to make available in templated files
+
+    dry_run
+        If True, only simulates the creation of the storageclass
+
+    wait
+        Wait for storageclass to become ready (default: False)
+
+    timeout
+        Timeout in seconds to wait for storageclass (default: 60)
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.create_storageclass name=fast-sc spec='{"provisioner": "kubernetes.io/no-provisioner"}'
+    """
+    if source:
+        src_obj = __read_and_render_yaml_file(source, template, saltenv, template_context)
+        if not isinstance(src_obj, dict) or src_obj.get("kind") != "StorageClass":
+            raise CommandExecutionError("The source file should define only a StorageClass object")
+
+        if "metadata" in src_obj:
+            metadata = src_obj["metadata"]
+        if "spec" in src_obj:
+            spec = src_obj["spec"]
+        elif spec is None:
+            spec = {
+                key: value
+                for key, value in src_obj.items()
+                if key not in ("apiVersion", "kind", "metadata")
+            }
+
+    if metadata is None:
+        metadata = {}
+    if spec is None:
+        spec = {}
+
+    created_spec = __dict_to_storageclass_spec(spec)
+    body = kubernetes.client.V1StorageClass(
+        metadata=__dict_to_object_meta(name, None, metadata),
+        **created_spec,
+    )
+
+    cfg = _setup_conn(**kwargs)
+
+    try:
+        api_instance = kubernetes.client.StorageV1Api()
+        api_response = api_instance.create_storage_class(body, dry_run="All" if dry_run else None)
+
+        if wait:
+            if not _wait_for_resource_status(
+                api_instance, "storageclass", name, None, "ready", timeout
+            ):
+                raise CommandExecutionError(
+                    f"Timeout waiting for storageclass {name} to become ready"
+                )
+
+        return ApiClient().sanitize_for_serialization(api_response)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException):
+            if exc.status == 404:
+                raise CommandExecutionError(f"StorageClass {name} not found") from exc
+            if exc.status == 409:
+                raise CommandExecutionError(f"StorageClass {name} already exists") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
 def replace_deployment(
     name,
     metadata,
@@ -3026,6 +3240,107 @@ def replace_daemonset(
         _cleanup(**cfg)
 
 
+def replace_storageclass(
+    name,
+    spec,
+    metadata=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    wait=False,
+    timeout=60,
+    **kwargs,
+):
+    """
+    .. versionadded:: 2.1.0
+
+    Replaces an existing storageclass with a new one defined by name.
+
+    name
+        The name of the storageclass
+
+    spec
+        A dictionary representing the spec of the storageclass
+
+    metadata
+        A dictionary representing the metadata of the storageclass
+
+    source
+        File path to storageclass definition
+
+    template
+        Template engine to use to render the source file
+
+    saltenv
+        Salt environment to pull the source file from
+
+    template_context
+        Variables to make available in templated files
+
+    wait
+        Wait for storageclass to become ready (default: False)
+
+    timeout
+        Timeout in seconds to wait for storageclass (default: 60)
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt 'minion1' kubernetes.replace_storageclass \
+            name=my-storageclass spec='{"provisioner": "kubernetes.io/no-provisioner"}'
+    """
+    if source:
+        src_obj = __read_and_render_yaml_file(source, template, saltenv, template_context)
+        if not isinstance(src_obj, dict) or src_obj.get("kind") != "StorageClass":
+            raise CommandExecutionError("The source file should define only a StorageClass object")
+
+        if "metadata" in src_obj:
+            metadata = src_obj["metadata"]
+        if "spec" in src_obj:
+            spec = src_obj["spec"]
+        elif spec is None:
+            spec = {
+                key: value
+                for key, value in src_obj.items()
+                if key not in ("apiVersion", "kind", "metadata")
+            }
+
+    if metadata is None:
+        metadata = {}
+
+    created_spec = __dict_to_storageclass_spec(spec)
+    body = kubernetes.client.V1StorageClass(
+        metadata=__dict_to_object_meta(name, None, metadata),
+        **created_spec,
+    )
+
+    cfg = _setup_conn(**kwargs)
+
+    try:
+        api_instance = kubernetes.client.StorageV1Api()
+        current_storageclass = api_instance.read_storage_class(name)
+        body.metadata.resource_version = current_storageclass.metadata.resource_version
+        api_response = api_instance.replace_storage_class(name, body)
+
+        if wait:
+            if not _wait_for_resource_status(
+                api_instance, "storageclass", name, None, "ready", timeout
+            ):
+                raise CommandExecutionError(
+                    f"Timeout waiting for storageclass {name} to become ready"
+                )
+
+        return ApiClient().sanitize_for_serialization(api_response)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            raise CommandExecutionError(f"StorageClass {name} not found") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
 def patch_service(
     name,
     namespace,
@@ -3680,6 +3995,135 @@ def patch_daemonset(
         _cleanup(**cfg)
 
 
+def patch_storageclass(
+    name,
+    patch=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    dry_run=False,
+    wait=False,
+    timeout=60,
+    **kwargs,
+):
+    """
+    .. versionadded:: 2.1.0
+
+    Patches an existing storageclass with the provided patch dictionary.
+
+    name
+        The name of the storageclass
+
+    patch
+        A dictionary representing the patch to apply to the storageclass
+
+    source
+        File path to patch definition
+
+    template
+        Template engine to use to render the source file
+
+    saltenv
+        Salt environment to pull the source file from
+
+    template_context
+        Variables to make available in templated files
+
+    dry_run
+        If True, only simulates the patch without applying it (default: False)
+
+    wait
+        Wait for storageclass to become ready (default: False)
+
+    timeout
+        Timeout in seconds to wait for storageclass (default: 60)
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.patch_storageclass \
+            name=my-storageclass \
+            patch='{"reclaimPolicy": "Retain"}'
+    """
+    if source:
+        rendered = __read_and_render_yaml_file(source, template, saltenv, template_context)
+        if not isinstance(rendered, dict):
+            raise CommandExecutionError("The source file did not render to a dictionary")
+        if rendered.get("kind") == "StorageClass":
+            metadata = rendered.get("metadata")
+            spec = rendered.get("spec")
+            if spec is None:
+                spec = {
+                    key: value
+                    for key, value in rendered.items()
+                    if key not in ("apiVersion", "kind", "metadata")
+                }
+
+            patch = {}
+            if metadata:
+                metadata_patch = {
+                    key: value
+                    for key, value in metadata.items()
+                    if key
+                    not in (
+                        "name",
+                        "namespace",
+                        "resourceVersion",
+                        "uid",
+                        "creationTimestamp",
+                        "managedFields",
+                        "generation",
+                        "selfLink",
+                    )
+                }
+                if metadata_patch:
+                    patch["metadata"] = metadata_patch
+
+            if spec:
+                patch.update(spec)
+        else:
+            patch = rendered
+
+    if not isinstance(patch, dict):
+        raise CommandExecutionError("Patch must be a dictionary")
+
+    # Allow state-style payloads that wrap StorageClass fields under `spec`.
+    if "spec" in patch:
+        spec_patch = patch.get("spec")
+        if not isinstance(spec_patch, dict):
+            raise CommandExecutionError("StorageClass spec patch must be a dictionary")
+        patch = {key: value for key, value in patch.items() if key != "spec"}
+        patch.update(spec_patch)
+
+    cfg = _setup_conn(**kwargs)
+
+    try:
+        api_instance = kubernetes.client.StorageV1Api()
+        api_response = api_instance.patch_storage_class(
+            name, patch, dry_run="All" if dry_run else None
+        )
+
+        if wait:
+            if not _wait_for_resource_status(
+                api_instance, "storageclass", name, None, "ready", timeout
+            ):
+                raise CommandExecutionError(
+                    f"Timeout waiting for storageclass {name} to become ready"
+                )
+
+        return ApiClient().sanitize_for_serialization(api_response)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            raise CommandExecutionError(f"StorageClass {name} not found") from exc
+        if isinstance(exc, ApiException) and exc.status == 409:
+            raise CommandExecutionError(f"Conflict when patching storageclass {name}") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
 def __is_base64(value):
     """
     Check if a string is base64 encoded by attempting to decode it.
@@ -4268,6 +4712,59 @@ def __dict_to_daemonset_spec(spec):
         raise CommandExecutionError(f"Invalid daemonset spec: {exc}") from exc
 
 
+def __dict_to_storageclass_spec(spec):
+    """
+    .. versionadded:: 2.1.0
+
+    Validates and normalizes a dictionary into a V1StorageClass-compatible payload.
+    """
+    if not isinstance(spec, dict):
+        raise CommandExecutionError(
+            f"StorageClass spec must be a dictionary, not {type(spec).__name__}"
+        )
+
+    processed_spec = spec.copy()
+
+    if not processed_spec.get("provisioner"):
+        raise CommandExecutionError("StorageClass spec must include provisioner")
+
+    if "reclaimPolicy" in processed_spec:
+        processed_spec["reclaim_policy"] = processed_spec.pop("reclaimPolicy")
+
+    if "allowVolumeExpansion" in processed_spec:
+        processed_spec["allow_volume_expansion"] = processed_spec.pop("allowVolumeExpansion")
+
+    if "volumeBindingMode" in processed_spec:
+        processed_spec["volume_binding_mode"] = processed_spec.pop("volumeBindingMode")
+
+    if "mountOptions" in processed_spec:
+        mount_options = processed_spec.pop("mountOptions")
+        if not isinstance(mount_options, list):
+            raise CommandExecutionError("StorageClass mountOptions must be a list")
+        processed_spec["mount_options"] = mount_options
+
+    if "parameters" in processed_spec:
+        parameters = processed_spec["parameters"]
+        if not isinstance(parameters, dict):
+            raise CommandExecutionError("StorageClass parameters must be a dictionary")
+        processed_spec["parameters"] = __enforce_only_strings_dict(parameters)
+
+    if "allowedTopologies" in processed_spec:
+        allowed_topologies = processed_spec.pop("allowedTopologies")
+        if not isinstance(allowed_topologies, list):
+            raise CommandExecutionError("StorageClass allowedTopologies must be a list")
+        processed_spec["allowed_topologies"] = [
+            kubernetes.client.V1TopologySelectorTerm(**term) for term in allowed_topologies
+        ]
+
+    try:
+        kubernetes.client.V1StorageClass(**processed_spec)
+    except (TypeError, ValueError) as exc:
+        raise CommandExecutionError(f"Invalid storageclass spec: {exc}") from exc
+
+    return processed_spec
+
+
 def __enforce_only_strings_dict(dictionary):
     """
     Returns a dictionary that has string keys and values.
@@ -4324,6 +4821,7 @@ def _wait_for_resource_status(
                     "replicaset": "read_namespaced_replica_set",
                     "daemonset": "read_namespaced_daemon_set",
                     "configmap": "read_namespaced_config_map",
+                    "storageclass": "read_storage_class",
                 }.get(resource_type, f"read_namespaced_{resource_type}")
 
                 try:
@@ -4338,6 +4836,8 @@ def _wait_for_resource_status(
                 try:
                     if resource_type == "namespace":
                         api_instance.read_namespace(name)
+                    elif resource_type == "storageclass":
+                        method(name)
                     else:
                         method(name, namespace)
                 except ApiException as e:
@@ -4355,6 +4855,7 @@ def _wait_for_resource_status(
             "replicaset": "list_namespaced_replica_set",
             "daemonset": "list_namespaced_daemon_set",
             "configmap": "list_namespaced_config_map",
+            "storageclass": "list_storage_class",
         }.get(resource_type, f"list_namespaced_{resource_type}")
 
         try:
@@ -4364,12 +4865,21 @@ def _wait_for_resource_status(
                 f"Unsupported resource type for wait operation: {resource_type}"
             ) from exc
 
-        for event in w.stream(
-            func=list_method,
-            namespace=namespace,
-            field_selector=f"metadata.name={name}",
-            timeout_seconds=timeout,
-        ):
+        if resource_type == "storageclass":
+            stream = w.stream(
+                func=list_method,
+                field_selector=f"metadata.name={name}",
+                timeout_seconds=timeout,
+            )
+        else:
+            stream = w.stream(
+                func=list_method,
+                namespace=namespace,
+                field_selector=f"metadata.name={name}",
+                timeout_seconds=timeout,
+            )
+
+        for event in stream:
             if event["object"].metadata.name == name:
                 if expected_status == "created":
                     return True

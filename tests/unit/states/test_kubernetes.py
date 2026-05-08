@@ -486,6 +486,29 @@ def test_deployment_present_dry_run_fallback():
             assert "dependencies not created yet" in ret["comment"]
 
 
+def test_deployment_present_nests_spec_in_patch_call():
+    """
+    Test deployment_present passes spec under the patch.spec key.
+    """
+    existing_deployment = {"metadata": {"name": "test-deploy"}, "spec": {"replicas": 1}}
+    patched_deployment = {"metadata": {"name": "test-deploy"}, "spec": {"replicas": 3}}
+    patch_mock = MagicMock(return_value=patched_deployment)
+
+    with patch.dict(
+        kubernetes.__salt__,
+        {
+            "kubernetes.show_deployment": MagicMock(return_value=existing_deployment),
+            "kubernetes.patch_deployment": patch_mock,
+        },
+    ):
+        with patch.dict(kubernetes.__opts__, {"test": False}):
+            ret = kubernetes.deployment_present("test-deploy", spec={"replicas": 3})
+
+    assert ret["result"] is True
+    assert ret["changes"]["new"]["spec"]["replicas"] == 3
+    assert patch_mock.call_args.kwargs["patch"] == {"spec": {"replicas": 3}}
+
+
 def test_statefulset_present_handles_show_statefulset_error():
     """
     Test statefulset_present handles CommandExecutionError from show_statefulset
@@ -770,6 +793,126 @@ def test_daemonset_present_dry_run_fallback():
             assert "dependencies not created yet" in ret["comment"]
 
 
+def test_storageclass_present_handles_show_storageclass_error():
+    """
+    Test storageclass_present handles CommandExecutionError from show_storageclass
+    """
+    with patch.dict(
+        kubernetes.__salt__,
+        {
+            "kubernetes.show_storageclass": MagicMock(
+                side_effect=CommandExecutionError("Connection failed")
+            )
+        },
+    ):
+        with patch.dict(kubernetes.__opts__, {"test": False}):
+            ret = kubernetes.storageclass_present("test-storageclass")
+
+            assert ret["result"] is False
+            assert "Connection failed" in ret["comment"]
+            assert not ret["changes"]
+
+
+def test_storageclass_present_handles_create_storageclass_error():
+    """
+    Test storageclass_present handles CommandExecutionError from create_storageclass
+    """
+    with patch.dict(
+        kubernetes.__salt__,
+        {
+            "kubernetes.show_storageclass": MagicMock(return_value=None),
+            "kubernetes.create_storageclass": MagicMock(
+                side_effect=CommandExecutionError("Invalid spec")
+            ),
+        },
+    ):
+        with patch.dict(kubernetes.__opts__, {"test": False}):
+            ret = kubernetes.storageclass_present(
+                "test-storageclass",
+                spec={"invalid": "spec"},
+            )
+
+            assert ret["result"] is False
+            assert "Invalid spec" in ret["comment"]
+
+
+def test_storageclass_present_handles_patch_storageclass_error():
+    """
+    Test storageclass_present handles CommandExecutionError from patch_storageclass
+    """
+    existing_storageclass = {
+        "metadata": {"name": "test"},
+        "provisioner": "kubernetes.io/no-provisioner",
+    }
+
+    with patch.dict(
+        kubernetes.__salt__,
+        {
+            "kubernetes.show_storageclass": MagicMock(return_value=existing_storageclass),
+            "kubernetes.patch_storageclass": MagicMock(
+                side_effect=CommandExecutionError("Patch failed")
+            ),
+        },
+    ):
+        with patch.dict(kubernetes.__opts__, {"test": False}):
+            ret = kubernetes.storageclass_present(
+                "test-storageclass",
+                spec={"provisioner": "kubernetes.io/no-provisioner"},
+            )
+
+            assert ret["result"] is False
+            assert "Patch failed" in ret["comment"]
+
+
+def test_storageclass_present_dry_run_fallback():
+    """
+    Test that storageclass_present falls back gracefully when dry_run fails in test mode
+    """
+    with patch.dict(
+        kubernetes.__salt__,
+        {
+            "kubernetes.show_storageclass": MagicMock(return_value=None),
+            "kubernetes.create_storageclass": MagicMock(
+                side_effect=CommandExecutionError("Dry run failed")
+            ),
+        },
+    ):
+        with patch.dict(kubernetes.__opts__, {"test": True}):
+            ret = kubernetes.storageclass_present(
+                "test-storageclass",
+                spec={"provisioner": "kubernetes.io/no-provisioner"},
+            )
+
+            assert ret["result"] is None
+            assert "Dry run failed" in ret["comment"]
+            assert "dependencies not created yet" in ret["comment"]
+
+
+def test_storageclass_present_source_create_keeps_spec_none():
+    """
+    Test storageclass_present allows source-based creates to extract top-level fields.
+    """
+    create_mock = MagicMock(return_value={"metadata": {"name": "test-storageclass"}})
+
+    with patch.dict(
+        kubernetes.__salt__,
+        {
+            "kubernetes.show_storageclass": MagicMock(return_value=None),
+            "kubernetes.create_storageclass": create_mock,
+        },
+    ):
+        with patch.dict(kubernetes.__opts__, {"test": False}):
+            ret = kubernetes.storageclass_present(
+                "test-storageclass",
+                source="salt://storageclass.yml",
+                template="jinja",
+            )
+
+    assert ret["result"] is True
+    assert create_mock.call_args.kwargs["spec"] is None
+    assert create_mock.call_args.kwargs["metadata"] is None
+
+
 @pytest.mark.parametrize(
     "state_func,show_func",
     [
@@ -781,6 +924,7 @@ def test_daemonset_present_dry_run_fallback():
         ("statefulset_absent", "show_statefulset"),
         ("replicaset_absent", "show_replicaset"),
         ("daemonset_absent", "show_daemonset"),
+        ("storageclass_absent", "show_storageclass"),
     ],
 )
 def test_absent_handles_show_error(state_func, show_func):
@@ -809,6 +953,7 @@ def test_absent_handles_show_error(state_func, show_func):
         ("statefulset_absent", "show_statefulset", "delete_statefulset"),
         ("replicaset_absent", "show_replicaset", "delete_replicaset"),
         ("daemonset_absent", "show_daemonset", "delete_daemonset"),
+        ("storageclass_absent", "show_storageclass", "delete_storageclass"),
     ],
 )
 def test_absent_handles_delete_error(state_func, show_func, delete_func):
@@ -841,6 +986,7 @@ def test_absent_handles_delete_error(state_func, show_func, delete_func):
         ("statefulset_present", "show_statefulset"),
         ("replicaset_present", "show_replicaset"),
         ("daemonset_present", "show_daemonset"),
+        ("storageclass_present", "show_storageclass"),
     ],
 )
 def test_present_handles_show_error(state_func, show_func):
