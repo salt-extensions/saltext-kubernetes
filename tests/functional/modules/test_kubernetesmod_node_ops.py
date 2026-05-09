@@ -15,6 +15,7 @@ import time
 
 import pytest
 from salt.exceptions import CommandExecutionError
+from saltfactories.utils import random_string
 
 
 @pytest.fixture
@@ -116,7 +117,6 @@ def test_drain_evicts_managed_pod_skips_daemonsets(kubernetes_exe, worker_node_n
     the pod is reported in ``evicted`` and the kind/kube-proxy DaemonSet
     pods are reported in ``skipped``. Always uncordon the node afterwards.
     """
-    from saltfactories.utils import random_string  # pylint: disable=import-outside-toplevel
 
     name = random_string("drain-test-", uppercase=False)
     deployment_spec = {

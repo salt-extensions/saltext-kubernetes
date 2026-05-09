@@ -73,6 +73,7 @@ def test_api_methods_exist(kind_name):
 
 def test_get_kind_unknown_raises_command_execution_error():
     """Unknown kinds raise the legacy CommandExecutionError shape."""
+
     with pytest.raises(CommandExecutionError, match="Unsupported resource type"):
         _kinds.get_kind("frobozz")
 

@@ -4,6 +4,7 @@ Unit tests for the Ingress / HPA / PDB spec helpers.
 Functional tests against a real cluster live in the functional tier.
 """
 
+import kubernetes.client
 import pytest
 from salt.exceptions import CommandExecutionError
 
@@ -53,7 +54,6 @@ def test_hpa_spec_minimal():
     assert out["min_replicas"] == 1
     assert out["max_replicas"] == 5
     # scale_target_ref was wrapped in a V2CrossVersionObjectReference
-    import kubernetes.client  # pylint: disable=import-outside-toplevel
 
     assert isinstance(out["scale_target_ref"], kubernetes.client.V2CrossVersionObjectReference)
 

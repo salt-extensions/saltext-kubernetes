@@ -5,6 +5,7 @@ End-to-end functional tests against a real cluster live in the
 functional tier.
 """
 
+import kubernetes.client
 import pytest
 from salt.exceptions import CommandExecutionError
 
@@ -74,7 +75,6 @@ def _minimal_pvc_spec():
 
 
 def test_pvc_spec_minimal():
-    import kubernetes.client  # pylint: disable=import-outside-toplevel
 
     out = kubernetesmod.__dict_to_pvc_spec(_minimal_pvc_spec())
     assert out["access_modes"] == ["ReadWriteOnce"]
@@ -107,7 +107,6 @@ def test_pvc_spec_rejects_missing_resources():
 
 
 def test_pvc_spec_wraps_selector_dict():
-    import kubernetes.client  # pylint: disable=import-outside-toplevel
 
     spec = _minimal_pvc_spec()
     spec["selector"] = {"match_labels": {"app": "x"}}

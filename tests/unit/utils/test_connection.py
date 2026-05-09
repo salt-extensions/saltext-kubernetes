@@ -79,6 +79,7 @@ def test_setup_conn_kubeconfig_data_writes_temp_file(fake_config):
 
 def test_setup_conn_missing_required_raises(fake_config):
     """No source supplies kubeconfig/host/in-cluster: CommandExecutionError fires."""
+
     with pytest.raises(CommandExecutionError):
         _connection._setup_conn(fake_config, env={})
 
@@ -132,6 +133,7 @@ def test_in_cluster_explicit_false_blocks_autodetect(fake_config):
         "KUBERNETES_SERVICE_HOST": "10.0.0.1",
         "KUBERNETES_SERVICE_PORT": "443",
     }
+
     with pytest.raises(CommandExecutionError):
         with patch.object(_connection, "kubernetes"):
             _connection._setup_conn(fake_config, env=env)

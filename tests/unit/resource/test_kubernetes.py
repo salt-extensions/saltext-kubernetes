@@ -16,6 +16,9 @@ gated behind the worktree-existence check in
 ``tests/integration/test_resource_plugin_against_worktree.py``.
 """
 
+import sys
+import types
+
 import pytest
 
 from saltext.kubernetes.resource import kubernetes as resource_mod
@@ -42,8 +45,6 @@ def test_virtual_returns_virtualname_when_resources_present(monkeypatch):
     ``__virtual__`` returns the virtualname so the loader registers
     this plugin under the ``kubernetes`` resource type.
     """
-    import sys  # pylint: disable=import-outside-toplevel
-    import types  # pylint: disable=import-outside-toplevel
 
     fake_module = types.ModuleType("salt.utils.resources")
     fake_module.pillar_resources_tree = lambda opts: {}  # noqa: ARG005

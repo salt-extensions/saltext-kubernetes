@@ -9,6 +9,7 @@ import time
 
 import pytest
 from salt.exceptions import CommandExecutionError
+from saltfactories.utils import random_string
 
 
 @pytest.fixture
@@ -26,7 +27,6 @@ def deployment_spec():
 @pytest.fixture(params=[True])
 def deployment(kubernetes_exe, deployment_spec, request):
     """Fresh Deployment per test; cleaned up on teardown."""
-    from saltfactories.utils import random_string  # pylint: disable=import-outside-toplevel
 
     name = random_string("dep-", uppercase=False)
     namespace = "default"

@@ -15,6 +15,8 @@ import pytest
 from salt.exceptions import CommandExecutionError
 from saltfactories.utils import random_string
 
+from saltext.kubernetes.utils import _dynamic
+
 # ---------------------------------------------------------------------------
 # PersistentVolume
 # ---------------------------------------------------------------------------
@@ -119,7 +121,6 @@ def test_apply_only_kinds_via_manifest_present(kubernetes_exe):
         for m in manifests:
             kubernetes_exe.apply(manifest=m)
         # All applied — verify presence via the dynamic-client get_object.
-        from saltext.kubernetes.utils import _dynamic  # pylint: disable=import-outside-toplevel
 
         assert (
             _dynamic.get_object(

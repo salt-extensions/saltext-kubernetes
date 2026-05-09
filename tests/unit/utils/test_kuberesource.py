@@ -3,6 +3,9 @@ Unit tests for ``saltext.kubernetes.utils._kuberesource`` — the shared
 helpers used by every ``kuberesource_*`` companion module.
 """
 
+import sys
+import types
+
 import pytest
 from salt.exceptions import CommandExecutionError
 
@@ -16,8 +19,6 @@ def test_virtual_or_dormant_returns_false_on_stock_salt():
 
 
 def test_virtual_or_dormant_returns_kubernetes_when_resources_present(monkeypatch):
-    import sys  # pylint: disable=import-outside-toplevel
-    import types  # pylint: disable=import-outside-toplevel
 
     fake = types.ModuleType("salt.utils.resources")
     monkeypatch.setitem(sys.modules, "salt.utils.resources", fake)
