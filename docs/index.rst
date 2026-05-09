@@ -9,6 +9,7 @@ Salt Extension for interacting with Kubernetes
   :hidden:
 
   topics/installation
+  topics/auth
 
 .. toctree::
   :maxdepth: 2

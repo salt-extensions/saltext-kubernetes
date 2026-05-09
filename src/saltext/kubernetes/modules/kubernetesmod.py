@@ -4,16 +4,24 @@ Module for handling kubernetes calls.
 :optdepends:    - kubernetes Python client >= v19.15.0
                 - PyYAML >= 5.3.1
 :configuration: The k8s API settings are provided either in a pillar, in
-    the minion's config file, or in master's config file::
+    the minion's config file, or in master's config file. The classic
+    kubeconfig-based setup looks like::
 
         kubernetes.kubeconfig: '/path/to/kubeconfig'
-        kubernetes.kubeconfig-data: '<base64 encoded kubeconfig content'
+        kubernetes.kubeconfig-data: '<base64 encoded kubeconfig content>'
         kubernetes.context: 'context'
+
+    For other auth modes — in-cluster ServiceAccount, bearer token, basic
+    auth, or explicit client certificates with optional proxy support — see
+    the dedicated :doc:`/topics/auth` guide. All settings can also be
+    supplied via ``K8S_AUTH_*`` environment variables (compatible with
+    Ansible's ``kubernetes.core`` collection) or as per-call kwargs that
+    take precedence over both env and config.
 
 The data format for `kubernetes.kubeconfig-data` value is the content of
 `kubeconfig` base64 encoded in one line.
 
-These settings can be overridden by adding `context and `kubeconfig` or
+These settings can be overridden by adding `context` and `kubeconfig` or
 `kubeconfig_data` parameters when calling a function.
 
 Only `kubeconfig` or `kubeconfig-data` should be provided. In case both are
@@ -28,6 +36,12 @@ CLI Example:
 
 .. versionadded:: 2017.7.0
 .. versionchanged:: 2019.2.0
+.. versionchanged:: 2.1.0
+
+    Added in-cluster ServiceAccount, bearer token, basic auth, explicit
+    client-certificate, proxy, and ``K8S_AUTH_*`` environment-variable
+    auth modes. The legacy kubeconfig path is unchanged and remains the
+    default. See :doc:`/topics/auth`.
 
 .. warning::
 
@@ -40,10 +54,11 @@ CLI Example:
     - kubernetes.client-certificate-data/file
     - kubernetes.client-key-data/file
 
-    Please use now:
-
-    - kubernetes.kubeconfig or kubernetes.kubeconfig-data
-    - kubernetes.context
+    These options were re-introduced under different names in 2.1.0 as
+    part of the rich-auth work — see the auth guide. The 2019.2.0
+    removal warning still stands for the *legacy* names; use the new
+    ``kubernetes.host`` / ``kubernetes.api_key`` / ``kubernetes.username``
+    / ``kubernetes.client_cert`` / etc. options instead.
 
 """
 
