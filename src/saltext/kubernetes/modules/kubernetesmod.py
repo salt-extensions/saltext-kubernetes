@@ -76,8 +76,10 @@ import salt.utils.files
 import salt.utils.platform
 import salt.utils.templates
 import salt.utils.yaml
+import yaml as _pyyaml
 from salt.exceptions import CommandExecutionError
 
+from saltext.kubernetes.utils import _dynamic
 from saltext.kubernetes.utils import _kinds
 
 # Re-exports kept on the module surface for backwards compatibility with any
@@ -6583,6 +6585,264 @@ def drain(
         if isinstance(exc, ApiException) and exc.status == 404:
             raise CommandExecutionError(f"Node {name} not found") from exc
         raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+# ---------------------------------------------------------------------------
+# Generic apply: kubernetes.apply, kubernetes.delete_manifest
+#
+# Wraps the dynamic-client primitives in saltext.kubernetes.utils._dynamic
+# with source-file rendering, multi-document YAML support, namespace
+# defaulting, and the ergonomic argument shapes Salt callers expect.
+#
+# .. versionadded:: 2.1.0
+# ---------------------------------------------------------------------------
+
+
+def _render_yaml_multi(source, template, saltenv, template_context=None):
+    """
+    Like ``__read_and_render_yaml_file`` but returns a list of every
+    document in a multi-doc YAML file (separated by ``---``).
+    """
+    saltenv = saltenv or __opts__["saltenv"] or "base"
+    sfn = __salt__["cp.cache_file"](source, saltenv)
+    if not sfn:
+        raise CommandExecutionError(f"Source file '{source}' not found")
+    with salt.utils.files.fopen(sfn, "r") as src:
+        contents = src.read()
+    if template:
+        if template not in salt.utils.templates.TEMPLATE_REGISTRY:
+            raise CommandExecutionError(f"Unknown template specified: {template}")
+        if template_context is None:
+            template_context = {}
+        data = salt.utils.templates.TEMPLATE_REGISTRY[template](
+            contents,
+            from_str=True,
+            to_str=True,
+            saltenv=saltenv,
+            grains=__grains__,
+            pillar=__pillar__,
+            salt=__salt__,
+            opts=__opts__,
+            context=template_context,
+        )
+        if not data["result"]:
+            raise CommandExecutionError(f'Failed to render file path with error: {data["data"]}')
+        contents = data["data"]
+    # salt.utils.yaml only exposes single-doc safe_load; use PyYAML's
+    # safe_load_all directly for multi-document files. PyYAML is a
+    # transitive dependency of Salt and the kubernetes-client.
+
+    return [doc for doc in _pyyaml.safe_load_all(contents) if doc]
+
+
+def _normalise_apply_input(manifest, source, template, saltenv, template_context):
+    """
+    Coerce ``manifest`` / ``source`` arguments into a list of dict
+    manifests ready to feed to ``_dynamic.apply_manifest``.
+
+    Accepts (in priority order):
+      * ``source`` — salt:// fileserver path, possibly multi-doc YAML.
+      * ``manifest`` — a dict (single doc), a list of dicts (multi-doc),
+        or a string (YAML, possibly multi-doc).
+    """
+    if source:
+        return _render_yaml_multi(source, template, saltenv, template_context)
+    if manifest is None:
+        raise CommandExecutionError("Either 'manifest' or 'source' must be provided")
+    if isinstance(manifest, dict):
+        return [manifest]
+    if isinstance(manifest, list):
+        out = []
+        for entry in manifest:
+            if not isinstance(entry, dict):
+                raise CommandExecutionError("Each manifest list entry must be a dictionary")
+            out.append(entry)
+        return out
+    if isinstance(manifest, str):
+
+        return [doc for doc in _pyyaml.safe_load_all(manifest) if doc]
+    raise CommandExecutionError(
+        f"manifest must be a dict, list, or YAML string, not {type(manifest).__name__}"
+    )
+
+
+def _apply_namespace_default(doc, namespace):
+    """If *doc* lacks ``metadata.namespace`` and *namespace* is given, fill it in."""
+    if namespace and isinstance(doc, dict):
+        meta = doc.setdefault("metadata", {})
+        if not meta.get("namespace"):
+            meta["namespace"] = namespace
+
+
+def apply(
+    manifest=None,
+    source=None,
+    namespace=None,
+    field_manager="salt",
+    force_conflicts=False,
+    dry_run=False,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    **kwargs,
+):
+    """
+    Server-side apply one or more Kubernetes manifests (kubectl-apply
+    --server-side equivalent).
+
+    .. versionadded:: 2.1.0
+
+    Accepts a manifest as a Python dict, a list of dicts, a YAML string
+    (single- or multi-document), or a ``source`` path to a YAML file
+    that may itself contain multiple documents separated by ``---``.
+    Source files can be Jinja-templated by setting ``template``.
+
+    Returns a list of applied object dicts when more than one manifest
+    is supplied, or a single dict when there's exactly one.
+
+    Unlike the typed CRUD paths (which default missing namespaces to
+    ``"default"``), this function deliberately requires an explicit
+    namespace for namespaced kinds — either in the manifest's
+    ``metadata.namespace`` field or via the ``namespace`` parameter.
+
+    manifest
+        A dict, list of dicts, or YAML string. Mutually exclusive with
+        ``source``.
+
+    source
+        Salt fileserver path (``salt://...``), local path, or anything
+        ``cp.cache_file`` can resolve. Mutually exclusive with
+        ``manifest``.
+
+    namespace
+        Fallback namespace for any document that does not declare its
+        own ``metadata.namespace``. Cluster-scoped kinds ignore this.
+
+    field_manager
+        SSA fieldManager name. Default: ``"salt"``. Multiple Salt
+        masters managing the same cluster should each set a unique
+        manager so SSA's conflict tracking can distinguish them.
+
+    force_conflicts
+        If ``True``, override fields owned by another manager. Default:
+        ``False`` (apply fails if another manager owns a field we're
+        trying to set). Use sparingly.
+
+    dry_run
+        If ``True``, perform a server-side dry-run apply: the API
+        server validates the manifest and returns what *would* be
+        written, without persisting changes. Useful for state-mode
+        ``test=True`` previews and for catching admission-webhook
+        rejections before commit.
+
+    template
+        Template engine to render the source file (e.g. ``"jinja"``).
+
+    saltenv
+        Salt environment for resolving the source file.
+
+    template_context
+        Variables passed to the renderer.
+
+    CLI Examples:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.apply source=salt://manifests/app.yaml
+        salt '*' kubernetes.apply manifest='{"apiVersion": "v1", \\
+            "kind": "ConfigMap", "metadata": {"name": "x", "namespace": "default"}, \\
+            "data": {"k": "v"}}'
+    """
+
+    docs = _normalise_apply_input(manifest, source, template, saltenv, template_context)
+    if not docs:
+        raise CommandExecutionError("No manifests to apply")
+
+    cfg = _setup_conn(**kwargs)
+    try:
+        results = []
+        for doc in docs:
+            _apply_namespace_default(doc, namespace)
+            results.append(
+                _dynamic.apply_manifest(
+                    doc,
+                    field_manager=field_manager,
+                    force_conflicts=force_conflicts,
+                    dry_run=dry_run,
+                )
+            )
+        return results[0] if len(results) == 1 else results
+    finally:
+        _cleanup(**cfg)
+
+
+def delete_manifest(
+    manifest=None,
+    source=None,
+    namespace=None,
+    propagation_policy=None,
+    grace_period_seconds=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    **kwargs,
+):
+    """
+    Delete one or more Kubernetes objects identified by their
+    manifests (kubectl-delete -f equivalent).
+
+    .. versionadded:: 2.1.0
+
+    Accepts the same manifest / source shapes as :py:func:`apply`.
+    Each document's ``apiVersion``, ``kind``, ``metadata.name``, and
+    (for namespaced kinds) ``metadata.namespace`` identify the object
+    to remove. Returns ``None`` for objects that were already absent
+    (404 swallowed, matching the typed ``delete_*`` functions); a list
+    of API server responses otherwise.
+
+    propagation_policy
+        ``Foreground``, ``Background`` (default), or ``Orphan``.
+
+    grace_period_seconds
+        Override the per-object termination grace period.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.delete_manifest source=salt://manifests/app.yaml
+    """
+
+    docs = _normalise_apply_input(manifest, source, template, saltenv, template_context)
+    if not docs:
+        raise CommandExecutionError("No manifests to delete")
+
+    cfg = _setup_conn(**kwargs)
+    try:
+        results = []
+        for doc in docs:
+            _apply_namespace_default(doc, namespace)
+            api_version = doc.get("apiVersion")
+            kind = doc.get("kind")
+            name = (doc.get("metadata") or {}).get("name")
+            ns = (doc.get("metadata") or {}).get("namespace")
+            if not api_version or not kind or not name:
+                raise CommandExecutionError(
+                    "Each manifest needs apiVersion, kind, and metadata.name"
+                )
+            results.append(
+                _dynamic.delete_object(
+                    api_version,
+                    kind,
+                    name=name,
+                    namespace=ns,
+                    propagation_policy=propagation_policy,
+                    grace_period_seconds=grace_period_seconds,
+                )
+            )
+        return results[0] if len(results) == 1 else results
     finally:
         _cleanup(**cfg)
 

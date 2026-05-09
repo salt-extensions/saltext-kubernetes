@@ -3063,3 +3063,186 @@ def node_untainted(name, key, effect=None, **kwargs):
         ret["result"] = False
         ret["comment"] = str(err)
     return ret
+
+
+# ---------------------------------------------------------------------------
+# Generic manifest states (manifest_present, manifest_absent).
+#
+# These wrap kubernetes.apply / kubernetes.delete_manifest and provide
+# the desired-state semantics Salt callers expect: idempotent reapply
+# of the same manifest is a no-op; ``test=True`` produces a dry-run
+# preview via the API server's own validation.
+#
+# .. versionadded:: 2.1.0
+# ---------------------------------------------------------------------------
+
+
+def manifest_present(
+    name,
+    source=None,
+    manifest=None,
+    namespace=None,
+    field_manager="salt",
+    force_conflicts=False,
+    template=None,
+    template_context=None,
+    **kwargs,
+):
+    """
+    Ensure one or more Kubernetes objects described by a manifest are
+    present, using server-side apply.
+
+    .. versionadded:: 2.1.0
+
+    The manifest may be a Python dict, a list of dicts, a YAML string,
+    or — via ``source`` — a salt:// fileserver path. Multi-document
+    YAML files are supported; every document in the file is applied as
+    a single state operation.
+
+    name
+        The state ID. Used as the ``name`` field of the result; not
+        sent to the API. Use whatever identifies the SLS rule for you.
+
+    source
+        Salt fileserver path to a YAML manifest. Mutually exclusive
+        with ``manifest``.
+
+    manifest
+        Inline manifest (dict, list of dicts, or YAML string). Mutually
+        exclusive with ``source``.
+
+    namespace
+        Fallback namespace for namespaced manifests that don't declare
+        their own ``metadata.namespace``. Cluster-scoped kinds ignore.
+
+    field_manager
+        SSA fieldManager. Default: ``"salt"``.
+
+    force_conflicts
+        Override fields owned by another field manager. Default: off.
+
+    template
+        Source-file template engine (e.g. ``"jinja"``).
+
+    template_context
+        Variables passed to the renderer.
+
+    .. code-block:: yaml
+
+        my-app-stack:
+          kubernetes.manifest_present:
+            - source: salt://manifests/my-app.yaml
+            - namespace: production
+            - template: jinja
+
+        # Or inline:
+        my-config:
+          kubernetes.manifest_present:
+            - manifest:
+                apiVersion: v1
+                kind: ConfigMap
+                metadata:
+                  name: app-config
+                  namespace: default
+                data:
+                  greeting: hello
+    """
+    ret = {"name": name, "changes": {}, "result": False, "comment": ""}
+
+    if source and manifest is not None:
+        return _error(ret, "'source' and 'manifest' are mutually exclusive")
+    if not source and manifest is None:
+        return _error(ret, "Provide either 'source' or 'manifest'")
+
+    apply_kwargs = {
+        "manifest": manifest,
+        "source": source,
+        "namespace": namespace,
+        "field_manager": field_manager,
+        "force_conflicts": force_conflicts,
+        "template": template,
+        "saltenv": __env__,
+        "template_context": template_context,
+    }
+
+    try:
+        if __opts__["test"]:
+            res = __salt__["kubernetes.apply"](dry_run=True, **apply_kwargs, **kwargs)
+            ret["result"] = None
+            ret["comment"] = "Manifests would be applied (server-side dry run)"
+            ret["changes"] = {"applied": res}
+            return ret
+
+        res = __salt__["kubernetes.apply"](**apply_kwargs, **kwargs)
+        ret["result"] = True
+        ret["comment"] = "Manifests applied via server-side apply"
+        ret["changes"] = {"applied": res}
+    except CommandExecutionError as err:
+        log.error(str(err), exc_info_on_loglevel=logging.DEBUG)
+        ret["result"] = False
+        ret["comment"] = str(err)
+        ret["changes"] = {}
+    return ret
+
+
+def manifest_absent(
+    name,
+    source=None,
+    manifest=None,
+    namespace=None,
+    propagation_policy=None,
+    grace_period_seconds=None,
+    template=None,
+    template_context=None,
+    **kwargs,
+):
+    """
+    Ensure one or more Kubernetes objects described by a manifest are
+    absent.
+
+    .. versionadded:: 2.1.0
+
+    Accepts the same manifest / source shapes as :py:func:`manifest_present`.
+
+    .. code-block:: yaml
+
+        my-app-stack:
+          kubernetes.manifest_absent:
+            - source: salt://manifests/my-app.yaml
+            - propagation_policy: Foreground
+    """
+    ret = {"name": name, "changes": {}, "result": False, "comment": ""}
+
+    if source and manifest is not None:
+        return _error(ret, "'source' and 'manifest' are mutually exclusive")
+    if not source and manifest is None:
+        return _error(ret, "Provide either 'source' or 'manifest'")
+
+    delete_kwargs = {
+        "manifest": manifest,
+        "source": source,
+        "namespace": namespace,
+        "propagation_policy": propagation_policy,
+        "grace_period_seconds": grace_period_seconds,
+        "template": template,
+        "saltenv": __env__,
+        "template_context": template_context,
+    }
+
+    try:
+        if __opts__["test"]:
+            ret["result"] = None
+            ret["comment"] = "Manifests would be deleted"
+            ret["changes"] = {"old": "present", "new": "absent"}
+            return ret
+
+        res = __salt__["kubernetes.delete_manifest"](**delete_kwargs, **kwargs)
+        ret["result"] = True
+        ret["comment"] = "Manifests deleted"
+        ret["changes"] = {"deleted": res}
+    except CommandExecutionError as err:
+        log.error(str(err), exc_info_on_loglevel=logging.DEBUG)
+        ret["result"] = False
+        ret["comment"] = str(err)
+        ret["changes"] = {}
+    return ret
