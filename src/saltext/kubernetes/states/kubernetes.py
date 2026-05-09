@@ -3364,3 +3364,184 @@ def cron_job_present(
         template_context,
         kwargs,
     )
+
+
+# ---------------------------------------------------------------------------
+# Networking / Autoscaling / Policy states.
+# .. versionadded:: 2.1.0
+# ---------------------------------------------------------------------------
+
+
+def ingress_absent(name, namespace="default", wait=False, timeout=60, **kwargs):
+    """Ensure the named Ingress is absent. .. versionadded:: 2.1.0"""
+    return _rbac_absent_impl(name, "ingress", "Ingress", True, namespace, wait, timeout, kwargs)
+
+
+def ingress_present(
+    name,
+    namespace="default",
+    metadata=None,
+    spec=None,
+    source="",
+    template="",
+    template_context=None,
+    **kwargs,
+):
+    """Ensure the named Ingress is present.
+
+    .. versionadded:: 2.1.0
+
+    .. code-block:: yaml
+
+        my-ingress:
+          kubernetes.ingress_present:
+            - namespace: default
+            - spec:
+                ingressClassName: nginx
+                rules:
+                  - host: example.com
+                    http:
+                      paths:
+                        - path: /
+                          pathType: Prefix
+                          backend:
+                            service:
+                              name: my-svc
+                              port:
+                                number: 80
+    """
+    return _rbac_present_impl(
+        name,
+        "ingress",
+        "Ingress",
+        True,
+        namespace,
+        metadata,
+        spec,
+        source,
+        template,
+        template_context,
+        kwargs,
+    )
+
+
+def horizontal_pod_autoscaler_absent(name, namespace="default", wait=False, timeout=60, **kwargs):
+    """Ensure the named HPA is absent. .. versionadded:: 2.1.0"""
+    return _rbac_absent_impl(
+        name,
+        "horizontal_pod_autoscaler",
+        "HorizontalPodAutoscaler",
+        True,
+        namespace,
+        wait,
+        timeout,
+        kwargs,
+    )
+
+
+def horizontal_pod_autoscaler_present(
+    name,
+    namespace="default",
+    metadata=None,
+    spec=None,
+    source="",
+    template="",
+    template_context=None,
+    **kwargs,
+):
+    """Ensure the named HPA is present.
+
+    .. versionadded:: 2.1.0
+
+    .. code-block:: yaml
+
+        my-hpa:
+          kubernetes.horizontal_pod_autoscaler_present:
+            - namespace: default
+            - spec:
+                scaleTargetRef:
+                  apiVersion: apps/v1
+                  kind: Deployment
+                  name: my-app
+                minReplicas: 2
+                maxReplicas: 10
+                metrics:
+                  - type: Resource
+                    resource:
+                      name: cpu
+                      target:
+                        type: Utilization
+                        averageUtilization: 70
+    """
+    return _rbac_present_impl(
+        name,
+        "horizontal_pod_autoscaler",
+        "HorizontalPodAutoscaler",
+        True,
+        namespace,
+        metadata,
+        spec,
+        source,
+        template,
+        template_context,
+        kwargs,
+    )
+
+
+def pod_disruption_budget_absent(name, namespace="default", wait=False, timeout=60, **kwargs):
+    """Ensure the named PDB is absent. .. versionadded:: 2.1.0"""
+    return _rbac_absent_impl(
+        name,
+        "pod_disruption_budget",
+        "PodDisruptionBudget",
+        True,
+        namespace,
+        wait,
+        timeout,
+        kwargs,
+    )
+
+
+def pod_disruption_budget_present(
+    name,
+    namespace="default",
+    metadata=None,
+    spec=None,
+    source="",
+    template="",
+    template_context=None,
+    **kwargs,
+):
+    """Ensure the named PDB is present.
+
+    .. versionadded:: 2.1.0
+
+    .. note::
+        PDB ``spec.selector`` is immutable. Changing it will be rejected
+        by the API; declare the PDB absent first if you need a different
+        selector.
+
+    .. code-block:: yaml
+
+        my-pdb:
+          kubernetes.pod_disruption_budget_present:
+            - namespace: default
+            - spec:
+                minAvailable: 2
+                selector:
+                  match_labels:
+                    app: my-app
+    """
+    return _rbac_present_impl(
+        name,
+        "pod_disruption_budget",
+        "PodDisruptionBudget",
+        True,
+        namespace,
+        metadata,
+        spec,
+        source,
+        template,
+        template_context,
+        kwargs,
+    )

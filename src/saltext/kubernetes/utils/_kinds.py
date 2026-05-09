@@ -219,6 +219,28 @@ _KIND_REGISTRY: dict[str, KindOps] = {
         namespaced=True,
         ready_predicate=_always_ready,
     ),
+    # Networking / Autoscaling / Policy
+    "ingress": KindOps(
+        api_class_attr="NetworkingV1Api",
+        list_method="list_namespaced_ingress",
+        read_method="read_namespaced_ingress",
+        namespaced=True,
+        ready_predicate=_always_ready,
+    ),
+    "horizontal_pod_autoscaler": KindOps(
+        api_class_attr="AutoscalingV2Api",
+        list_method="list_namespaced_horizontal_pod_autoscaler",
+        read_method="read_namespaced_horizontal_pod_autoscaler",
+        namespaced=True,
+        ready_predicate=_always_ready,
+    ),
+    "pod_disruption_budget": KindOps(
+        api_class_attr="PolicyV1Api",
+        list_method="list_namespaced_pod_disruption_budget",
+        read_method="read_namespaced_pod_disruption_budget",
+        namespaced=True,
+        ready_predicate=_always_ready,
+    ),
 }
 
 

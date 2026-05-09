@@ -107,14 +107,20 @@ try:
     from kubernetes.client import V1CronJobSpec
     from kubernetes.client import V1Deployment
     from kubernetes.client import V1DeploymentSpec
+    from kubernetes.client import V1Ingress
+    from kubernetes.client import V1IngressSpec
     from kubernetes.client import V1Job
     from kubernetes.client import V1JobSpec
     from kubernetes.client import V1JobTemplateSpec
+    from kubernetes.client import V1PodDisruptionBudget
+    from kubernetes.client import V1PodDisruptionBudgetSpec
     from kubernetes.client import V1PolicyRule
     from kubernetes.client import V1Role
     from kubernetes.client import V1RoleBinding
     from kubernetes.client import V1RoleRef
     from kubernetes.client import V1ServiceAccount
+    from kubernetes.client import V2HorizontalPodAutoscaler
+    from kubernetes.client import V2HorizontalPodAutoscalerSpec
     from kubernetes.client.rest import ApiException
     from kubernetes.stream import stream as ws_stream
     from kubernetes.stream.ws_client import ERROR_CHANNEL
@@ -5831,6 +5837,764 @@ def delete_cron_job(name, namespace="default", wait=False, timeout=60, **kwargs)
         if wait:
             if not _wait_for_resource_status(api, "cron_job", name, namespace, "deleted", timeout):
                 raise CommandExecutionError(f"Timeout waiting for CronJob {name} to be deleted")
+        return ApiClient().sanitize_for_serialization(resp)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            return None
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+# ---------------------------------------------------------------------------
+# Networking / Autoscaling / Policy: Ingress, HorizontalPodAutoscaler,
+# PodDisruptionBudget
+#
+# Same six-verb surface as the other typed kinds.
+#
+# .. versionadded:: 2.1.0
+# ---------------------------------------------------------------------------
+
+
+# --- spec helpers ----------------------------------------------------------
+
+
+def _normalise_field_map(spec, mapping):
+    """Translate camelCase keys to snake_case via *mapping*; pass others through."""
+    return {mapping.get(k, k): v for k, v in spec.items()}
+
+
+_INGRESS_FIELD_MAP = {
+    "ingressClassName": "ingress_class_name",
+    "defaultBackend": "default_backend",
+}
+
+
+def __dict_to_ingress_spec(spec):
+    """Validate dict, return kwargs for V1IngressSpec."""
+    if not isinstance(spec, dict):
+        raise CommandExecutionError(f"Ingress spec must be a dictionary, not {type(spec).__name__}")
+    normalised = _normalise_field_map(spec, _INGRESS_FIELD_MAP)
+    rules = normalised.get("rules")
+    if rules is not None and not isinstance(rules, list):
+        raise CommandExecutionError("Ingress rules must be a list")
+    tls = normalised.get("tls")
+    if tls is not None and not isinstance(tls, list):
+        raise CommandExecutionError("Ingress tls must be a list")
+    try:
+        V1IngressSpec(**normalised)
+    except (TypeError, ValueError) as exc:
+        raise CommandExecutionError(f"Invalid ingress spec: {exc}") from exc
+    return normalised
+
+
+_HPA_FIELD_MAP = {
+    "scaleTargetRef": "scale_target_ref",
+    "minReplicas": "min_replicas",
+    "maxReplicas": "max_replicas",
+}
+
+
+def __dict_to_hpa_spec(spec):
+    """Validate dict, return kwargs for V2HorizontalPodAutoscalerSpec."""
+    if not isinstance(spec, dict):
+        raise CommandExecutionError(f"HPA spec must be a dictionary, not {type(spec).__name__}")
+    normalised = _normalise_field_map(spec, _HPA_FIELD_MAP)
+    if "scale_target_ref" not in normalised:
+        raise CommandExecutionError("HPA spec must include 'scaleTargetRef'")
+    if "max_replicas" not in normalised:
+        raise CommandExecutionError("HPA spec must include 'maxReplicas'")
+    target = normalised["scale_target_ref"]
+    if not isinstance(target, dict):
+        raise CommandExecutionError("scaleTargetRef must be a dict")
+    # The CrossVersionObjectReference accepts api_version/kind/name; translate
+    # camelCase apiVersion if present.
+    if "apiVersion" in target:
+        target = {k: v for k, v in target.items() if k != "apiVersion"}
+        target["api_version"] = normalised["scale_target_ref"]["apiVersion"]
+    normalised["scale_target_ref"] = kubernetes.client.V2CrossVersionObjectReference(**target)
+    try:
+        V2HorizontalPodAutoscalerSpec(**normalised)
+    except (TypeError, ValueError) as exc:
+        raise CommandExecutionError(f"Invalid HPA spec: {exc}") from exc
+    return normalised
+
+
+_PDB_FIELD_MAP = {
+    "minAvailable": "min_available",
+    "maxUnavailable": "max_unavailable",
+    "unhealthyPodEvictionPolicy": "unhealthy_pod_eviction_policy",
+}
+
+
+def __dict_to_pdb_spec(spec):
+    """Validate dict, return kwargs for V1PodDisruptionBudgetSpec."""
+    if not isinstance(spec, dict):
+        raise CommandExecutionError(f"PDB spec must be a dictionary, not {type(spec).__name__}")
+    normalised = _normalise_field_map(spec, _PDB_FIELD_MAP)
+    if normalised.get("min_available") is None and normalised.get("max_unavailable") is None:
+        raise CommandExecutionError(
+            "PDB spec must include exactly one of 'minAvailable' or 'maxUnavailable'"
+        )
+    if (
+        normalised.get("min_available") is not None
+        and normalised.get("max_unavailable") is not None
+    ):
+        raise CommandExecutionError(
+            "PDB spec cannot include both 'minAvailable' and 'maxUnavailable'"
+        )
+    if not isinstance(normalised.get("selector"), dict):
+        raise CommandExecutionError("PDB spec must include 'selector' (a label-selector dict)")
+    normalised["selector"] = kubernetes.client.V1LabelSelector(**normalised["selector"])
+    try:
+        V1PodDisruptionBudgetSpec(**normalised)
+    except (TypeError, ValueError) as exc:
+        raise CommandExecutionError(f"Invalid PDB spec: {exc}") from exc
+    return normalised
+
+
+# --- API instance helpers --------------------------------------------------
+
+
+def _networking_api():
+    return kubernetes.client.NetworkingV1Api()
+
+
+def _autoscaling_api():
+    return kubernetes.client.AutoscalingV2Api()
+
+
+def _policy_api():
+    return kubernetes.client.PolicyV1Api()
+
+
+# --- Ingress ---------------------------------------------------------------
+
+
+def ingresses(namespace="default", **kwargs):
+    """
+    Return Ingress names in *namespace*. .. versionadded:: 2.1.0
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.ingresses
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        resp = _networking_api().list_namespaced_ingress(namespace)
+        return [
+            i["metadata"]["name"]
+            for i in ApiClient().sanitize_for_serialization(resp).get("items", [])
+        ]
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            return []
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def show_ingress(name, namespace="default", **kwargs):
+    """
+    Return the Ingress *name* in *namespace*. .. versionadded:: 2.1.0
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.show_ingress
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        return ApiClient().sanitize_for_serialization(
+            _networking_api().read_namespaced_ingress(name, namespace)
+        )
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            return None
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def create_ingress(
+    name,
+    namespace="default",
+    metadata=None,
+    spec=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    dry_run=False,
+    **kwargs,
+):
+    """
+    Create an Ingress. .. versionadded:: 2.1.0
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.create_ingress
+    """
+    if source:
+        metadata, spec = _resolve_rbac_source(
+            source, "Ingress", template, saltenv, template_context, metadata, spec
+        )
+    if metadata is None:
+        metadata = {}
+    if spec is None:
+        spec = {}
+    body = V1Ingress(
+        metadata=__dict_to_object_meta(name, namespace, metadata),
+        spec=V1IngressSpec(**__dict_to_ingress_spec(spec)),
+    )
+    cfg = _setup_conn(**kwargs)
+    try:
+        resp = _networking_api().create_namespaced_ingress(
+            namespace, body, dry_run="All" if dry_run else None
+        )
+        return ApiClient().sanitize_for_serialization(resp)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 409:
+            raise CommandExecutionError(f"Ingress {name} already exists") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def replace_ingress(
+    name,
+    namespace="default",
+    metadata=None,
+    spec=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    **kwargs,
+):
+    """
+    Replace an Ingress. .. versionadded:: 2.1.0
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.replace_ingress
+    """
+    if source:
+        metadata, spec = _resolve_rbac_source(
+            source, "Ingress", template, saltenv, template_context, metadata, spec
+        )
+    if metadata is None:
+        metadata = {}
+    if spec is None:
+        spec = {}
+    body = V1Ingress(
+        metadata=__dict_to_object_meta(name, namespace, metadata),
+        spec=V1IngressSpec(**__dict_to_ingress_spec(spec)),
+    )
+    cfg = _setup_conn(**kwargs)
+    try:
+        resp = _networking_api().replace_namespaced_ingress(name, namespace, body)
+        return ApiClient().sanitize_for_serialization(resp)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            raise CommandExecutionError(f"Ingress {name} not found") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def patch_ingress(
+    name,
+    namespace="default",
+    patch=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    dry_run=False,
+    **kwargs,
+):
+    """
+    Patch an Ingress. .. versionadded:: 2.1.0
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.patch_ingress
+    """
+    if source:
+        patch = __read_and_render_yaml_file(source, template, saltenv, template_context)
+        if isinstance(patch, dict) and patch.get("kind") == "Ingress":
+            patch = {k: v for k, v in patch.items() if k not in ("apiVersion", "kind")}
+    if not isinstance(patch, dict):
+        raise CommandExecutionError("Ingress patch must be a dictionary")
+    cfg = _setup_conn(**kwargs)
+    try:
+        resp = _networking_api().patch_namespaced_ingress(
+            name, namespace, patch, dry_run="All" if dry_run else None
+        )
+        return ApiClient().sanitize_for_serialization(resp)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            raise CommandExecutionError(f"Ingress {name} not found") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def delete_ingress(name, namespace="default", wait=False, timeout=60, **kwargs):
+    """
+    Delete an Ingress. .. versionadded:: 2.1.0
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.delete_ingress
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        api = _networking_api()
+        resp = api.delete_namespaced_ingress(name, namespace)
+        if wait:
+            if not _wait_for_resource_status(api, "ingress", name, namespace, "deleted", timeout):
+                raise CommandExecutionError(f"Timeout waiting for Ingress {name} to be deleted")
+        return ApiClient().sanitize_for_serialization(resp)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            return None
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+# --- HorizontalPodAutoscaler -----------------------------------------------
+
+
+def horizontal_pod_autoscalers(namespace="default", **kwargs):
+    """
+    Return HPA names in *namespace*. .. versionadded:: 2.1.0
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.horizontal_pod_autoscalers
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        resp = _autoscaling_api().list_namespaced_horizontal_pod_autoscaler(namespace)
+        return [
+            h["metadata"]["name"]
+            for h in ApiClient().sanitize_for_serialization(resp).get("items", [])
+        ]
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            return []
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def show_horizontal_pod_autoscaler(name, namespace="default", **kwargs):
+    """
+    Return the HPA *name* in *namespace*. .. versionadded:: 2.1.0
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.show_horizontal_pod_autoscaler
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        return ApiClient().sanitize_for_serialization(
+            _autoscaling_api().read_namespaced_horizontal_pod_autoscaler(name, namespace)
+        )
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            return None
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def create_horizontal_pod_autoscaler(
+    name,
+    namespace="default",
+    metadata=None,
+    spec=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    dry_run=False,
+    **kwargs,
+):
+    """
+    Create an HPA (autoscaling/v2). .. versionadded:: 2.1.0
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.create_horizontal_pod_autoscaler
+    """
+    if source:
+        metadata, spec = _resolve_rbac_source(
+            source, "HorizontalPodAutoscaler", template, saltenv, template_context, metadata, spec
+        )
+    if metadata is None:
+        metadata = {}
+    if spec is None:
+        spec = {}
+    body = V2HorizontalPodAutoscaler(
+        metadata=__dict_to_object_meta(name, namespace, metadata),
+        spec=V2HorizontalPodAutoscalerSpec(**__dict_to_hpa_spec(spec)),
+    )
+    cfg = _setup_conn(**kwargs)
+    try:
+        resp = _autoscaling_api().create_namespaced_horizontal_pod_autoscaler(
+            namespace, body, dry_run="All" if dry_run else None
+        )
+        return ApiClient().sanitize_for_serialization(resp)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 409:
+            raise CommandExecutionError(f"HPA {name} already exists") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def replace_horizontal_pod_autoscaler(
+    name,
+    namespace="default",
+    metadata=None,
+    spec=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    **kwargs,
+):
+    """
+    Replace an HPA. .. versionadded:: 2.1.0
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.replace_horizontal_pod_autoscaler
+    """
+    if source:
+        metadata, spec = _resolve_rbac_source(
+            source, "HorizontalPodAutoscaler", template, saltenv, template_context, metadata, spec
+        )
+    if metadata is None:
+        metadata = {}
+    if spec is None:
+        spec = {}
+    body = V2HorizontalPodAutoscaler(
+        metadata=__dict_to_object_meta(name, namespace, metadata),
+        spec=V2HorizontalPodAutoscalerSpec(**__dict_to_hpa_spec(spec)),
+    )
+    cfg = _setup_conn(**kwargs)
+    try:
+        resp = _autoscaling_api().replace_namespaced_horizontal_pod_autoscaler(
+            name, namespace, body
+        )
+        return ApiClient().sanitize_for_serialization(resp)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            raise CommandExecutionError(f"HPA {name} not found") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def patch_horizontal_pod_autoscaler(
+    name,
+    namespace="default",
+    patch=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    dry_run=False,
+    **kwargs,
+):
+    """
+    Patch an HPA. .. versionadded:: 2.1.0
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.patch_horizontal_pod_autoscaler
+    """
+    if source:
+        patch = __read_and_render_yaml_file(source, template, saltenv, template_context)
+        if isinstance(patch, dict) and patch.get("kind") == "HorizontalPodAutoscaler":
+            patch = {k: v for k, v in patch.items() if k not in ("apiVersion", "kind")}
+    if not isinstance(patch, dict):
+        raise CommandExecutionError("HPA patch must be a dictionary")
+    cfg = _setup_conn(**kwargs)
+    try:
+        resp = _autoscaling_api().patch_namespaced_horizontal_pod_autoscaler(
+            name, namespace, patch, dry_run="All" if dry_run else None
+        )
+        return ApiClient().sanitize_for_serialization(resp)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            raise CommandExecutionError(f"HPA {name} not found") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def delete_horizontal_pod_autoscaler(name, namespace="default", wait=False, timeout=60, **kwargs):
+    """
+    Delete an HPA. .. versionadded:: 2.1.0
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.delete_horizontal_pod_autoscaler
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        api = _autoscaling_api()
+        resp = api.delete_namespaced_horizontal_pod_autoscaler(name, namespace)
+        if wait:
+            if not _wait_for_resource_status(
+                api, "horizontal_pod_autoscaler", name, namespace, "deleted", timeout
+            ):
+                raise CommandExecutionError(f"Timeout waiting for HPA {name} to be deleted")
+        return ApiClient().sanitize_for_serialization(resp)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            return None
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+# --- PodDisruptionBudget ---------------------------------------------------
+
+
+def pod_disruption_budgets(namespace="default", **kwargs):
+    """
+    Return PDB names in *namespace*. .. versionadded:: 2.1.0
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.pod_disruption_budgets
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        resp = _policy_api().list_namespaced_pod_disruption_budget(namespace)
+        return [
+            p["metadata"]["name"]
+            for p in ApiClient().sanitize_for_serialization(resp).get("items", [])
+        ]
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            return []
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def show_pod_disruption_budget(name, namespace="default", **kwargs):
+    """
+    Return the PDB *name* in *namespace*. .. versionadded:: 2.1.0
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.show_pod_disruption_budget
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        return ApiClient().sanitize_for_serialization(
+            _policy_api().read_namespaced_pod_disruption_budget(name, namespace)
+        )
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            return None
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def create_pod_disruption_budget(
+    name,
+    namespace="default",
+    metadata=None,
+    spec=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    dry_run=False,
+    **kwargs,
+):
+    """
+    Create a PDB. .. versionadded:: 2.1.0
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.create_pod_disruption_budget
+    """
+    if source:
+        metadata, spec = _resolve_rbac_source(
+            source, "PodDisruptionBudget", template, saltenv, template_context, metadata, spec
+        )
+    if metadata is None:
+        metadata = {}
+    if spec is None:
+        spec = {}
+    body = V1PodDisruptionBudget(
+        metadata=__dict_to_object_meta(name, namespace, metadata),
+        spec=V1PodDisruptionBudgetSpec(**__dict_to_pdb_spec(spec)),
+    )
+    cfg = _setup_conn(**kwargs)
+    try:
+        resp = _policy_api().create_namespaced_pod_disruption_budget(
+            namespace, body, dry_run="All" if dry_run else None
+        )
+        return ApiClient().sanitize_for_serialization(resp)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 409:
+            raise CommandExecutionError(f"PDB {name} already exists") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def replace_pod_disruption_budget(
+    name,
+    namespace="default",
+    metadata=None,
+    spec=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    **kwargs,
+):
+    """
+    Replace a PDB.
+
+    .. versionadded:: 2.1.0
+
+    .. note::
+        PDB ``spec.selector`` is immutable. Replacing with a different
+        selector will be rejected by the API server.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.replace_pod_disruption_budget
+    """
+    if source:
+        metadata, spec = _resolve_rbac_source(
+            source, "PodDisruptionBudget", template, saltenv, template_context, metadata, spec
+        )
+    if metadata is None:
+        metadata = {}
+    if spec is None:
+        spec = {}
+    body = V1PodDisruptionBudget(
+        metadata=__dict_to_object_meta(name, namespace, metadata),
+        spec=V1PodDisruptionBudgetSpec(**__dict_to_pdb_spec(spec)),
+    )
+    cfg = _setup_conn(**kwargs)
+    try:
+        resp = _policy_api().replace_namespaced_pod_disruption_budget(name, namespace, body)
+        return ApiClient().sanitize_for_serialization(resp)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            raise CommandExecutionError(f"PDB {name} not found") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def patch_pod_disruption_budget(
+    name,
+    namespace="default",
+    patch=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    dry_run=False,
+    **kwargs,
+):
+    """
+    Patch a PDB. .. versionadded:: 2.1.0
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.patch_pod_disruption_budget
+    """
+    if source:
+        patch = __read_and_render_yaml_file(source, template, saltenv, template_context)
+        if isinstance(patch, dict) and patch.get("kind") == "PodDisruptionBudget":
+            patch = {k: v for k, v in patch.items() if k not in ("apiVersion", "kind")}
+    if not isinstance(patch, dict):
+        raise CommandExecutionError("PDB patch must be a dictionary")
+    cfg = _setup_conn(**kwargs)
+    try:
+        resp = _policy_api().patch_namespaced_pod_disruption_budget(
+            name, namespace, patch, dry_run="All" if dry_run else None
+        )
+        return ApiClient().sanitize_for_serialization(resp)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            raise CommandExecutionError(f"PDB {name} not found") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def delete_pod_disruption_budget(name, namespace="default", wait=False, timeout=60, **kwargs):
+    """
+    Delete a PDB. .. versionadded:: 2.1.0
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.delete_pod_disruption_budget
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        api = _policy_api()
+        resp = api.delete_namespaced_pod_disruption_budget(name, namespace)
+        if wait:
+            if not _wait_for_resource_status(
+                api, "pod_disruption_budget", name, namespace, "deleted", timeout
+            ):
+                raise CommandExecutionError(f"Timeout waiting for PDB {name} to be deleted")
         return ApiClient().sanitize_for_serialization(resp)
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:

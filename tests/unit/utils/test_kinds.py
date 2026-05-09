@@ -41,6 +41,9 @@ EXPECTED_KINDS = {
     "service_account",
     "job",
     "cron_job",
+    "ingress",
+    "horizontal_pod_autoscaler",
+    "pod_disruption_budget",
 }
 
 
