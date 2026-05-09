@@ -1,0 +1,1 @@
+The legacy `k8s` execution module (`saltext.kubernetes.modules.k8s`) is deprecated and emits a `DeprecationWarning` at import time. It will be removed in saltext-kubernetes 3.0.0. Use the modern `kubernetes` execution module (`kubernetesmod`) instead, which is built on the official Kubernetes Python client and supports all current resource types.
