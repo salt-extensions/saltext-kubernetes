@@ -17,6 +17,7 @@ Salt Extension for interacting with Kubernetes
 
   ref/modules/index
   ref/states/index
+  ref/utils/index
 
 .. toctree::
   :maxdepth: 2

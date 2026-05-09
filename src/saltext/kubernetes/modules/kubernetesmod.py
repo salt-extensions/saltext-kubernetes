@@ -48,21 +48,29 @@ CLI Example:
 """
 
 import base64
-import errno
 import logging
-import os.path
-import signal
 import sys
-import tempfile
 import time
-from contextlib import contextmanager
 
 import salt.utils.files
 import salt.utils.platform
 import salt.utils.templates
 import salt.utils.yaml
 from salt.exceptions import CommandExecutionError
-from salt.exceptions import TimeoutError
+
+# Re-exports kept on the module surface for backwards compatibility with any
+# external code that imported these from ``kubernetesmod`` before the helpers
+# were extracted to ``saltext.kubernetes.utils._connection``.
+# pylint: disable=unused-import
+from saltext.kubernetes.utils._connection import POLLING_TIME_LIMIT  # noqa: F401
+from saltext.kubernetes.utils._connection import _cleanup  # noqa: F401
+from saltext.kubernetes.utils._connection import _setup_conn as _setup_conn_impl  # noqa: F401
+
+# pylint: enable=unused-import
+
+if not salt.utils.platform.is_windows():
+    # pylint: disable=unused-import
+    from saltext.kubernetes.utils._connection import _time_limit  # noqa: F401
 
 # pylint: disable=import-error,no-name-in-module
 try:
@@ -95,59 +103,17 @@ def __virtual__():
     return False, "python kubernetes library not found"
 
 
-if not salt.utils.platform.is_windows():
-
-    @contextmanager
-    def _time_limit(seconds):
-        def signal_handler(signum, frame):
-            raise TimeoutError
-
-        signal.signal(signal.SIGALRM, signal_handler)
-        signal.alarm(seconds)
-        try:
-            yield
-        finally:
-            signal.alarm(0)
-
-    POLLING_TIME_LIMIT = 30
-
-
 def _setup_conn(**kwargs):
     """
-    Setup kubernetes API connection singleton
+    Setup kubernetes API connection singleton.
+
+    Backwards-compatible shim around
+    :py:func:`saltext.kubernetes.utils._connection._setup_conn`. The
+    signature, kwargs handling, and return shape are preserved so that
+    existing call sites and ``mock.patch("...kubernetesmod._setup_conn")``
+    paths continue to work.
     """
-    kubeconfig = kwargs.get("kubeconfig") or __salt__["config.option"]("kubernetes.kubeconfig")
-    kubeconfig_data = kwargs.get("kubeconfig_data") or __salt__["config.option"](
-        "kubernetes.kubeconfig-data"
-    )
-    context = kwargs.get("context") or __salt__["config.option"]("kubernetes.context")
-
-    if (kubeconfig_data and not kubeconfig) or (kubeconfig_data and kwargs.get("kubeconfig_data")):
-        with tempfile.NamedTemporaryFile(prefix="salt-kubeconfig-", delete=False) as kcfg:
-            kcfg.write(base64.b64decode(kubeconfig_data))
-            kubeconfig = kcfg.name
-
-    if not (kubeconfig and context):
-        raise CommandExecutionError(
-            "Invalid kubernetes configuration. Parameter 'kubeconfig' and 'context'"
-            " are required."
-        )
-
-    kubernetes.config.load_kube_config(config_file=kubeconfig, context=context)
-
-    # The return makes unit testing easier
-    return {"kubeconfig": kubeconfig, "context": context}
-
-
-def _cleanup(**kwargs):
-    if "kubeconfig" in kwargs:
-        kubeconfig = kwargs.get("kubeconfig")
-        if kubeconfig and os.path.basename(kubeconfig).startswith("salt-kubeconfig-"):
-            try:
-                os.unlink(kubeconfig)
-            except OSError as err:
-                if err.errno != errno.ENOENT:
-                    log.error(str(err), exc_info_on_loglevel=logging.DEBUG)
+    return _setup_conn_impl(__salt__["config.option"], **kwargs)
 
 
 def ping(**kwargs):
