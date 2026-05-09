@@ -57,10 +57,18 @@ def mock_kubernetes_lib():
     """
     After fixing the bug in 1c821c0e77de58892c77d8e55386fac25e518c31,
     it caused kubernetes._cleanup() to get called for virtually every
-    test, which blows up. This prevents that specific blow-up once
+    test, which blows up. This prevents that specific blow-up once.
+
+    Also patches the same import in ``saltext.kubernetes.utils._connection``
+    so that ``_setup_conn``-path tests see the same mock — the connection
+    helpers were extracted from ``kubernetesmod`` into the utils package.
     """
     with patch("saltext.kubernetes.modules.kubernetesmod.kubernetes") as mock_kubernetes_lib:
-        yield mock_kubernetes_lib
+        with patch(
+            "saltext.kubernetes.utils._connection.kubernetes",
+            mock_kubernetes_lib,
+        ):
+            yield mock_kubernetes_lib
 
 
 @pytest.fixture

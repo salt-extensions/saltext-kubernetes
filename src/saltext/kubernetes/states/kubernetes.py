@@ -139,7 +139,14 @@ def _changes(old, new):
     """
     Return a changes dict using RecursiveDictDiffer for concise reporting.
     """
-    diff = RecursiveDictDiffer(old, new, ignore_missing_keys=False)
+    try:
+        # Salt 3007 and earlier: list_dict_matchers does not exist.
+        diff = RecursiveDictDiffer(  # pylint: disable=no-value-for-parameter
+            old, new, ignore_missing_keys=False
+        )
+    except TypeError:
+        # Salt 3008+: list_dict_matchers is required.
+        diff = RecursiveDictDiffer(old, new, False, [])  # pylint: disable=too-many-function-args
     return {"old": diff.old_values, "new": diff.new_values}
 
 
