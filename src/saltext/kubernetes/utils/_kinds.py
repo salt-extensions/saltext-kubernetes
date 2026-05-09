@@ -241,6 +241,52 @@ _KIND_REGISTRY: dict[str, KindOps] = {
         namespaced=True,
         ready_predicate=_always_ready,
     ),
+    # Persistent volumes
+    "persistent_volume": KindOps(
+        api_class_attr="CoreV1Api",
+        list_method="list_persistent_volume",
+        read_method="read_persistent_volume",
+        namespaced=False,
+        ready_predicate=_always_ready,
+    ),
+    "persistent_volume_claim": KindOps(
+        api_class_attr="CoreV1Api",
+        list_method="list_namespaced_persistent_volume_claim",
+        read_method="read_namespaced_persistent_volume_claim",
+        namespaced=True,
+        ready_predicate=_always_ready,
+    ),
+    # Apply-only kinds: registered so the wait subsystem works for objects
+    # created via kubernetes.apply / manifest_present, but no typed CRUD
+    # wrappers — the canonical path for these is the generic apply.
+    "network_policy": KindOps(
+        api_class_attr="NetworkingV1Api",
+        list_method="list_namespaced_network_policy",
+        read_method="read_namespaced_network_policy",
+        namespaced=True,
+        ready_predicate=_always_ready,
+    ),
+    "resource_quota": KindOps(
+        api_class_attr="CoreV1Api",
+        list_method="list_namespaced_resource_quota",
+        read_method="read_namespaced_resource_quota",
+        namespaced=True,
+        ready_predicate=_always_ready,
+    ),
+    "limit_range": KindOps(
+        api_class_attr="CoreV1Api",
+        list_method="list_namespaced_limit_range",
+        read_method="read_namespaced_limit_range",
+        namespaced=True,
+        ready_predicate=_always_ready,
+    ),
+    "priority_class": KindOps(
+        api_class_attr="SchedulingV1Api",
+        list_method="list_priority_class",
+        read_method="read_priority_class",
+        namespaced=False,
+        ready_predicate=_always_ready,
+    ),
 }
 
 

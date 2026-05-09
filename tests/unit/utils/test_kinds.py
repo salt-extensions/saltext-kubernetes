@@ -44,6 +44,12 @@ EXPECTED_KINDS = {
     "ingress",
     "horizontal_pod_autoscaler",
     "pod_disruption_budget",
+    "persistent_volume",
+    "persistent_volume_claim",
+    "network_policy",
+    "resource_quota",
+    "limit_range",
+    "priority_class",
 }
 
 

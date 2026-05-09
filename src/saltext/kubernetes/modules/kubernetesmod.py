@@ -68,6 +68,7 @@ import io
 import json
 import logging
 import os.path
+import re
 import sys
 import tarfile
 import time
@@ -112,6 +113,10 @@ try:
     from kubernetes.client import V1Job
     from kubernetes.client import V1JobSpec
     from kubernetes.client import V1JobTemplateSpec
+    from kubernetes.client import V1PersistentVolume
+    from kubernetes.client import V1PersistentVolumeClaim
+    from kubernetes.client import V1PersistentVolumeClaimSpec
+    from kubernetes.client import V1PersistentVolumeSpec
     from kubernetes.client import V1PodDisruptionBudget
     from kubernetes.client import V1PodDisruptionBudgetSpec
     from kubernetes.client import V1PolicyRule
@@ -5847,6 +5852,518 @@ def delete_cron_job(name, namespace="default", wait=False, timeout=60, **kwargs)
 
 
 # ---------------------------------------------------------------------------
+# PersistentVolume + PersistentVolumeClaim
+#
+# PV is cluster-scoped. PVC is namespaced. Both are reasonably simple
+# wrappers over the V1*Spec classes — most volume-type-specific
+# validation happens server-side, so the helpers do shape checks (dict
+# vs not, required keys present) and let the API server catch the rest.
+#
+# .. versionadded:: 2.1.0
+# ---------------------------------------------------------------------------
+
+
+_PV_FIELD_MAP = {
+    "accessModes": "access_modes",
+    "claimRef": "claim_ref",
+    "persistentVolumeReclaimPolicy": "persistent_volume_reclaim_policy",
+    "storageClassName": "storage_class_name",
+    "volumeMode": "volume_mode",
+    "mountOptions": "mount_options",
+    "nodeAffinity": "node_affinity",
+}
+
+
+def __dict_to_persistent_volume_spec(spec):
+    """Validate dict, return kwargs for V1PersistentVolumeSpec."""
+    if not isinstance(spec, dict):
+        raise CommandExecutionError(f"PV spec must be a dictionary, not {type(spec).__name__}")
+    normalised = _normalise_field_map(spec, _PV_FIELD_MAP)
+    if not normalised.get("capacity"):
+        raise CommandExecutionError("PV spec must include 'capacity'")
+    if not normalised.get("access_modes"):
+        raise CommandExecutionError("PV spec must include 'accessModes'")
+    if not isinstance(normalised["access_modes"], list):
+        raise CommandExecutionError("PV accessModes must be a list")
+    try:
+        V1PersistentVolumeSpec(**normalised)
+    except (TypeError, ValueError) as exc:
+        raise CommandExecutionError(f"Invalid PV spec: {exc}") from exc
+    return normalised
+
+
+_PVC_FIELD_MAP = {
+    "accessModes": "access_modes",
+    "dataSource": "data_source",
+    "dataSourceRef": "data_source_ref",
+    "storageClassName": "storage_class_name",
+    "volumeMode": "volume_mode",
+    "volumeName": "volume_name",
+    "volumeAttributesClassName": "volume_attributes_class_name",
+}
+
+
+def __dict_to_pvc_spec(spec):
+    """Validate dict, return kwargs for V1PersistentVolumeClaimSpec."""
+    if not isinstance(spec, dict):
+        raise CommandExecutionError(f"PVC spec must be a dictionary, not {type(spec).__name__}")
+    normalised = _normalise_field_map(spec, _PVC_FIELD_MAP)
+    if not normalised.get("access_modes"):
+        raise CommandExecutionError("PVC spec must include 'accessModes'")
+    if not isinstance(normalised["access_modes"], list):
+        raise CommandExecutionError("PVC accessModes must be a list")
+    if not normalised.get("resources"):
+        raise CommandExecutionError("PVC spec must include 'resources' (with .requests.storage)")
+    if "selector" in normalised and isinstance(normalised["selector"], dict):
+        normalised["selector"] = kubernetes.client.V1LabelSelector(**normalised["selector"])
+    if "resources" in normalised and isinstance(normalised["resources"], dict):
+        normalised["resources"] = kubernetes.client.V1VolumeResourceRequirements(
+            **normalised["resources"]
+        )
+    try:
+        V1PersistentVolumeClaimSpec(**normalised)
+    except (TypeError, ValueError) as exc:
+        raise CommandExecutionError(f"Invalid PVC spec: {exc}") from exc
+    return normalised
+
+
+# --- PV (cluster-scoped) ----------------------------------------------------
+
+
+def persistent_volumes(**kwargs):
+    """
+    Return PV names. .. versionadded:: 2.1.0
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.persistent_volumes
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        api = kubernetes.client.CoreV1Api()
+        resp = api.list_persistent_volume()
+        return [
+            p["metadata"]["name"]
+            for p in ApiClient().sanitize_for_serialization(resp).get("items", [])
+        ]
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            return []
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def show_persistent_volume(name, **kwargs):
+    """
+    Return the PV named *name*. .. versionadded:: 2.1.0
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.show_persistent_volume
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        return ApiClient().sanitize_for_serialization(
+            kubernetes.client.CoreV1Api().read_persistent_volume(name)
+        )
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            return None
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def create_persistent_volume(
+    name,
+    metadata=None,
+    spec=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    dry_run=False,
+    **kwargs,
+):
+    """
+    Create a PV. .. versionadded:: 2.1.0
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.create_persistent_volume
+    """
+    if source:
+        metadata, spec = _resolve_rbac_source(
+            source, "PersistentVolume", template, saltenv, template_context, metadata, spec
+        )
+    if metadata is None:
+        metadata = {}
+    if spec is None:
+        spec = {}
+    body = V1PersistentVolume(
+        metadata=__dict_to_object_meta(name, None, metadata),
+        spec=V1PersistentVolumeSpec(**__dict_to_persistent_volume_spec(spec)),
+    )
+    cfg = _setup_conn(**kwargs)
+    try:
+        resp = kubernetes.client.CoreV1Api().create_persistent_volume(
+            body, dry_run="All" if dry_run else None
+        )
+        return ApiClient().sanitize_for_serialization(resp)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 409:
+            raise CommandExecutionError(f"PV {name} already exists") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def replace_persistent_volume(
+    name,
+    metadata=None,
+    spec=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    **kwargs,
+):
+    """Replace a PV. .. versionadded:: 2.1.0
+
+    .. note::
+        Most PV fields are immutable after binding. The API server
+        will reject changes to the volume source, capacity, or
+        accessModes once a PVC has bound to the PV.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.replace_persistent_volume
+    """
+    if source:
+        metadata, spec = _resolve_rbac_source(
+            source, "PersistentVolume", template, saltenv, template_context, metadata, spec
+        )
+    if metadata is None:
+        metadata = {}
+    if spec is None:
+        spec = {}
+    body = V1PersistentVolume(
+        metadata=__dict_to_object_meta(name, None, metadata),
+        spec=V1PersistentVolumeSpec(**__dict_to_persistent_volume_spec(spec)),
+    )
+    cfg = _setup_conn(**kwargs)
+    try:
+        resp = kubernetes.client.CoreV1Api().replace_persistent_volume(name, body)
+        return ApiClient().sanitize_for_serialization(resp)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            raise CommandExecutionError(f"PV {name} not found") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def patch_persistent_volume(
+    name,
+    patch=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    dry_run=False,
+    **kwargs,
+):
+    """
+    Patch a PV. .. versionadded:: 2.1.0
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.patch_persistent_volume
+    """
+    if source:
+        patch = __read_and_render_yaml_file(source, template, saltenv, template_context)
+        if isinstance(patch, dict) and patch.get("kind") == "PersistentVolume":
+            patch = {k: v for k, v in patch.items() if k not in ("apiVersion", "kind")}
+    if not isinstance(patch, dict):
+        raise CommandExecutionError("PV patch must be a dictionary")
+    cfg = _setup_conn(**kwargs)
+    try:
+        resp = kubernetes.client.CoreV1Api().patch_persistent_volume(
+            name, patch, dry_run="All" if dry_run else None
+        )
+        return ApiClient().sanitize_for_serialization(resp)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            raise CommandExecutionError(f"PV {name} not found") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def delete_persistent_volume(name, wait=False, timeout=60, **kwargs):
+    """
+    Delete a PV. .. versionadded:: 2.1.0
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.delete_persistent_volume
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        api = kubernetes.client.CoreV1Api()
+        resp = api.delete_persistent_volume(name)
+        if wait:
+            if not _wait_for_resource_status(
+                api, "persistent_volume", name, None, "deleted", timeout
+            ):
+                raise CommandExecutionError(f"Timeout waiting for PV {name} to be deleted")
+        return ApiClient().sanitize_for_serialization(resp)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            return None
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+# --- PVC (namespaced) ------------------------------------------------------
+
+
+def persistent_volume_claims(namespace="default", **kwargs):
+    """
+    Return PVC names in *namespace*. .. versionadded:: 2.1.0
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.persistent_volume_claims
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        api = kubernetes.client.CoreV1Api()
+        resp = api.list_namespaced_persistent_volume_claim(namespace)
+        return [
+            p["metadata"]["name"]
+            for p in ApiClient().sanitize_for_serialization(resp).get("items", [])
+        ]
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            return []
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def show_persistent_volume_claim(name, namespace="default", **kwargs):
+    """
+    Return the PVC *name* in *namespace*. .. versionadded:: 2.1.0
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.show_persistent_volume_claim
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        return ApiClient().sanitize_for_serialization(
+            kubernetes.client.CoreV1Api().read_namespaced_persistent_volume_claim(name, namespace)
+        )
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            return None
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def create_persistent_volume_claim(
+    name,
+    namespace="default",
+    metadata=None,
+    spec=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    dry_run=False,
+    **kwargs,
+):
+    """
+    Create a PVC. .. versionadded:: 2.1.0
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.create_persistent_volume_claim
+    """
+    if source:
+        metadata, spec = _resolve_rbac_source(
+            source, "PersistentVolumeClaim", template, saltenv, template_context, metadata, spec
+        )
+    if metadata is None:
+        metadata = {}
+    if spec is None:
+        spec = {}
+    body = V1PersistentVolumeClaim(
+        metadata=__dict_to_object_meta(name, namespace, metadata),
+        spec=V1PersistentVolumeClaimSpec(**__dict_to_pvc_spec(spec)),
+    )
+    cfg = _setup_conn(**kwargs)
+    try:
+        resp = kubernetes.client.CoreV1Api().create_namespaced_persistent_volume_claim(
+            namespace, body, dry_run="All" if dry_run else None
+        )
+        return ApiClient().sanitize_for_serialization(resp)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 409:
+            raise CommandExecutionError(f"PVC {name} already exists") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def replace_persistent_volume_claim(
+    name,
+    namespace="default",
+    metadata=None,
+    spec=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    **kwargs,
+):
+    """Replace a PVC.
+
+    .. versionadded:: 2.1.0
+
+    .. note::
+
+        After binding, ``accessModes``, ``selector``, ``volumeName``,
+        and ``storageClassName`` are immutable. ``resources.requests
+        .storage`` can be expanded (only) on storage classes with
+        ``allowVolumeExpansion: true``. The API server will reject
+        invalid changes — :py:func:`replace_persistent_volume_claim`
+        does not silently no-op on immutable-field violations; the
+        rejection surfaces as a clear error.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.replace_persistent_volume_claim
+    """
+    if source:
+        metadata, spec = _resolve_rbac_source(
+            source, "PersistentVolumeClaim", template, saltenv, template_context, metadata, spec
+        )
+    if metadata is None:
+        metadata = {}
+    if spec is None:
+        spec = {}
+    body = V1PersistentVolumeClaim(
+        metadata=__dict_to_object_meta(name, namespace, metadata),
+        spec=V1PersistentVolumeClaimSpec(**__dict_to_pvc_spec(spec)),
+    )
+    cfg = _setup_conn(**kwargs)
+    try:
+        resp = kubernetes.client.CoreV1Api().replace_namespaced_persistent_volume_claim(
+            name, namespace, body
+        )
+        return ApiClient().sanitize_for_serialization(resp)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            raise CommandExecutionError(f"PVC {name} not found") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def patch_persistent_volume_claim(
+    name,
+    namespace="default",
+    patch=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    dry_run=False,
+    **kwargs,
+):
+    """
+    Patch a PVC. .. versionadded:: 2.1.0
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.patch_persistent_volume_claim
+    """
+    if source:
+        patch = __read_and_render_yaml_file(source, template, saltenv, template_context)
+        if isinstance(patch, dict) and patch.get("kind") == "PersistentVolumeClaim":
+            patch = {k: v for k, v in patch.items() if k not in ("apiVersion", "kind")}
+    if not isinstance(patch, dict):
+        raise CommandExecutionError("PVC patch must be a dictionary")
+    cfg = _setup_conn(**kwargs)
+    try:
+        resp = kubernetes.client.CoreV1Api().patch_namespaced_persistent_volume_claim(
+            name, namespace, patch, dry_run="All" if dry_run else None
+        )
+        return ApiClient().sanitize_for_serialization(resp)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            raise CommandExecutionError(f"PVC {name} not found") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def delete_persistent_volume_claim(name, namespace="default", wait=False, timeout=60, **kwargs):
+    """
+    Delete a PVC. .. versionadded:: 2.1.0
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.delete_persistent_volume_claim
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        api = kubernetes.client.CoreV1Api()
+        resp = api.delete_namespaced_persistent_volume_claim(name, namespace)
+        if wait:
+            if not _wait_for_resource_status(
+                api, "persistent_volume_claim", name, namespace, "deleted", timeout
+            ):
+                raise CommandExecutionError(f"Timeout waiting for PVC {name} to be deleted")
+        return ApiClient().sanitize_for_serialization(resp)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            return None
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+# ---------------------------------------------------------------------------
 # Networking / Autoscaling / Policy: Ingress, HorizontalPodAutoscaler,
 # PodDisruptionBudget
 #
@@ -5859,9 +6376,45 @@ def delete_cron_job(name, namespace="default", wait=False, timeout=60, **kwargs)
 # --- spec helpers ----------------------------------------------------------
 
 
+_CAMEL_TO_SNAKE_RE = None
+
+
+def _camel_to_snake(name):
+    """Convert ``camelCase`` to ``snake_case`` for unmapped keys.
+
+    The kubernetes-client OpenAPI generator's wire→python translation is
+    ``camelCase → snake_case`` for almost every field. Where the
+    auto-generated translation differs from the obvious one (e.g.
+    ``nonResourceURLs → non_resource_ur_ls``) we override via the
+    per-kind ``mapping`` dict in :py:func:`_normalise_field_map`. For
+    everything else, falling back to a regex split on capital letters
+    works.
+    """
+    global _CAMEL_TO_SNAKE_RE  # pylint: disable=global-statement
+    if _CAMEL_TO_SNAKE_RE is None:
+
+        _CAMEL_TO_SNAKE_RE = re.compile(r"(?<!^)(?=[A-Z])")
+    return _CAMEL_TO_SNAKE_RE.sub("_", name).lower()
+
+
 def _normalise_field_map(spec, mapping):
-    """Translate camelCase keys to snake_case via *mapping*; pass others through."""
-    return {mapping.get(k, k): v for k, v in spec.items()}
+    """
+    Translate camelCase keys to snake_case.
+
+    *mapping* takes precedence (so per-kind overrides for fields with
+    awkward auto-translations win); unmapped camelCase keys fall back
+    to a generic camel→snake conversion. Keys already in snake_case
+    pass through unchanged.
+    """
+    out = {}
+    for k, v in spec.items():
+        if k in mapping:
+            out[mapping[k]] = v
+        elif any(c.isupper() for c in k):
+            out[_camel_to_snake(k)] = v
+        else:
+            out[k] = v
+    return out
 
 
 _INGRESS_FIELD_MAP = {

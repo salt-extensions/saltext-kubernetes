@@ -3545,3 +3545,132 @@ def pod_disruption_budget_present(
         template_context,
         kwargs,
     )
+
+
+# ---------------------------------------------------------------------------
+# Persistent volume states (PV, PVC).
+# .. versionadded:: 2.1.0
+# ---------------------------------------------------------------------------
+
+
+def persistent_volume_absent(name, wait=False, timeout=60, **kwargs):
+    """Ensure the named PV is absent. .. versionadded:: 2.1.0"""
+    return _rbac_absent_impl(
+        name,
+        "persistent_volume",
+        "PersistentVolume",
+        False,
+        None,
+        wait,
+        timeout,
+        kwargs,
+    )
+
+
+def persistent_volume_present(
+    name,
+    metadata=None,
+    spec=None,
+    source="",
+    template="",
+    template_context=None,
+    **kwargs,
+):
+    """
+    Ensure the named PV is present.
+
+    .. versionadded:: 2.1.0
+
+    .. note::
+        Most PV fields are immutable after binding (volume source,
+        capacity, accessModes). For an unmanaged-volume migration,
+        declare the PV absent first.
+
+    .. code-block:: yaml
+
+        my-pv:
+          kubernetes.persistent_volume_present:
+            - spec:
+                capacity:
+                  storage: 10Gi
+                accessModes:
+                  - ReadWriteOnce
+                hostPath:
+                  path: /var/data/my-pv
+    """
+    return _rbac_present_impl(
+        name,
+        "persistent_volume",
+        "PersistentVolume",
+        False,
+        None,
+        metadata,
+        spec,
+        source,
+        template,
+        template_context,
+        kwargs,
+    )
+
+
+def persistent_volume_claim_absent(name, namespace="default", wait=False, timeout=60, **kwargs):
+    """Ensure the named PVC is absent. .. versionadded:: 2.1.0"""
+    return _rbac_absent_impl(
+        name,
+        "persistent_volume_claim",
+        "PersistentVolumeClaim",
+        True,
+        namespace,
+        wait,
+        timeout,
+        kwargs,
+    )
+
+
+def persistent_volume_claim_present(
+    name,
+    namespace="default",
+    metadata=None,
+    spec=None,
+    source="",
+    template="",
+    template_context=None,
+    **kwargs,
+):
+    """
+    Ensure the named PVC is present.
+
+    .. versionadded:: 2.1.0
+
+    .. note::
+        After binding, ``accessModes``, ``selector``, ``volumeName``,
+        and ``storageClassName`` are immutable. ``resources.requests
+        .storage`` can be expanded (only grown) on storage classes
+        with ``allowVolumeExpansion: true``.
+
+    .. code-block:: yaml
+
+        my-pvc:
+          kubernetes.persistent_volume_claim_present:
+            - namespace: default
+            - spec:
+                accessModes:
+                  - ReadWriteOnce
+                resources:
+                  requests:
+                    storage: 1Gi
+                storageClassName: standard
+    """
+    return _rbac_present_impl(
+        name,
+        "persistent_volume_claim",
+        "PersistentVolumeClaim",
+        True,
+        namespace,
+        metadata,
+        spec,
+        source,
+        template,
+        template_context,
+        kwargs,
+    )
