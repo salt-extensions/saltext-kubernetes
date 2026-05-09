@@ -202,6 +202,23 @@ _KIND_REGISTRY: dict[str, KindOps] = {
         namespaced=True,
         ready_predicate=_always_ready,
     ),
+    # Batch
+    "job": KindOps(
+        api_class_attr="BatchV1Api",
+        list_method="list_namespaced_job",
+        read_method="read_namespaced_job",
+        namespaced=True,
+        # A Job is "ready" once it exists; completion is a separate
+        # state checked via _wait_for_job_completion.
+        ready_predicate=_always_ready,
+    ),
+    "cron_job": KindOps(
+        api_class_attr="BatchV1Api",
+        list_method="list_namespaced_cron_job",
+        read_method="read_namespaced_cron_job",
+        namespaced=True,
+        ready_predicate=_always_ready,
+    ),
 }
 
 

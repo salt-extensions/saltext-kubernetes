@@ -39,6 +39,8 @@ EXPECTED_KINDS = {
     "cluster_role",
     "cluster_role_binding",
     "service_account",
+    "job",
+    "cron_job",
 }
 
 

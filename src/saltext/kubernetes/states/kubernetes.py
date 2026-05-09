@@ -3246,3 +3246,121 @@ def manifest_absent(
         ret["comment"] = str(err)
         ret["changes"] = {}
     return ret
+
+
+# ---------------------------------------------------------------------------
+# Batch states (job, cron_job)
+#
+# Reuses the RBAC present/absent helpers — same pattern: show, create-if-
+# absent, patch otherwise; delete on absent. Both kinds are namespaced.
+#
+# .. versionadded:: 2.1.0
+# ---------------------------------------------------------------------------
+
+
+def job_absent(name, namespace="default", wait=False, timeout=60, **kwargs):
+    """Ensure the named Job is absent. .. versionadded:: 2.1.0"""
+    return _rbac_absent_impl(name, "job", "Job", True, namespace, wait, timeout, kwargs)
+
+
+def job_present(
+    name,
+    namespace="default",
+    metadata=None,
+    spec=None,
+    source="",
+    template="",
+    template_context=None,
+    **kwargs,
+):
+    """
+    Ensure the named Job exists with the given pod template.
+
+    .. versionadded:: 2.1.0
+
+    .. note::
+        Job ``selector`` and most of ``spec.template`` are immutable
+        after creation; if your manifest changes them, the patch will
+        be rejected. For mutable changes (labels, ttlSecondsAfterFinished),
+        the state behaves normally.
+
+    .. code-block:: yaml
+
+        my-job:
+          kubernetes.job_present:
+            - namespace: default
+            - spec:
+                template:
+                  spec:
+                    restartPolicy: Never
+                    containers:
+                      - name: hello
+                        image: busybox
+                        command: ["echo", "hi"]
+    """
+    return _rbac_present_impl(
+        name,
+        "job",
+        "Job",
+        True,
+        namespace,
+        metadata,
+        spec,
+        source,
+        template,
+        template_context,
+        kwargs,
+    )
+
+
+def cron_job_absent(name, namespace="default", wait=False, timeout=60, **kwargs):
+    """Ensure the named CronJob is absent. .. versionadded:: 2.1.0"""
+    return _rbac_absent_impl(name, "cron_job", "CronJob", True, namespace, wait, timeout, kwargs)
+
+
+def cron_job_present(
+    name,
+    namespace="default",
+    metadata=None,
+    spec=None,
+    source="",
+    template="",
+    template_context=None,
+    **kwargs,
+):
+    """
+    Ensure the named CronJob exists.
+
+    .. versionadded:: 2.1.0
+
+    .. code-block:: yaml
+
+        my-cron:
+          kubernetes.cron_job_present:
+            - namespace: default
+            - spec:
+                schedule: "*/5 * * * *"
+                concurrencyPolicy: Forbid
+                jobTemplate:
+                  spec:
+                    template:
+                      spec:
+                        restartPolicy: OnFailure
+                        containers:
+                          - name: tick
+                            image: busybox
+                            command: ["echo", "tick"]
+    """
+    return _rbac_present_impl(
+        name,
+        "cron_job",
+        "CronJob",
+        True,
+        namespace,
+        metadata,
+        spec,
+        source,
+        template,
+        template_context,
+        kwargs,
+    )

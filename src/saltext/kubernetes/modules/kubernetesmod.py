@@ -103,8 +103,13 @@ try:
     from kubernetes.client import ApiClient
     from kubernetes.client import V1ClusterRole
     from kubernetes.client import V1ClusterRoleBinding
+    from kubernetes.client import V1CronJob
+    from kubernetes.client import V1CronJobSpec
     from kubernetes.client import V1Deployment
     from kubernetes.client import V1DeploymentSpec
+    from kubernetes.client import V1Job
+    from kubernetes.client import V1JobSpec
+    from kubernetes.client import V1JobTemplateSpec
     from kubernetes.client import V1PolicyRule
     from kubernetes.client import V1Role
     from kubernetes.client import V1RoleBinding
@@ -5334,6 +5339,508 @@ def delete_service_account(name, namespace="default", wait=False, timeout=60, **
 
 
 # ---------------------------------------------------------------------------
+# Batch: Job, CronJob
+#
+# Same six-verb surface as the other typed kinds. Job optionally waits
+# for completion (kubectl-create-job + kubectl-wait equivalent).
+#
+# .. versionadded:: 2.1.0
+# ---------------------------------------------------------------------------
+
+
+def _batch_api():
+    return kubernetes.client.BatchV1Api()
+
+
+def _wait_for_job_completion(api, name, namespace, timeout):
+    """Poll a Job until status.conditions has Complete or Failed."""
+
+    deadline = time.time() + max(timeout, 1)
+    while time.time() < deadline:
+        try:
+            job = api.read_namespaced_job(name, namespace)
+        except ApiException as exc:
+            if exc.status == 404:
+                return False
+            raise
+        for cond in job.status.conditions or []:
+            if cond.type == "Complete" and cond.status == "True":
+                return True
+            if cond.type == "Failed" and cond.status == "True":
+                return False
+        time.sleep(2)
+    return False
+
+
+# --- list -------------------------------------------------------------------
+
+
+def jobs(namespace="default", **kwargs):
+    """
+    Return a list of Job names in *namespace*. .. versionadded:: 2.1.0
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.jobs
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        resp = _batch_api().list_namespaced_job(namespace)
+        return [
+            j["metadata"]["name"]
+            for j in ApiClient().sanitize_for_serialization(resp).get("items", [])
+        ]
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            return []
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def cron_jobs(namespace="default", **kwargs):
+    """
+    Return a list of CronJob names in *namespace*. .. versionadded:: 2.1.0
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.cron_jobs
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        resp = _batch_api().list_namespaced_cron_job(namespace)
+        return [
+            j["metadata"]["name"]
+            for j in ApiClient().sanitize_for_serialization(resp).get("items", [])
+        ]
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            return []
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+# --- show -------------------------------------------------------------------
+
+
+def show_job(name, namespace="default", **kwargs):
+    """
+    Return the Job named *name* in *namespace*. .. versionadded:: 2.1.0
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.show_job
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        return ApiClient().sanitize_for_serialization(
+            _batch_api().read_namespaced_job(name, namespace)
+        )
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            return None
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def show_cron_job(name, namespace="default", **kwargs):
+    """
+    Return the CronJob named *name* in *namespace*. .. versionadded:: 2.1.0
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.show_cron_job
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        return ApiClient().sanitize_for_serialization(
+            _batch_api().read_namespaced_cron_job(name, namespace)
+        )
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            return None
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+# --- create -----------------------------------------------------------------
+
+
+def create_job(
+    name,
+    namespace="default",
+    metadata=None,
+    spec=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    dry_run=False,
+    wait_for_completion=False,
+    timeout=300,
+    **kwargs,
+):
+    """
+    Create a Job from a *spec* dict (with ``template``) or a *source* file.
+
+    .. versionadded:: 2.1.0
+
+    wait_for_completion
+        Poll the Job's status.conditions until ``Complete=True`` (return
+        the Job) or ``Failed=True`` (raise CommandExecutionError) or
+        the wall-clock *timeout* elapses (raise).
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.create_job
+    """
+    if source:
+        metadata, spec = _resolve_rbac_source(
+            source, "Job", template, saltenv, template_context, metadata, spec
+        )
+    if metadata is None:
+        metadata = {}
+    if spec is None:
+        spec = {}
+    body = V1Job(
+        metadata=__dict_to_object_meta(name, namespace, metadata),
+        spec=V1JobSpec(**__dict_to_job_spec(spec)),
+    )
+    cfg = _setup_conn(**kwargs)
+    try:
+        api = _batch_api()
+        resp = api.create_namespaced_job(namespace, body, dry_run="All" if dry_run else None)
+        if wait_for_completion and not dry_run:
+            done = _wait_for_job_completion(api, name, namespace, timeout)
+            if not done:
+                raise CommandExecutionError(f"Job {name} did not complete within {timeout}s")
+            resp = api.read_namespaced_job(name, namespace)
+        return ApiClient().sanitize_for_serialization(resp)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException):
+            if exc.status == 409:
+                raise CommandExecutionError(f"Job {name} already exists") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def create_cron_job(
+    name,
+    namespace="default",
+    metadata=None,
+    spec=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    dry_run=False,
+    **kwargs,
+):
+    """
+    Create a CronJob. .. versionadded:: 2.1.0
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.create_cron_job
+    """
+    if source:
+        metadata, spec = _resolve_rbac_source(
+            source, "CronJob", template, saltenv, template_context, metadata, spec
+        )
+    if metadata is None:
+        metadata = {}
+    if spec is None:
+        spec = {}
+    body = V1CronJob(
+        metadata=__dict_to_object_meta(name, namespace, metadata),
+        spec=V1CronJobSpec(**__dict_to_cron_job_spec(spec)),
+    )
+    cfg = _setup_conn(**kwargs)
+    try:
+        resp = _batch_api().create_namespaced_cron_job(
+            namespace, body, dry_run="All" if dry_run else None
+        )
+        return ApiClient().sanitize_for_serialization(resp)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 409:
+            raise CommandExecutionError(f"CronJob {name} already exists") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+# --- replace ----------------------------------------------------------------
+
+
+def replace_job(
+    name,
+    namespace="default",
+    metadata=None,
+    spec=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    **kwargs,
+):
+    """
+    Replace a Job.
+
+    .. versionadded:: 2.1.0
+
+    .. note::
+
+        Job ``spec.selector`` and most of ``spec.template`` are immutable
+        after creation. The API server will reject a replace that
+        changes them; for those cases delete and recreate.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.replace_job
+    """
+    if source:
+        metadata, spec = _resolve_rbac_source(
+            source, "Job", template, saltenv, template_context, metadata, spec
+        )
+    if metadata is None:
+        metadata = {}
+    if spec is None:
+        spec = {}
+    body = V1Job(
+        metadata=__dict_to_object_meta(name, namespace, metadata),
+        spec=V1JobSpec(**__dict_to_job_spec(spec)),
+    )
+    cfg = _setup_conn(**kwargs)
+    try:
+        resp = _batch_api().replace_namespaced_job(name, namespace, body)
+        return ApiClient().sanitize_for_serialization(resp)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            raise CommandExecutionError(f"Job {name} not found") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def replace_cron_job(
+    name,
+    namespace="default",
+    metadata=None,
+    spec=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    **kwargs,
+):
+    """
+    Replace a CronJob. .. versionadded:: 2.1.0
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.replace_cron_job
+    """
+    if source:
+        metadata, spec = _resolve_rbac_source(
+            source, "CronJob", template, saltenv, template_context, metadata, spec
+        )
+    if metadata is None:
+        metadata = {}
+    if spec is None:
+        spec = {}
+    body = V1CronJob(
+        metadata=__dict_to_object_meta(name, namespace, metadata),
+        spec=V1CronJobSpec(**__dict_to_cron_job_spec(spec)),
+    )
+    cfg = _setup_conn(**kwargs)
+    try:
+        resp = _batch_api().replace_namespaced_cron_job(name, namespace, body)
+        return ApiClient().sanitize_for_serialization(resp)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            raise CommandExecutionError(f"CronJob {name} not found") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+# --- patch ------------------------------------------------------------------
+
+
+def patch_job(
+    name,
+    namespace="default",
+    patch=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    dry_run=False,
+    **kwargs,
+):
+    """Patch a Job (e.g. to update labels or ttlSecondsAfterFinished). .. versionadded:: 2.1.0
+
+    Unlike RBAC kinds (where the patch path flattens ``spec:`` because
+    those kinds have no real .spec field), Job/CronJob patches are
+    passed through verbatim so callers can target nested fields like
+    ``spec.suspend`` or ``spec.template.metadata.labels``.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.patch_job
+    """
+    if source:
+        patch = __read_and_render_yaml_file(source, template, saltenv, template_context)
+        if isinstance(patch, dict) and patch.get("kind") == "Job":
+            patch = {k: v for k, v in patch.items() if k not in ("apiVersion", "kind")}
+    if not isinstance(patch, dict):
+        raise CommandExecutionError("Job patch must be a dictionary")
+    cfg = _setup_conn(**kwargs)
+    try:
+        resp = _batch_api().patch_namespaced_job(
+            name, namespace, patch, dry_run="All" if dry_run else None
+        )
+        return ApiClient().sanitize_for_serialization(resp)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            raise CommandExecutionError(f"Job {name} not found") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def patch_cron_job(
+    name,
+    namespace="default",
+    patch=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    dry_run=False,
+    **kwargs,
+):
+    """Patch a CronJob (e.g. toggle ``spec.suspend`` or change ``spec.schedule``).
+
+    .. versionadded:: 2.1.0
+
+    Patches are passed through verbatim — callers must include the
+    ``spec:`` wrapper for nested fields, matching kubectl-patch semantics.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.patch_cron_job
+    """
+    if source:
+        patch = __read_and_render_yaml_file(source, template, saltenv, template_context)
+        if isinstance(patch, dict) and patch.get("kind") == "CronJob":
+            patch = {k: v for k, v in patch.items() if k not in ("apiVersion", "kind")}
+    if not isinstance(patch, dict):
+        raise CommandExecutionError("CronJob patch must be a dictionary")
+    cfg = _setup_conn(**kwargs)
+    try:
+        resp = _batch_api().patch_namespaced_cron_job(
+            name, namespace, patch, dry_run="All" if dry_run else None
+        )
+        return ApiClient().sanitize_for_serialization(resp)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            raise CommandExecutionError(f"CronJob {name} not found") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+# --- delete -----------------------------------------------------------------
+
+
+def delete_job(
+    name,
+    namespace="default",
+    propagation_policy="Background",
+    wait=False,
+    timeout=60,
+    **kwargs,
+):
+    """Delete a Job. .. versionadded:: 2.1.0
+
+    Default ``propagation_policy=Background`` deletes the underlying Pods
+    too — matches kubectl. Pass ``Orphan`` to keep them.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.delete_job
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        api = _batch_api()
+        opts = kubernetes.client.V1DeleteOptions(propagation_policy=propagation_policy)
+        resp = api.delete_namespaced_job(name, namespace, body=opts)
+        if wait:
+            if not _wait_for_resource_status(api, "job", name, namespace, "deleted", timeout):
+                raise CommandExecutionError(f"Timeout waiting for Job {name} to be deleted")
+        return ApiClient().sanitize_for_serialization(resp)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            return None
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def delete_cron_job(name, namespace="default", wait=False, timeout=60, **kwargs):
+    """
+    Delete a CronJob. .. versionadded:: 2.1.0
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.delete_cron_job
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        api = _batch_api()
+        resp = api.delete_namespaced_cron_job(name, namespace)
+        if wait:
+            if not _wait_for_resource_status(api, "cron_job", name, namespace, "deleted", timeout):
+                raise CommandExecutionError(f"Timeout waiting for CronJob {name} to be deleted")
+        return ApiClient().sanitize_for_serialization(resp)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            return None
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+# ---------------------------------------------------------------------------
 # Pod operations: exec, logs, cp_to, cp_from
 #
 # These don't fit the {verb}_{kind} CRUD pattern — they're imperative Pod
@@ -7651,6 +8158,105 @@ def __dict_to_service_account_spec(spec):
             raise CommandExecutionError("secrets must be a list of object reference dicts")
         out["secrets"] = [kubernetes.client.V1ObjectReference(**s) for s in secrets]
     return out
+
+
+# ---------------------------------------------------------------------------
+# Batch (Job, CronJob) spec builders.
+#
+# Both kinds wrap a Pod template. We accept the template as a plain dict
+# (which __dict_to_pod_spec already validates) and let the caller supply
+# either snake_case or camelCase top-level keys for the Job/CronJob spec
+# fields themselves.
+# ---------------------------------------------------------------------------
+
+
+_JOB_FIELD_MAP = {
+    "activeDeadlineSeconds": "active_deadline_seconds",
+    "backoffLimit": "backoff_limit",
+    "completionMode": "completion_mode",
+    "ttlSecondsAfterFinished": "ttl_seconds_after_finished",
+    "podFailurePolicy": "pod_failure_policy",
+    "manualSelector": "manual_selector",
+}
+
+
+_CRONJOB_FIELD_MAP = {
+    "concurrencyPolicy": "concurrency_policy",
+    "failedJobsHistoryLimit": "failed_jobs_history_limit",
+    "jobTemplate": "job_template",
+    "startingDeadlineSeconds": "starting_deadline_seconds",
+    "successfulJobsHistoryLimit": "successful_jobs_history_limit",
+    "timeZone": "time_zone",
+}
+
+
+_VALID_CRONJOB_CONCURRENCY = {"Allow", "Forbid", "Replace"}
+
+
+def __dict_to_job_spec(spec):
+    """Validate and build kwargs for V1JobSpec from a dict."""
+    if not isinstance(spec, dict):
+        raise CommandExecutionError(f"Job spec must be a dictionary, not {type(spec).__name__}")
+    normalised = {_JOB_FIELD_MAP.get(k, k): v for k, v in spec.items()}
+    template = normalised.get("template")
+    if not isinstance(template, dict):
+        raise CommandExecutionError("Job spec must include 'template' (a pod-template dict)")
+    pod_meta = template.get("metadata", {}) or {}
+    pod_spec_dict = template.get("spec")
+    if not isinstance(pod_spec_dict, dict):
+        raise CommandExecutionError("Job template must include 'spec'")
+    pod_spec_dict = pod_spec_dict.copy()
+    # Job pods must have a restartPolicy of OnFailure or Never; default
+    # to Never if the user didn't specify, matching kubectl's behaviour
+    # for ``kubectl create job``.
+    pod_spec_dict.setdefault("restart_policy", pod_spec_dict.pop("restartPolicy", "Never"))
+    if pod_spec_dict["restart_policy"] not in ("OnFailure", "Never"):
+        raise CommandExecutionError("Job pod template restartPolicy must be 'OnFailure' or 'Never'")
+    # __dict_to_pod_spec returns a V1PodSpec instance, not a dict.
+    pod_spec = __dict_to_pod_spec(pod_spec_dict)
+    normalised["template"] = kubernetes.client.V1PodTemplateSpec(
+        metadata=kubernetes.client.V1ObjectMeta(**pod_meta) if pod_meta else None,
+        spec=pod_spec,
+    )
+    try:
+        V1JobSpec(**normalised)
+    except (TypeError, ValueError) as exc:
+        raise CommandExecutionError(f"Invalid job spec: {exc}") from exc
+    return normalised
+
+
+def __dict_to_cron_job_spec(spec):
+    """Validate and build kwargs for V1CronJobSpec from a dict."""
+    if not isinstance(spec, dict):
+        raise CommandExecutionError(f"CronJob spec must be a dictionary, not {type(spec).__name__}")
+    normalised = {_CRONJOB_FIELD_MAP.get(k, k): v for k, v in spec.items()}
+    if not normalised.get("schedule"):
+        raise CommandExecutionError("CronJob spec must include 'schedule'")
+    cp = normalised.get("concurrency_policy")
+    if cp is not None and cp not in _VALID_CRONJOB_CONCURRENCY:
+        raise CommandExecutionError(
+            f"Invalid concurrency_policy '{cp}'. Must be one of: "
+            + ", ".join(sorted(_VALID_CRONJOB_CONCURRENCY))
+        )
+    job_template_dict = normalised.get("job_template")
+    if not isinstance(job_template_dict, dict):
+        raise CommandExecutionError(
+            "CronJob spec must include 'job_template' (a {metadata, spec} dict)"
+        )
+    job_meta = job_template_dict.get("metadata", {}) or {}
+    job_spec_dict = job_template_dict.get("spec")
+    if not isinstance(job_spec_dict, dict):
+        raise CommandExecutionError("CronJob job_template must include 'spec' (a job-spec dict)")
+    inner_job_spec_kwargs = __dict_to_job_spec(job_spec_dict)
+    normalised["job_template"] = V1JobTemplateSpec(
+        metadata=kubernetes.client.V1ObjectMeta(**job_meta) if job_meta else None,
+        spec=V1JobSpec(**inner_job_spec_kwargs),
+    )
+    try:
+        V1CronJobSpec(**normalised)
+    except (TypeError, ValueError) as exc:
+        raise CommandExecutionError(f"Invalid cronjob spec: {exc}") from exc
+    return normalised
 
 
 def __enforce_only_strings_dict(dictionary):
