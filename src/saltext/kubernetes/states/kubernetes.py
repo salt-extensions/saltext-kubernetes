@@ -2894,3 +2894,172 @@ def service_account_present(
         template_context,
         kwargs,
     )
+
+
+# ---------------------------------------------------------------------------
+# Node lifecycle states (cordon, uncordon, taint, untaint).
+#
+# Drain is intentionally NOT exposed as a state: it's an imperative
+# operation that depends on cluster runtime state (which pods are where)
+# rather than a desired-state declaration. Use ``kubernetes.drain`` from
+# an execution call.
+#
+# .. versionadded:: 2.1.0
+# ---------------------------------------------------------------------------
+
+
+def node_cordoned(name, **kwargs):
+    """
+    Ensure the named node is cordoned (unschedulable).
+
+    .. versionadded:: 2.1.0
+
+    .. code-block:: yaml
+
+        my-node:
+          kubernetes.node_cordoned: []
+    """
+    ret = {"name": name, "changes": {}, "result": False, "comment": ""}
+    try:
+        node = __salt__["kubernetes.node"](name, **kwargs)
+        if node is None:
+            return _error(ret, f"Node {name} not found")
+        currently_unschedulable = bool((node.get("spec") or {}).get("unschedulable", False))
+        if currently_unschedulable:
+            ret["result"] = True
+            ret["comment"] = "Node is already cordoned"
+            return ret
+        if __opts__["test"]:
+            ret["result"] = None
+            ret["comment"] = "Node would be cordoned"
+            ret["changes"] = {"old": "schedulable", "new": "cordoned"}
+            return ret
+        __salt__["kubernetes.cordon"](name, **kwargs)
+        ret["result"] = True
+        ret["comment"] = f"Node {name} cordoned"
+        ret["changes"] = {"old": "schedulable", "new": "cordoned"}
+    except CommandExecutionError as err:
+        log.error(str(err), exc_info_on_loglevel=logging.DEBUG)
+        ret["result"] = False
+        ret["comment"] = str(err)
+    return ret
+
+
+def node_uncordoned(name, **kwargs):
+    """
+    Ensure the named node is uncordoned (schedulable).
+
+    .. versionadded:: 2.1.0
+    """
+    ret = {"name": name, "changes": {}, "result": False, "comment": ""}
+    try:
+        node = __salt__["kubernetes.node"](name, **kwargs)
+        if node is None:
+            return _error(ret, f"Node {name} not found")
+        currently_unschedulable = bool((node.get("spec") or {}).get("unschedulable", False))
+        if not currently_unschedulable:
+            ret["result"] = True
+            ret["comment"] = "Node is already schedulable"
+            return ret
+        if __opts__["test"]:
+            ret["result"] = None
+            ret["comment"] = "Node would be uncordoned"
+            ret["changes"] = {"old": "cordoned", "new": "schedulable"}
+            return ret
+        __salt__["kubernetes.uncordon"](name, **kwargs)
+        ret["result"] = True
+        ret["comment"] = f"Node {name} uncordoned"
+        ret["changes"] = {"old": "cordoned", "new": "schedulable"}
+    except CommandExecutionError as err:
+        log.error(str(err), exc_info_on_loglevel=logging.DEBUG)
+        ret["result"] = False
+        ret["comment"] = str(err)
+    return ret
+
+
+def node_tainted(name, key, effect, value=None, **kwargs):
+    """
+    Ensure the named node has the given taint.
+
+    .. versionadded:: 2.1.0
+
+    .. note::
+        State name (``name``) is the node name. ``key`` and ``effect``
+        identify the taint within the node's taint list (matching the
+        Kubernetes taint identity rule of (key, effect) uniqueness).
+
+    .. code-block:: yaml
+
+        gpu-node:
+          kubernetes.node_tainted:
+            - key: gpu
+            - effect: NoSchedule
+            - value: "true"
+    """
+    ret = {"name": name, "changes": {}, "result": False, "comment": ""}
+    try:
+        node = __salt__["kubernetes.node"](name, **kwargs)
+        if node is None:
+            return _error(ret, f"Node {name} not found")
+        existing = (node.get("spec") or {}).get("taints") or []
+        match = next(
+            (t for t in existing if t.get("key") == key and t.get("effect") == effect),
+            None,
+        )
+        if match is not None and match.get("value") == value:
+            ret["result"] = True
+            ret["comment"] = f"Taint {key}={value}:{effect} already present"
+            return ret
+        if __opts__["test"]:
+            ret["result"] = None
+            ret["comment"] = f"Taint {key}={value}:{effect} would be applied"
+            ret["changes"] = {"old": match, "new": {"key": key, "value": value, "effect": effect}}
+            return ret
+        __salt__["kubernetes.taint"](name, key=key, effect=effect, value=value, **kwargs)
+        ret["result"] = True
+        ret["comment"] = f"Taint {key}={value}:{effect} applied"
+        ret["changes"] = {"old": match, "new": {"key": key, "value": value, "effect": effect}}
+    except CommandExecutionError as err:
+        log.error(str(err), exc_info_on_loglevel=logging.DEBUG)
+        ret["result"] = False
+        ret["comment"] = str(err)
+    return ret
+
+
+def node_untainted(name, key, effect=None, **kwargs):
+    """
+    Ensure the named node does not carry a taint with the given *key*.
+
+    .. versionadded:: 2.1.0
+
+    If *effect* is given, only the taint with matching ``(key, effect)``
+    is removed; otherwise every taint with this key is removed.
+    """
+    ret = {"name": name, "changes": {}, "result": False, "comment": ""}
+    try:
+        node = __salt__["kubernetes.node"](name, **kwargs)
+        if node is None:
+            return _error(ret, f"Node {name} not found")
+        existing = (node.get("spec") or {}).get("taints") or []
+        if effect is None:
+            matches = [t for t in existing if t.get("key") == key]
+        else:
+            matches = [t for t in existing if t.get("key") == key and t.get("effect") == effect]
+        if not matches:
+            ret["result"] = True
+            ret["comment"] = f"No taint with key '{key}' present"
+            return ret
+        if __opts__["test"]:
+            ret["result"] = None
+            ret["comment"] = f"{len(matches)} taint(s) with key '{key}' would be removed"
+            ret["changes"] = {"old": matches, "new": []}
+            return ret
+        __salt__["kubernetes.untaint"](name, key=key, effect=effect, **kwargs)
+        ret["result"] = True
+        ret["comment"] = f"Removed {len(matches)} taint(s) with key '{key}'"
+        ret["changes"] = {"old": matches, "new": []}
+    except CommandExecutionError as err:
+        log.error(str(err), exc_info_on_loglevel=logging.DEBUG)
+        ret["result"] = False
+        ret["comment"] = str(err)
+    return ret

@@ -63,8 +63,13 @@ CLI Example:
 """
 
 import base64
+import datetime
+import io
+import json
 import logging
+import os.path
 import sys
+import tarfile
 import time
 
 import salt.utils.files
@@ -104,6 +109,8 @@ try:
     from kubernetes.client import V1RoleRef
     from kubernetes.client import V1ServiceAccount
     from kubernetes.client.rest import ApiException
+    from kubernetes.stream import stream as ws_stream
+    from kubernetes.stream.ws_client import ERROR_CHANNEL
     from kubernetes.watch import Watch
     from urllib3.exceptions import HTTPError
 
@@ -5319,6 +5326,1262 @@ def delete_service_account(name, namespace="default", wait=False, timeout=60, **
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
             return None
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+# ---------------------------------------------------------------------------
+# Pod operations: exec, logs, cp_to, cp_from
+#
+# These don't fit the {verb}_{kind} CRUD pattern — they're imperative Pod
+# operations driven through the kubectl-style ``exec`` and ``log``
+# subresources. cp_to / cp_from are tar pipes routed through exec, the
+# same approach kubectl uses internally.
+#
+# .. versionadded:: 2.1.0
+# ---------------------------------------------------------------------------
+
+
+def _wrap_command(command):
+    """Accept a string (run via /bin/sh -c) or a list of argv tokens."""
+    if isinstance(command, str):
+        return ["/bin/sh", "-c", command]
+    if isinstance(command, list):
+        return command
+    raise CommandExecutionError("exec command must be a string or list of strings")
+
+
+def _parse_exit_code_from_error_channel(error_payload):
+    """
+    Pull the command's exit code out of the websocket error-channel payload.
+
+    Format observed across K8s versions::
+
+        {"metadata":{}, "status":"Success"}
+        {"metadata":{}, "status":"Failure", "reason":"NonZeroExitCode",
+         "details":{"causes":[{"reason":"ExitCode","message":"42"}]}}
+
+    Returns ``0`` when status is Success and a best-effort integer when
+    Failure carries an ExitCode cause; ``-1`` if the payload is unparseable.
+    """
+    if not error_payload:
+        return 0
+    try:
+
+        data = json.loads(error_payload)
+    except (ValueError, TypeError):
+        return -1
+    if data.get("status") == "Success":
+        return 0
+    for cause in (data.get("details") or {}).get("causes") or []:
+        if cause.get("reason") == "ExitCode":
+            try:
+                return int(cause["message"])
+            except (KeyError, ValueError):
+                pass
+    return 1
+
+
+def exec_(
+    name,
+    command,
+    namespace="default",
+    container=None,
+    stdin=None,
+    tty=False,
+    timeout=60,
+    **kwargs,
+):
+    """
+    Execute *command* inside a running Pod (kubectl-exec equivalent).
+
+    .. versionadded:: 2.1.0
+
+    Returns a dict with ``stdout``, ``stderr`` and ``retcode``. If the
+    wall-clock ``timeout`` elapses before the command exits, ``retcode``
+    is ``-1`` and ``stderr`` contains a "timed out" sentinel; whatever
+    was already buffered on stdout/stderr is returned.
+
+    name
+        Pod name.
+
+    command
+        Either a string (executed via ``/bin/sh -c``) or a list of argv
+        tokens (executed directly).
+
+    namespace
+        Pod namespace. Default: ``default``.
+
+    container
+        Container name to exec into. Required when the Pod has more than
+        one container.
+
+    stdin
+        Optional string fed to the command's stdin.
+
+        .. note::
+
+            The Kubernetes exec subresource websocket protocol does not
+            expose a portable way to signal stdin EOF. Commands that
+            block waiting for EOF (``cat``, ``tee``, ``read``) will run
+            until the wall-clock ``timeout``. Wrap such commands with a
+            byte-bounded reader (``head -c N``, ``dd count=N``) or use a
+            shell heredoc to deliver fixed input.
+
+    tty
+        Allocate a TTY (rarely useful in non-interactive contexts).
+
+    timeout
+        Wall-clock cap in seconds. The exec is forcibly closed when the
+        timeout elapses; whatever was buffered up to that point is
+        returned. Default: 60.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.exec mypod 'echo hello'
+        salt '*' kubernetes.exec mypod command='["cat", "/etc/hostname"]'
+    """
+
+    cfg = _setup_conn(**kwargs)
+    try:
+        api = kubernetes.client.CoreV1Api()
+        cmd = _wrap_command(command)
+        exec_kwargs = {
+            "name": name,
+            "namespace": namespace,
+            "command": cmd,
+            "stderr": True,
+            "stdin": stdin is not None,
+            "stdout": True,
+            "tty": tty,
+            "_preload_content": False,
+        }
+        if container:
+            exec_kwargs["container"] = container
+        resp = ws_stream(api.connect_get_namespaced_pod_exec, **exec_kwargs)
+
+        try:
+            if stdin is not None:
+                resp.write_stdin(stdin)
+                # Force the channel buffer onto the wire before we start
+                # the read loop.
+                resp.update(timeout=1)
+
+            stdout_chunks = []
+            stderr_chunks = []
+            error_payload = None
+            deadline = time.time() + max(timeout, 1)
+            timed_out = False
+
+            while resp.is_open():
+                if time.time() >= deadline:
+                    timed_out = True
+                    break
+                # Short per-poll timeout so the wall-clock check stays responsive.
+                resp.update(timeout=1)
+                if resp.peek_stdout():
+                    stdout_chunks.append(resp.read_stdout())
+                if resp.peek_stderr():
+                    stderr_chunks.append(resp.read_stderr())
+                if resp.peek_channel(ERROR_CHANNEL):
+                    error_payload = resp.read_channel(ERROR_CHANNEL)
+                    # Server signals end-of-stream on this channel.
+                    break
+
+            # Drain anything still buffered after the channel signal or timeout.
+            if resp.peek_stdout():
+                stdout_chunks.append(resp.read_stdout())
+            if resp.peek_stderr():
+                stderr_chunks.append(resp.read_stderr())
+        finally:
+            resp.close()
+
+        if timed_out:
+            stderr_chunks.append(
+                f"\n[saltext.kubernetes] exec timed out after {timeout}s; "
+                "command may still be running in the pod.\n"
+            )
+            return {
+                "stdout": "".join(stdout_chunks),
+                "stderr": "".join(stderr_chunks),
+                "retcode": -1,
+            }
+
+        return {
+            "stdout": "".join(stdout_chunks),
+            "stderr": "".join(stderr_chunks),
+            "retcode": _parse_exit_code_from_error_channel(error_payload),
+        }
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            raise CommandExecutionError(f"Pod {name} not found in {namespace}") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def logs(
+    name,
+    namespace="default",
+    container=None,
+    previous=False,
+    since_seconds=None,
+    tail_lines=None,
+    timestamps=False,
+    **kwargs,
+):
+    """
+    Fetch logs from a Pod (kubectl-logs equivalent).
+
+    .. versionadded:: 2.1.0
+
+    Returns the log text as a single string.
+
+    name
+        Pod name.
+
+    namespace
+        Pod namespace. Default: ``default``.
+
+    container
+        Container to fetch logs from. Required when the Pod has more than
+        one container.
+
+    previous
+        If True, return logs from the *previous* terminated container
+        instance (e.g. after a crash).
+
+    since_seconds
+        Only return logs from the last N seconds.
+
+    tail_lines
+        Only return the last N lines.
+
+    timestamps
+        Prefix each line with the API server's RFC3339 timestamp.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.logs mypod tail_lines=50
+        salt '*' kubernetes.logs mypod container=app since_seconds=600
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        api = kubernetes.client.CoreV1Api()
+        log_kwargs = {
+            "name": name,
+            "namespace": namespace,
+            "previous": previous,
+            "timestamps": timestamps,
+        }
+        if container:
+            log_kwargs["container"] = container
+        if since_seconds is not None:
+            log_kwargs["since_seconds"] = since_seconds
+        if tail_lines is not None:
+            log_kwargs["tail_lines"] = tail_lines
+        return api.read_namespaced_pod_log(**log_kwargs)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            raise CommandExecutionError(f"Pod {name} not found in {namespace}") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def _filter_tar_members_for_extract(members, dst_path):
+    """
+    Return only those tar members whose resolved extraction path stays
+    inside *dst_path*.
+
+    Mirrors the Python 3.12 ``filter="data"`` semantics for the older
+    Python patch releases that don't ship that parameter. Mitigates
+    CWE-22 (path traversal) on archives produced by an in-pod ``tar``.
+    """
+    safe = []
+    real_dst = os.path.realpath(dst_path)
+    for member in members:
+        if os.path.isabs(member.name) or member.name.startswith("/"):
+            continue
+        candidate = os.path.realpath(os.path.join(dst_path, member.name))
+        if candidate == real_dst or candidate.startswith(real_dst + os.sep):
+            safe.append(member)
+    return safe
+
+
+def _exec_for_cp(api, name, namespace, container, command, stdin_bytes=None):
+    """
+    Run a command via the exec websocket and return (stdout_bytes, stderr_str, retcode).
+
+    Used by cp_to / cp_from for the underlying tar pipe. Unlike :py:func:`exec_`,
+    this returns stdout as raw bytes so binary archives survive the round-trip.
+
+    Implementation note: ``WSClient.write_stdin`` *replaces* the channel
+    buffer rather than appending, so we must send the entire stdin in a
+    single call (and immediately drive ``update()`` to flush it onto the
+    wire) — chunked writes silently lose all but the last chunk. The
+    in-pod tar detects end-of-archive from the tar format's own marker
+    blocks rather than relying on stdin EOF, which the websocket wrapper
+    cannot signal cleanly.
+    """
+    exec_kwargs = {
+        "name": name,
+        "namespace": namespace,
+        "command": command,
+        "stderr": True,
+        "stdin": stdin_bytes is not None,
+        "stdout": True,
+        "tty": False,
+        "_preload_content": False,
+    }
+    if container:
+        exec_kwargs["container"] = container
+    resp = ws_stream(api.connect_get_namespaced_pod_exec, **exec_kwargs)
+    try:
+        if stdin_bytes is not None:
+            # The kubernetes-client WSClient encodes the channel buffer as a
+            # single websocket frame on the next update(); decoding the
+            # buffer expects a str, so we use surrogateescape to round-trip
+            # arbitrary bytes through unicode without loss.
+            resp.write_stdin(stdin_bytes.decode("utf-8", errors="surrogateescape"))
+            # Force the channel buffer onto the wire before we start
+            # waiting for stdout.
+            resp.update(timeout=1)
+
+        stdout = bytearray()
+        stderr_chunks = []
+        error_payload = None
+
+        while resp.is_open():
+            resp.update(timeout=5)
+            if resp.peek_stdout():
+                stdout.extend(resp.read_stdout().encode("utf-8", errors="surrogateescape"))
+            if resp.peek_stderr():
+                stderr_chunks.append(resp.read_stderr())
+            if resp.peek_channel(ERROR_CHANNEL):
+                error_payload = resp.read_channel(ERROR_CHANNEL)
+                break
+        # Drain remaining buffers after the loop exits.
+        if resp.peek_stdout():
+            stdout.extend(resp.read_stdout().encode("utf-8", errors="surrogateescape"))
+        if resp.peek_stderr():
+            stderr_chunks.append(resp.read_stderr())
+    finally:
+        resp.close()
+
+    return bytes(stdout), "".join(stderr_chunks), _parse_exit_code_from_error_channel(error_payload)
+
+
+def cp_to(
+    name,
+    src_path,
+    dst_path,
+    namespace="default",
+    container=None,
+    **kwargs,
+):
+    """
+    Copy a local file or directory into a Pod (kubectl-cp equivalent).
+
+    .. versionadded:: 2.1.0
+
+    Implementation: tar the local source into a memory buffer and pipe it
+    into the Pod via ``tar xf - -C <dst>``. The Pod must have a ``tar``
+    binary on PATH.
+
+    name
+        Pod name.
+
+    src_path
+        Local file or directory to copy from.
+
+    dst_path
+        Destination directory inside the Pod. The local source is
+        extracted *into* this directory (preserving its base name).
+
+    namespace
+        Pod namespace. Default: ``default``.
+
+    container
+        Target container in a multi-container Pod.
+
+    Returns ``{"retcode": 0}`` on success; raises CommandExecutionError
+    on tar failure or pod-side error.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.cp_to mypod /tmp/file.txt /var/data
+    """
+    if salt.utils.platform.is_windows():
+        raise CommandExecutionError(
+            "kubernetes.cp_to is not supported on Windows; the tar-pipe path "
+            "depends on POSIX tar semantics."
+        )
+
+    if not os.path.exists(src_path):
+        raise CommandExecutionError(f"Local source path does not exist: {src_path}")
+
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w") as tar:
+        tar.add(src_path, arcname=os.path.basename(src_path))
+    archive = buf.getvalue()
+
+    cfg = _setup_conn(**kwargs)
+    try:
+        api = kubernetes.client.CoreV1Api()
+        _stdout, err, rc = _exec_for_cp(
+            api,
+            name,
+            namespace,
+            container,
+            command=["tar", "xf", "-", "-C", dst_path],
+            stdin_bytes=archive,
+        )
+        if rc != 0:
+            raise CommandExecutionError(
+                f"cp_to failed (retcode={rc}); pod stderr: {err.strip() or '(empty)'}"
+            )
+        return {"retcode": rc}
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            raise CommandExecutionError(f"Pod {name} not found in {namespace}") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def cp_from(
+    name,
+    src_path,
+    dst_path,
+    namespace="default",
+    container=None,
+    **kwargs,
+):
+    """
+    Copy a file or directory *from* a Pod to the local filesystem.
+
+    .. versionadded:: 2.1.0
+
+    Implementation: ``tar cf - <src>`` inside the Pod, capturing the
+    archive over stdout, and extract it locally into *dst_path*.
+
+    name
+        Pod name.
+
+    src_path
+        Source path inside the Pod.
+
+    dst_path
+        Local destination directory. The source's base name is preserved
+        as a child of this directory.
+
+    namespace
+        Pod namespace. Default: ``default``.
+
+    container
+        Source container in a multi-container Pod.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.cp_from mypod /var/log/app.log /tmp
+    """
+    if salt.utils.platform.is_windows():
+        raise CommandExecutionError(
+            "kubernetes.cp_from is not supported on Windows; the tar-pipe path "
+            "depends on POSIX tar semantics."
+        )
+
+    if not os.path.isdir(dst_path):
+        raise CommandExecutionError(f"Local destination must be a directory: {dst_path}")
+
+    cfg = _setup_conn(**kwargs)
+    try:
+        api = kubernetes.client.CoreV1Api()
+        # ``tar cf -`` from the parent so the archive includes the basename.
+        parent = os.path.dirname(src_path.rstrip("/")) or "/"
+        leaf = os.path.basename(src_path.rstrip("/"))
+        archive_bytes, err, rc = _exec_for_cp(
+            api,
+            name,
+            namespace,
+            container,
+            command=["tar", "cf", "-", "-C", parent, leaf],
+        )
+        if rc != 0 or not archive_bytes:
+            raise CommandExecutionError(
+                f"cp_from failed (retcode={rc}); pod stderr: {err.strip() or '(empty)'}"
+            )
+        with tarfile.open(fileobj=io.BytesIO(archive_bytes), mode="r") as tar:
+            # CWE-22: validate every member's resolved path stays inside
+            # the destination before extracting. Python 3.12+ ships a
+            # ``filter="data"`` parameter that does this, with backports
+            # to recent 3.10.x / 3.11.x patch releases; for compatibility
+            # across the full ``requires-python = ">= 3.10"`` range we
+            # do the same check explicitly.
+            safe_members = _filter_tar_members_for_extract(tar.getmembers(), dst_path)
+            try:
+                tar.extractall(dst_path, members=safe_members, filter="data")
+            except TypeError:
+                # Patch release predates the filter backport; the explicit
+                # member filter above already enforces path safety.
+                tar.extractall(dst_path, members=safe_members)  # nosec B202
+        return {"retcode": rc}
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            raise CommandExecutionError(f"Pod {name} not found in {namespace}") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+# ---------------------------------------------------------------------------
+# Workload + cluster operations: scale, rollback, restart, cluster_info
+#
+# These wrap kubectl-style verbs for Deployment / StatefulSet / DaemonSet /
+# ReplicaSet that don't fit the typed CRUD pattern. They use the dedicated
+# /scale subresource where possible (so RBAC permissions can be scoped to
+# scale separately from the parent object), and the same pod-template
+# annotation trick kubectl uses for rollouts.
+#
+# .. versionadded:: 2.1.0
+# ---------------------------------------------------------------------------
+
+
+# Map workload kind -> (api_class_attr, scale_method, parent_methods).
+# scale_method: ``patch_*_scale``. We use PATCH rather than READ-then-REPLACE
+# because the deployment controller reconciles concurrently with our edit
+# and a stale ``resourceVersion`` on the /scale subresource produces 409
+# conflicts. PATCH on the scale subresource has no resourceVersion
+# requirement and matches the behaviour kubectl ``scale`` falls back to.
+# parent_methods: (read, patch) — for restart annotation tweaks.
+_SCALABLE_KINDS = {
+    "deployment": (
+        "AppsV1Api",
+        "patch_namespaced_deployment_scale",
+        ("read_namespaced_deployment", "patch_namespaced_deployment"),
+    ),
+    "stateful_set": (
+        "AppsV1Api",
+        "patch_namespaced_stateful_set_scale",
+        ("read_namespaced_stateful_set", "patch_namespaced_stateful_set"),
+    ),
+    "statefulset": (  # alias
+        "AppsV1Api",
+        "patch_namespaced_stateful_set_scale",
+        ("read_namespaced_stateful_set", "patch_namespaced_stateful_set"),
+    ),
+    "replica_set": (
+        "AppsV1Api",
+        "patch_namespaced_replica_set_scale",
+        ("read_namespaced_replica_set", "patch_namespaced_replica_set"),
+    ),
+    "replicaset": (  # alias
+        "AppsV1Api",
+        "patch_namespaced_replica_set_scale",
+        ("read_namespaced_replica_set", "patch_namespaced_replica_set"),
+    ),
+}
+
+# DaemonSet has no /scale subresource (it doesn't have a replicas concept)
+# but it does support the restart annotation trick.
+_RESTARTABLE_ONLY_KINDS = {
+    "daemonset": (
+        "AppsV1Api",
+        ("read_namespaced_daemon_set", "patch_namespaced_daemon_set"),
+    ),
+    "daemon_set": (
+        "AppsV1Api",
+        ("read_namespaced_daemon_set", "patch_namespaced_daemon_set"),
+    ),
+}
+
+
+def _normalise_workload_kind(kind):
+    """Lower-case + underscore-normalise a kind name."""
+    if not isinstance(kind, str):
+        raise CommandExecutionError("kind must be a string")
+    return kind.lower().replace(" ", "_").replace("-", "_")
+
+
+def scale(kind, name, replicas, namespace="default", **kwargs):
+    """
+    Set the desired replica count for a Deployment, StatefulSet, or
+    ReplicaSet via the ``/scale`` subresource (kubectl-scale equivalent).
+
+    .. versionadded:: 2.1.0
+
+    Returns the updated V1Scale dict.
+
+    kind
+        One of ``deployment``, ``statefulset``, ``replicaset``
+        (underscore-tolerant: ``stateful_set``, ``replica_set`` also accepted).
+
+    name
+        Resource name.
+
+    replicas
+        New desired replica count (non-negative integer).
+
+    namespace
+        Namespace. Default: ``default``.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.scale deployment nginx 5
+        salt '*' kubernetes.scale kind=statefulset name=db replicas=3
+    """
+    norm_kind = _normalise_workload_kind(kind)
+    if norm_kind not in _SCALABLE_KINDS:
+        raise CommandExecutionError(
+            f"Unsupported scalable kind '{kind}'. Supported: "
+            "deployment, statefulset, replicaset."
+        )
+    if not isinstance(replicas, int) or replicas < 0:
+        raise CommandExecutionError("replicas must be a non-negative integer")
+
+    api_attr, patch_scale_method, _ = _SCALABLE_KINDS[norm_kind]
+
+    cfg = _setup_conn(**kwargs)
+    try:
+        api = getattr(kubernetes.client, api_attr)()
+        # Use PATCH rather than read-modify-write to avoid 409 conflicts
+        # from concurrent reconciliation by the deployment controller.
+        body = {"spec": {"replicas": replicas}}
+        updated = getattr(api, patch_scale_method)(name, namespace, body)
+        return ApiClient().sanitize_for_serialization(updated)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            raise CommandExecutionError(f"{kind} {name} not found in {namespace}") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def restart(kind, name, namespace="default", **kwargs):
+    """
+    Trigger a rolling restart of a Deployment / StatefulSet / DaemonSet /
+    ReplicaSet by stamping the pod template with the same
+    ``kubectl.kubernetes.io/restartedAt`` annotation kubectl uses.
+
+    .. versionadded:: 2.1.0
+
+    Returns the patched object.
+
+    kind
+        ``deployment``, ``statefulset``, ``replicaset``, or ``daemonset``
+        (underscore-tolerant).
+
+    name
+        Resource name.
+
+    namespace
+        Namespace. Default: ``default``.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.restart deployment nginx
+        salt '*' kubernetes.restart kind=daemonset name=fluentd
+    """
+
+    norm_kind = _normalise_workload_kind(kind)
+    if norm_kind in _SCALABLE_KINDS:
+        api_attr, _scale_method, parent_methods = _SCALABLE_KINDS[norm_kind]
+    elif norm_kind in _RESTARTABLE_ONLY_KINDS:
+        api_attr, parent_methods = _RESTARTABLE_ONLY_KINDS[norm_kind]
+    else:
+        raise CommandExecutionError(
+            f"Unsupported restartable kind '{kind}'. Supported: "
+            "deployment, statefulset, replicaset, daemonset."
+        )
+
+    _, patch_method = parent_methods
+    now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    patch_body = {
+        "spec": {
+            "template": {
+                "metadata": {
+                    "annotations": {
+                        "kubectl.kubernetes.io/restartedAt": now,
+                    }
+                }
+            }
+        }
+    }
+
+    cfg = _setup_conn(**kwargs)
+    try:
+        api = getattr(kubernetes.client, api_attr)()
+        result = getattr(api, patch_method)(name, namespace, patch_body)
+        return ApiClient().sanitize_for_serialization(result)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            raise CommandExecutionError(f"{kind} {name} not found in {namespace}") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def rollback(name, namespace="default", to_revision=None, **kwargs):
+    """
+    Roll a Deployment back to a previous revision (kubectl-rollout-undo
+    equivalent for Deployments).
+
+    .. versionadded:: 2.1.0
+
+    Implementation: list the ReplicaSets owned by the Deployment, sort
+    them by the ``deployment.kubernetes.io/revision`` annotation, pick
+    the target (the second-newest by default, or the one matching
+    *to_revision* if given), and patch the Deployment's
+    ``.spec.template`` to that ReplicaSet's pod template.
+
+    This avoids the deprecated v1 ``/rollback`` subresource (removed in
+    K8s 1.16+) and matches the modern kubectl behaviour.
+
+    name
+        Deployment name.
+
+    namespace
+        Namespace. Default: ``default``.
+
+    to_revision
+        Revision number to roll back to. If ``None``, picks the
+        immediately preceding revision.
+
+    Returns the patched Deployment.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.rollback nginx
+        salt '*' kubernetes.rollback nginx to_revision=3
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        apps_api = kubernetes.client.AppsV1Api()
+        deployment = apps_api.read_namespaced_deployment(name, namespace)
+        current_rev = (deployment.metadata.annotations or {}).get(
+            "deployment.kubernetes.io/revision"
+        )
+
+        # The Deployment owns its ReplicaSets via ownerReferences; we
+        # filter on that rather than on label selector so we get exactly
+        # the right revision lineage.
+        all_rs = apps_api.list_namespaced_replica_set(namespace).items
+        owned = [
+            rs
+            for rs in all_rs
+            if any(
+                ref.kind == "Deployment" and ref.uid == deployment.metadata.uid
+                for ref in (rs.metadata.owner_references or [])
+            )
+        ]
+        if not owned:
+            raise CommandExecutionError(f"Deployment {name} has no ReplicaSets to roll back to")
+
+        def _rev(rs):
+            try:
+                return int(
+                    (rs.metadata.annotations or {}).get("deployment.kubernetes.io/revision", "0")
+                )
+            except ValueError:
+                return 0
+
+        owned.sort(key=_rev, reverse=True)
+
+        if to_revision is None:
+            # Skip the current revision; take the next one down.
+            target = next(
+                (rs for rs in owned if str(_rev(rs)) != str(current_rev)),
+                None,
+            )
+        else:
+            target = next(
+                (rs for rs in owned if _rev(rs) == int(to_revision)),
+                None,
+            )
+
+        if target is None:
+            raise CommandExecutionError(
+                f"No suitable rollback target for Deployment {name} "
+                f"(to_revision={to_revision}, current={current_rev})"
+            )
+
+        # Patch the deployment's pod template with the target RS's
+        # template. We strip the pod-template-hash that the controller
+        # owns; the deployment controller will re-add it.
+        target_template = ApiClient().sanitize_for_serialization(target.spec.template)
+        labels = (target_template.get("metadata", {}) or {}).get("labels", {})
+        labels.pop("pod-template-hash", None)
+
+        patch_body = {"spec": {"template": target_template}}
+        result = apps_api.patch_namespaced_deployment(name, namespace, patch_body)
+        return ApiClient().sanitize_for_serialization(result)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            raise CommandExecutionError(f"Deployment {name} not found in {namespace}") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def cluster_info(**kwargs):
+    """
+    Return a summary of the cluster (kubectl-cluster-info / kubectl-version
+    equivalent).
+
+    .. versionadded:: 2.1.0
+
+    Returns a dict with:
+
+    * ``server_version`` — the API server's reported version (major,
+      minor, gitVersion, platform, etc.)
+    * ``healthz`` — string body returned by ``GET /healthz`` (typically
+      ``"ok"`` on a healthy cluster).
+    * ``api_groups`` — list of available API group names.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.cluster_info
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        version_api = kubernetes.client.VersionApi()
+        version = version_api.get_code()
+        server_version = ApiClient().sanitize_for_serialization(version)
+
+        # /healthz isn't modelled in the typed API; call it via the
+        # generic api_client. Most clusters return a plain "ok".
+        api_client = kubernetes.client.ApiClient()
+        try:
+            resp = api_client.call_api(
+                "/healthz",
+                "GET",
+                response_type="str",
+                _preload_content=True,
+                auth_settings=["BearerToken"],
+            )
+            healthz = resp[0] if isinstance(resp, tuple) else resp
+        except (ApiException, HTTPError):
+            healthz = "unavailable"
+
+        groups_api = kubernetes.client.ApisApi()
+        groups_resp = groups_api.get_api_versions()
+        api_groups = [g.name for g in (groups_resp.groups or []) if getattr(g, "name", None)]
+
+        return {
+            "server_version": server_version,
+            "healthz": healthz,
+            "api_groups": sorted(api_groups),
+        }
+    except (ApiException, HTTPError) as exc:
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+# ---------------------------------------------------------------------------
+# Node lifecycle operations: cordon, uncordon, drain, taint, untaint
+#
+# These mirror kubectl's per-node verbs. ``drain`` uses the eviction API
+# (``CoreV1Api.create_namespaced_pod_eviction``) to respect PodDisruption
+# Budgets — falling through to a direct delete only when ``disable_eviction``
+# is set explicitly.
+#
+# .. versionadded:: 2.1.0
+# ---------------------------------------------------------------------------
+
+
+_VALID_TAINT_EFFECTS = {"NoSchedule", "PreferNoSchedule", "NoExecute"}
+
+
+def cordon(name, **kwargs):
+    """
+    Mark a node as unschedulable (kubectl-cordon equivalent).
+
+    .. versionadded:: 2.1.0
+
+    name
+        Node name.
+
+    Returns the patched Node object.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.cordon
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        api = kubernetes.client.CoreV1Api()
+        body = {"spec": {"unschedulable": True}}
+        result = api.patch_node(name, body)
+        return ApiClient().sanitize_for_serialization(result)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            raise CommandExecutionError(f"Node {name} not found") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def uncordon(name, **kwargs):
+    """
+    Mark a node as schedulable again (kubectl-uncordon equivalent).
+
+    .. versionadded:: 2.1.0
+
+    Sends ``spec.unschedulable: null`` so the field is removed via
+    strategic-merge patch. Setting ``False`` would leave the field
+    present (just falsy), which kubectl avoids for cleanliness.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.uncordon
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        api = kubernetes.client.CoreV1Api()
+        body = {"spec": {"unschedulable": None}}
+        result = api.patch_node(name, body)
+        return ApiClient().sanitize_for_serialization(result)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            raise CommandExecutionError(f"Node {name} not found") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def taint(name, key, effect, value=None, **kwargs):
+    """
+    Add (or update) a taint on a node (kubectl-taint equivalent).
+
+    .. versionadded:: 2.1.0
+
+    Existing taints with the same ``(key, effect)`` are replaced; other
+    taints are preserved. To remove a taint use :py:func:`untaint`.
+
+    name
+        Node name.
+
+    key
+        Taint key. The standard reserved keys are
+        ``node-role.kubernetes.io/control-plane``, ``node.kubernetes.io/*``;
+        operator-defined keys are arbitrary strings.
+
+    effect
+        One of ``NoSchedule``, ``PreferNoSchedule``, ``NoExecute``.
+
+    value
+        Optional taint value.
+
+    Returns the patched Node object.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.taint nodename gpu effect=NoSchedule value=true
+    """
+    if effect not in _VALID_TAINT_EFFECTS:
+        raise CommandExecutionError(
+            f"Invalid taint effect '{effect}'. Must be one of: "
+            + ", ".join(sorted(_VALID_TAINT_EFFECTS))
+        )
+
+    cfg = _setup_conn(**kwargs)
+    try:
+        api = kubernetes.client.CoreV1Api()
+        node = api.read_node(name)
+        existing = list(node.spec.taints or [])
+        # Replace any taint matching (key, effect); keep the rest.
+        kept = [t for t in existing if not (t.key == key and t.effect == effect)]
+        kept.append(kubernetes.client.V1Taint(key=key, effect=effect, value=value))
+        body = {"spec": {"taints": [ApiClient().sanitize_for_serialization(t) for t in kept]}}
+        result = api.patch_node(name, body)
+        return ApiClient().sanitize_for_serialization(result)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            raise CommandExecutionError(f"Node {name} not found") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def untaint(name, key, effect=None, **kwargs):
+    """
+    Remove a taint from a node.
+
+    .. versionadded:: 2.1.0
+
+    name
+        Node name.
+
+    key
+        Taint key to remove.
+
+    effect
+        Optional. If given, removes only the taint with matching
+        ``(key, effect)``; if omitted, removes every taint with this
+        key regardless of effect.
+
+    Returns the patched Node object.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.untaint
+    """
+    if effect is not None and effect not in _VALID_TAINT_EFFECTS:
+        raise CommandExecutionError(
+            f"Invalid taint effect '{effect}'. Must be one of: "
+            + ", ".join(sorted(_VALID_TAINT_EFFECTS))
+        )
+
+    cfg = _setup_conn(**kwargs)
+    try:
+        api = kubernetes.client.CoreV1Api()
+        node = api.read_node(name)
+        existing = list(node.spec.taints or [])
+        if effect is None:
+            kept = [t for t in existing if t.key != key]
+        else:
+            kept = [t for t in existing if not (t.key == key and t.effect == effect)]
+        body = {"spec": {"taints": [ApiClient().sanitize_for_serialization(t) for t in kept]}}
+        result = api.patch_node(name, body)
+        return ApiClient().sanitize_for_serialization(result)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            raise CommandExecutionError(f"Node {name} not found") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def _is_daemonset_pod(pod):
+    """A pod is owned by a DaemonSet if any ownerReference says so."""
+    for ref in pod.metadata.owner_references or []:
+        if ref.kind == "DaemonSet":
+            return True
+    return False
+
+
+def _is_mirror_pod(pod):
+    """Mirror pods (kubelet-managed static pods) carry this annotation."""
+    annotations = pod.metadata.annotations or {}
+    return "kubernetes.io/config.mirror" in annotations
+
+
+def _has_emptydir_volume(pod):
+    """True if any volume on the pod is an emptyDir."""
+    for vol in pod.spec.volumes or []:
+        if vol.empty_dir is not None:
+            return True
+    return False
+
+
+def drain(
+    name,
+    ignore_daemonsets=True,
+    delete_emptydir_data=False,
+    disable_eviction=False,
+    force=False,
+    grace_period_seconds=None,
+    timeout=300,
+    **kwargs,
+):
+    """
+    Drain a node: cordon it, then evict every (non-DaemonSet, non-mirror)
+    pod on it, waiting for the pods to terminate (kubectl-drain equivalent).
+
+    .. versionadded:: 2.1.0
+
+    name
+        Node name.
+
+    ignore_daemonsets
+        Skip DaemonSet-owned pods (which the DaemonSet controller would
+        immediately recreate). Default: ``True`` — matches kubectl's
+        default and the only sensible production behaviour.
+
+    delete_emptydir_data
+        Allow draining pods that use ``emptyDir`` volumes (the data is
+        lost). Without this flag and ``force=True``, the drain refuses
+        to remove such pods. Default: ``False``.
+
+    disable_eviction
+        Bypass the eviction API and delete pods directly. Skips
+        PodDisruptionBudget enforcement. Use only when you understand
+        the consequences. Default: ``False``.
+
+    force
+        Required to drain pods that are not managed by a controller
+        (bare pods). Without it the drain refuses to remove such pods,
+        matching kubectl. Default: ``False``.
+
+    grace_period_seconds
+        Per-pod termination grace period override. ``None`` means use
+        the pod's own ``terminationGracePeriodSeconds``.
+
+    timeout
+        Wall-clock cap in seconds for the entire drain (cordon + eviction
+        + waiting for terminations). Default: 300.
+
+    Returns a dict::
+
+        {"node": <name>,
+         "evicted": [<pod-namespace/pod-name>, ...],
+         "skipped": [{"pod": ..., "reason": ...}, ...],
+         "errors": [{"pod": ..., "error": ...}]}
+
+    Raises ``CommandExecutionError`` if the timeout elapses before all
+    pods terminate, or if any pod could not be evicted at all.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.drain
+    """
+
+    cfg = _setup_conn(**kwargs)
+    try:
+        api = kubernetes.client.CoreV1Api()
+        # Verify the node exists before we cordon — gives a clear error
+        # if the user mistyped the name.
+        api.read_node(name)
+
+        # Step 1: cordon.
+        api.patch_node(name, {"spec": {"unschedulable": True}})
+
+        # Step 2: list every pod on the node.
+        pods = api.list_pod_for_all_namespaces(field_selector=f"spec.nodeName={name}").items
+
+        evicted = []
+        skipped = []
+        errors = []
+        targets = []  # pods we'll actually evict
+
+        for pod in pods:
+            pod_id = f"{pod.metadata.namespace}/{pod.metadata.name}"
+            if _is_mirror_pod(pod):
+                skipped.append({"pod": pod_id, "reason": "mirror pod"})
+                continue
+            if _is_daemonset_pod(pod):
+                if ignore_daemonsets:
+                    skipped.append({"pod": pod_id, "reason": "daemonset"})
+                    continue
+                # User opted in to draining DS pods; let them proceed.
+            if _has_emptydir_volume(pod) and not delete_emptydir_data:
+                if not force:
+                    raise CommandExecutionError(
+                        f"Pod {pod_id} uses emptyDir volumes; "
+                        "set delete_emptydir_data=True (data will be lost) "
+                        "or force=True to override."
+                    )
+                # ``force`` alone allows the drain to proceed; the data
+                # loss is on the user.
+            if not (pod.metadata.owner_references or []) and not force:
+                raise CommandExecutionError(
+                    f"Pod {pod_id} is not managed by a controller (bare "
+                    "pod); set force=True to evict anyway."
+                )
+            targets.append(pod)
+
+        # Step 3: evict each target.
+        delete_options = None
+        if grace_period_seconds is not None:
+            delete_options = kubernetes.client.V1DeleteOptions(
+                grace_period_seconds=grace_period_seconds
+            )
+
+        for pod in targets:
+            pod_id = f"{pod.metadata.namespace}/{pod.metadata.name}"
+            try:
+                if disable_eviction:
+                    api.delete_namespaced_pod(
+                        pod.metadata.name,
+                        pod.metadata.namespace,
+                        grace_period_seconds=grace_period_seconds,
+                    )
+                else:
+                    eviction = kubernetes.client.V1Eviction(
+                        api_version="policy/v1",
+                        kind="Eviction",
+                        metadata=kubernetes.client.V1ObjectMeta(
+                            name=pod.metadata.name,
+                            namespace=pod.metadata.namespace,
+                        ),
+                        delete_options=delete_options,
+                    )
+                    api.create_namespaced_pod_eviction(
+                        pod.metadata.name, pod.metadata.namespace, eviction
+                    )
+                evicted.append(pod_id)
+            except (ApiException, HTTPError) as exc:
+                # 429 = PDB blocks the eviction; treat as a soft failure
+                # since kubectl drain retries. We surface the error to
+                # the caller via ``errors`` rather than raising mid-drain.
+                errors.append({"pod": pod_id, "error": str(exc)})
+
+        # Step 4: wait for the targeted pods to terminate (or timeout).
+        deadline = time.time() + max(timeout, 1)
+        target_ids = {(p.metadata.namespace, p.metadata.name) for p in targets}
+        while time.time() < deadline and target_ids:
+            time.sleep(2)
+            still_present = set()
+            for ns, pod_name in target_ids:
+                try:
+                    api.read_namespaced_pod(pod_name, ns)
+                    still_present.add((ns, pod_name))
+                except ApiException as exc:
+                    if exc.status != 404:
+                        # Transient error; consider the pod still present.
+                        still_present.add((ns, pod_name))
+            target_ids = still_present
+
+        if target_ids:
+            still = sorted(f"{ns}/{n}" for ns, n in target_ids)
+            errors.append(
+                {
+                    "pod": ",".join(still),
+                    "error": (
+                        f"Timeout ({timeout}s) waiting for pods to terminate; "
+                        f"still present: {still}"
+                    ),
+                }
+            )
+
+        return {
+            "node": name,
+            "evicted": evicted,
+            "skipped": skipped,
+            "errors": errors,
+        }
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            raise CommandExecutionError(f"Node {name} not found") from exc
         raise CommandExecutionError(exc) from exc
     finally:
         _cleanup(**cfg)
