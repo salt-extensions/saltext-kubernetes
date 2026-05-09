@@ -94,11 +94,28 @@ try:
     import kubernetes  # pylint: disable=import-self
     import kubernetes.client
     from kubernetes.client import ApiClient
+    from kubernetes.client import V1ClusterRole
+    from kubernetes.client import V1ClusterRoleBinding
     from kubernetes.client import V1Deployment
     from kubernetes.client import V1DeploymentSpec
+    from kubernetes.client import V1PolicyRule
+    from kubernetes.client import V1Role
+    from kubernetes.client import V1RoleBinding
+    from kubernetes.client import V1RoleRef
+    from kubernetes.client import V1ServiceAccount
     from kubernetes.client.rest import ApiException
     from kubernetes.watch import Watch
     from urllib3.exceptions import HTTPError
+
+    # The RBAC-V1 Subject class was renamed from ``V1Subject`` to
+    # ``RbacV1Subject`` in kubernetes-client 26.x to disambiguate from
+    # other ``*Subject`` types. Both names refer to the same wire shape;
+    # we accept whichever the installed client provides so the extension
+    # remains compatible with our ``kubernetes>=19.15.0`` floor.
+    try:
+        from kubernetes.client import RbacV1Subject as V1Subject
+    except ImportError:  # kubernetes-client < 26
+        from kubernetes.client import V1Subject  # noqa: F401
 
     HAS_LIBS = True
 except ImportError:
@@ -4107,6 +4124,1206 @@ def patch_storageclass(
         _cleanup(**cfg)
 
 
+# ---------------------------------------------------------------------------
+# RBAC: Role, RoleBinding, ClusterRole, ClusterRoleBinding, ServiceAccount
+#
+# All five share the same six-verb surface (list/show/create/replace/patch/
+# delete). Role and RoleBinding are namespaced; ClusterRole and
+# ClusterRoleBinding are cluster-scoped; ServiceAccount is namespaced and
+# lives on CoreV1Api rather than RbacAuthorizationV1Api.
+#
+# .. versionadded:: 2.1.0
+# ---------------------------------------------------------------------------
+
+
+def _rbac_api():
+    """Convenience: the RbacAuthorizationV1Api instance."""
+    return kubernetes.client.RbacAuthorizationV1Api()
+
+
+def _is_immutable_role_ref_error(exc):
+    """
+    Recognise the API server's 'roleRef cannot change' rejection.
+
+    The exact phrasing varies across K8s versions; the empirically
+    observed forms include "cannot change roleRef", "is immutable",
+    and "cannot be modified". Match any of them so the user sees the
+    helpful Salt-side error rather than a raw 422.
+    """
+    if not isinstance(exc, ApiException):
+        return False
+    msg = (exc.body or "").lower()
+    if "roleref" not in msg:
+        return False
+    return any(phrase in msg for phrase in ("cannot change", "immutable", "cannot be modified"))
+
+
+# --- list -------------------------------------------------------------------
+
+
+def roles(namespace="default", **kwargs):
+    """
+    Return a list of role names in *namespace*.
+
+    .. versionadded:: 2.1.0
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.roles namespace=kube-system
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        api_response = _rbac_api().list_namespaced_role(namespace)
+        return [
+            r["metadata"]["name"]
+            for r in ApiClient().sanitize_for_serialization(api_response).get("items", [])
+        ]
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            return []
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def role_bindings(namespace="default", **kwargs):
+    """
+    Return a list of role-binding names in *namespace*.
+
+    .. versionadded:: 2.1.0
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.role_bindings namespace=kube-system
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        api_response = _rbac_api().list_namespaced_role_binding(namespace)
+        return [
+            r["metadata"]["name"]
+            for r in ApiClient().sanitize_for_serialization(api_response).get("items", [])
+        ]
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            return []
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def cluster_roles(**kwargs):
+    """
+    Return a list of cluster-role names.
+
+    .. versionadded:: 2.1.0
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.cluster_roles
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        api_response = _rbac_api().list_cluster_role()
+        return [
+            r["metadata"]["name"]
+            for r in ApiClient().sanitize_for_serialization(api_response).get("items", [])
+        ]
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            return []
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def cluster_role_bindings(**kwargs):
+    """
+    Return a list of cluster-role-binding names.
+
+    .. versionadded:: 2.1.0
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.cluster_role_bindings
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        api_response = _rbac_api().list_cluster_role_binding()
+        return [
+            r["metadata"]["name"]
+            for r in ApiClient().sanitize_for_serialization(api_response).get("items", [])
+        ]
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            return []
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def service_accounts(namespace="default", **kwargs):
+    """
+    Return a list of service-account names in *namespace*.
+
+    .. versionadded:: 2.1.0
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.service_accounts namespace=kube-system
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        api_instance = kubernetes.client.CoreV1Api()
+        api_response = api_instance.list_namespaced_service_account(namespace)
+        return [
+            sa["metadata"]["name"]
+            for sa in ApiClient().sanitize_for_serialization(api_response).get("items", [])
+        ]
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            return []
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+# --- show -------------------------------------------------------------------
+
+
+def show_role(name, namespace="default", **kwargs):
+    """
+    Return the role *name* in *namespace*, or ``None`` if absent.
+
+    .. versionadded:: 2.1.0
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.show_role
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        api_response = _rbac_api().read_namespaced_role(name, namespace)
+        return ApiClient().sanitize_for_serialization(api_response)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            return None
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def show_role_binding(name, namespace="default", **kwargs):
+    """
+    Return the role-binding *name* in *namespace*, or ``None`` if absent.
+
+    .. versionadded:: 2.1.0
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.show_role_binding
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        api_response = _rbac_api().read_namespaced_role_binding(name, namespace)
+        return ApiClient().sanitize_for_serialization(api_response)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            return None
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def show_cluster_role(name, **kwargs):
+    """
+    Return the cluster-role *name*, or ``None`` if absent.
+
+    .. versionadded:: 2.1.0
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.show_cluster_role
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        api_response = _rbac_api().read_cluster_role(name)
+        return ApiClient().sanitize_for_serialization(api_response)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            return None
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def show_cluster_role_binding(name, **kwargs):
+    """
+    Return the cluster-role-binding *name*, or ``None`` if absent.
+
+    .. versionadded:: 2.1.0
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.show_cluster_role_binding
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        api_response = _rbac_api().read_cluster_role_binding(name)
+        return ApiClient().sanitize_for_serialization(api_response)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            return None
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def show_service_account(name, namespace="default", **kwargs):
+    """
+    Return the service-account *name* in *namespace*, or ``None`` if absent.
+
+    .. versionadded:: 2.1.0
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.show_service_account
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        api_instance = kubernetes.client.CoreV1Api()
+        api_response = api_instance.read_namespaced_service_account(name, namespace)
+        return ApiClient().sanitize_for_serialization(api_response)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            return None
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+# --- create -----------------------------------------------------------------
+
+
+def _resolve_rbac_source(source, kind, template, saltenv, template_context, metadata, spec):
+    """
+    Shared source-file loading for RBAC create/replace/patch.
+
+    *kind* is the K8s ``kind:`` value the source must declare. Returns
+    the (possibly updated) ``metadata`` and ``spec`` tuple.
+    """
+    src_obj = __read_and_render_yaml_file(source, template, saltenv, template_context)
+    if not isinstance(src_obj, dict) or src_obj.get("kind") != kind:
+        raise CommandExecutionError(f"The source file should define only a {kind} object")
+    if "metadata" in src_obj:
+        metadata = src_obj["metadata"]
+    if spec is None:
+        spec = {
+            key: value
+            for key, value in src_obj.items()
+            if key not in ("apiVersion", "kind", "metadata")
+        }
+    return metadata, spec
+
+
+def create_role(
+    name,
+    namespace="default",
+    metadata=None,
+    spec=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    dry_run=False,
+    **kwargs,
+):
+    """
+    Create a Role in *namespace* from a *spec* dict (with a ``rules`` list)
+    or a *source* file path. Returns the created object.
+
+    .. versionadded:: 2.1.0
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.create_role name=pod-reader namespace=default \
+            spec='{"rules": [{"apiGroups": [""], "resources": ["pods"], "verbs": ["get","list"]}]}'
+    """
+    if source:
+        metadata, spec = _resolve_rbac_source(
+            source, "Role", template, saltenv, template_context, metadata, spec
+        )
+    if metadata is None:
+        metadata = {}
+    if spec is None:
+        spec = {}
+
+    body_kwargs = __dict_to_role_spec(spec)
+    body = V1Role(metadata=__dict_to_object_meta(name, namespace, metadata), **body_kwargs)
+
+    cfg = _setup_conn(**kwargs)
+    try:
+        api_response = _rbac_api().create_namespaced_role(
+            namespace, body, dry_run="All" if dry_run else None
+        )
+        return ApiClient().sanitize_for_serialization(api_response)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException):
+            if exc.status == 404:
+                raise CommandExecutionError(f"Role {name} not found") from exc
+            if exc.status == 409:
+                raise CommandExecutionError(f"Role {name} already exists") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def create_role_binding(
+    name,
+    namespace="default",
+    metadata=None,
+    spec=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    dry_run=False,
+    **kwargs,
+):
+    """
+    Create a RoleBinding in *namespace* from a *spec* dict (with ``subjects``
+    + ``roleRef``) or a *source* file path.
+
+    .. versionadded:: 2.1.0
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.create_role_binding
+    """
+    if source:
+        metadata, spec = _resolve_rbac_source(
+            source, "RoleBinding", template, saltenv, template_context, metadata, spec
+        )
+    if metadata is None:
+        metadata = {}
+    if spec is None:
+        spec = {}
+
+    body_kwargs = __dict_to_role_binding_spec(spec)
+    body = V1RoleBinding(metadata=__dict_to_object_meta(name, namespace, metadata), **body_kwargs)
+
+    cfg = _setup_conn(**kwargs)
+    try:
+        api_response = _rbac_api().create_namespaced_role_binding(
+            namespace, body, dry_run="All" if dry_run else None
+        )
+        return ApiClient().sanitize_for_serialization(api_response)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException):
+            if exc.status == 404:
+                raise CommandExecutionError(f"RoleBinding {name} not found") from exc
+            if exc.status == 409:
+                raise CommandExecutionError(f"RoleBinding {name} already exists") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def create_cluster_role(
+    name,
+    metadata=None,
+    spec=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    dry_run=False,
+    **kwargs,
+):
+    """
+    Create a ClusterRole from a *spec* dict (``rules`` and optional
+    ``aggregationRule``) or a *source* file path.
+
+    .. versionadded:: 2.1.0
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.create_cluster_role
+    """
+    if source:
+        metadata, spec = _resolve_rbac_source(
+            source, "ClusterRole", template, saltenv, template_context, metadata, spec
+        )
+    if metadata is None:
+        metadata = {}
+    if spec is None:
+        spec = {}
+
+    body_kwargs = __dict_to_cluster_role_spec(spec)
+    body = V1ClusterRole(metadata=__dict_to_object_meta(name, None, metadata), **body_kwargs)
+
+    cfg = _setup_conn(**kwargs)
+    try:
+        api_response = _rbac_api().create_cluster_role(body, dry_run="All" if dry_run else None)
+        return ApiClient().sanitize_for_serialization(api_response)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException):
+            if exc.status == 404:
+                raise CommandExecutionError(f"ClusterRole {name} not found") from exc
+            if exc.status == 409:
+                raise CommandExecutionError(f"ClusterRole {name} already exists") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def create_cluster_role_binding(
+    name,
+    metadata=None,
+    spec=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    dry_run=False,
+    **kwargs,
+):
+    """
+    Create a ClusterRoleBinding from a *spec* dict (``subjects`` +
+    ``roleRef``) or a *source* file path.
+
+    .. versionadded:: 2.1.0
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.create_cluster_role_binding
+    """
+    if source:
+        metadata, spec = _resolve_rbac_source(
+            source, "ClusterRoleBinding", template, saltenv, template_context, metadata, spec
+        )
+    if metadata is None:
+        metadata = {}
+    if spec is None:
+        spec = {}
+
+    body_kwargs = __dict_to_role_binding_spec(spec)
+    body = V1ClusterRoleBinding(metadata=__dict_to_object_meta(name, None, metadata), **body_kwargs)
+
+    cfg = _setup_conn(**kwargs)
+    try:
+        api_response = _rbac_api().create_cluster_role_binding(
+            body, dry_run="All" if dry_run else None
+        )
+        return ApiClient().sanitize_for_serialization(api_response)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException):
+            if exc.status == 404:
+                raise CommandExecutionError(f"ClusterRoleBinding {name} not found") from exc
+            if exc.status == 409:
+                raise CommandExecutionError(f"ClusterRoleBinding {name} already exists") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def create_service_account(
+    name,
+    namespace="default",
+    metadata=None,
+    spec=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    dry_run=False,
+    **kwargs,
+):
+    """
+    Create a ServiceAccount in *namespace* from optional fields
+    (``automount_service_account_token``, ``image_pull_secrets``, ``secrets``)
+    or a *source* file path.
+
+    .. versionadded:: 2.1.0
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.create_service_account
+    """
+    if source:
+        metadata, spec = _resolve_rbac_source(
+            source, "ServiceAccount", template, saltenv, template_context, metadata, spec
+        )
+    if metadata is None:
+        metadata = {}
+
+    body_kwargs = __dict_to_service_account_spec(spec)
+    body = V1ServiceAccount(
+        metadata=__dict_to_object_meta(name, namespace, metadata), **body_kwargs
+    )
+
+    cfg = _setup_conn(**kwargs)
+    try:
+        api_instance = kubernetes.client.CoreV1Api()
+        api_response = api_instance.create_namespaced_service_account(
+            namespace, body, dry_run="All" if dry_run else None
+        )
+        return ApiClient().sanitize_for_serialization(api_response)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException):
+            if exc.status == 404:
+                raise CommandExecutionError(f"ServiceAccount {name} not found") from exc
+            if exc.status == 409:
+                raise CommandExecutionError(f"ServiceAccount {name} already exists") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+# --- replace ---------------------------------------------------------------
+
+
+def replace_role(
+    name,
+    namespace="default",
+    metadata=None,
+    spec=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    **kwargs,
+):
+    """
+    Replace an existing Role. .. versionadded:: 2.1.0
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.replace_role
+    """
+    if source:
+        metadata, spec = _resolve_rbac_source(
+            source, "Role", template, saltenv, template_context, metadata, spec
+        )
+    if metadata is None:
+        metadata = {}
+    if spec is None:
+        spec = {}
+
+    body_kwargs = __dict_to_role_spec(spec)
+    body = V1Role(metadata=__dict_to_object_meta(name, namespace, metadata), **body_kwargs)
+
+    cfg = _setup_conn(**kwargs)
+    try:
+        api_response = _rbac_api().replace_namespaced_role(name, namespace, body)
+        return ApiClient().sanitize_for_serialization(api_response)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            raise CommandExecutionError(f"Role {name} not found") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def replace_role_binding(
+    name,
+    namespace="default",
+    metadata=None,
+    spec=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    **kwargs,
+):
+    """
+    Replace an existing RoleBinding.
+
+    .. versionadded:: 2.1.0
+
+    .. note::
+        The Kubernetes API server treats ``roleRef`` as immutable. If your
+        replacement changes ``roleRef``, the API will reject it; this
+        function surfaces the error explicitly with a clear message rather
+        than silently no-op'ing. To change a binding's ``roleRef`` you
+        must delete and recreate the binding.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.replace_role_binding
+    """
+    if source:
+        metadata, spec = _resolve_rbac_source(
+            source, "RoleBinding", template, saltenv, template_context, metadata, spec
+        )
+    if metadata is None:
+        metadata = {}
+    if spec is None:
+        spec = {}
+
+    body_kwargs = __dict_to_role_binding_spec(spec)
+    body = V1RoleBinding(metadata=__dict_to_object_meta(name, namespace, metadata), **body_kwargs)
+
+    cfg = _setup_conn(**kwargs)
+    try:
+        api_response = _rbac_api().replace_namespaced_role_binding(name, namespace, body)
+        return ApiClient().sanitize_for_serialization(api_response)
+    except (ApiException, HTTPError) as exc:
+        if _is_immutable_role_ref_error(exc):
+            raise CommandExecutionError(
+                f"RoleBinding {name}: roleRef is immutable. To change the "
+                "referenced role, delete the binding and create a new one."
+            ) from exc
+        if isinstance(exc, ApiException) and exc.status == 404:
+            raise CommandExecutionError(f"RoleBinding {name} not found") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def replace_cluster_role(
+    name,
+    metadata=None,
+    spec=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    **kwargs,
+):
+    """
+    Replace an existing ClusterRole. .. versionadded:: 2.1.0
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.replace_cluster_role
+    """
+    if source:
+        metadata, spec = _resolve_rbac_source(
+            source, "ClusterRole", template, saltenv, template_context, metadata, spec
+        )
+    if metadata is None:
+        metadata = {}
+    if spec is None:
+        spec = {}
+
+    body_kwargs = __dict_to_cluster_role_spec(spec)
+    body = V1ClusterRole(metadata=__dict_to_object_meta(name, None, metadata), **body_kwargs)
+
+    cfg = _setup_conn(**kwargs)
+    try:
+        api_response = _rbac_api().replace_cluster_role(name, body)
+        return ApiClient().sanitize_for_serialization(api_response)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            raise CommandExecutionError(f"ClusterRole {name} not found") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def replace_cluster_role_binding(
+    name,
+    metadata=None,
+    spec=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    **kwargs,
+):
+    """
+    Replace an existing ClusterRoleBinding.
+
+    .. versionadded:: 2.1.0
+
+    .. note::
+        ``roleRef`` is immutable; see :py:func:`replace_role_binding`.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.replace_cluster_role_binding
+    """
+    if source:
+        metadata, spec = _resolve_rbac_source(
+            source, "ClusterRoleBinding", template, saltenv, template_context, metadata, spec
+        )
+    if metadata is None:
+        metadata = {}
+    if spec is None:
+        spec = {}
+
+    body_kwargs = __dict_to_role_binding_spec(spec)
+    body = V1ClusterRoleBinding(metadata=__dict_to_object_meta(name, None, metadata), **body_kwargs)
+
+    cfg = _setup_conn(**kwargs)
+    try:
+        api_response = _rbac_api().replace_cluster_role_binding(name, body)
+        return ApiClient().sanitize_for_serialization(api_response)
+    except (ApiException, HTTPError) as exc:
+        if _is_immutable_role_ref_error(exc):
+            raise CommandExecutionError(
+                f"ClusterRoleBinding {name}: roleRef is immutable. To change "
+                "the referenced role, delete the binding and create a new one."
+            ) from exc
+        if isinstance(exc, ApiException) and exc.status == 404:
+            raise CommandExecutionError(f"ClusterRoleBinding {name} not found") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def replace_service_account(
+    name,
+    namespace="default",
+    metadata=None,
+    spec=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    **kwargs,
+):
+    """
+    Replace an existing ServiceAccount. .. versionadded:: 2.1.0
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.replace_service_account
+    """
+    if source:
+        metadata, spec = _resolve_rbac_source(
+            source, "ServiceAccount", template, saltenv, template_context, metadata, spec
+        )
+    if metadata is None:
+        metadata = {}
+
+    body_kwargs = __dict_to_service_account_spec(spec)
+    body = V1ServiceAccount(
+        metadata=__dict_to_object_meta(name, namespace, metadata), **body_kwargs
+    )
+
+    cfg = _setup_conn(**kwargs)
+    try:
+        api_instance = kubernetes.client.CoreV1Api()
+        api_response = api_instance.replace_namespaced_service_account(name, namespace, body)
+        return ApiClient().sanitize_for_serialization(api_response)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            raise CommandExecutionError(f"ServiceAccount {name} not found") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+# --- patch ------------------------------------------------------------------
+
+
+def _normalise_rbac_patch(patch, kind):
+    """Allow state-style ``{spec: ...}`` payloads; flatten to top-level keys."""
+    if not isinstance(patch, dict):
+        raise CommandExecutionError(f"{kind} patch must be a dictionary")
+    if "spec" in patch:
+        spec_patch = patch.get("spec")
+        if not isinstance(spec_patch, dict):
+            raise CommandExecutionError(f"{kind} spec patch must be a dictionary")
+        patch = {key: value for key, value in patch.items() if key != "spec"}
+        patch.update(spec_patch)
+    return patch
+
+
+def patch_role(
+    name,
+    namespace="default",
+    patch=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    dry_run=False,
+    **kwargs,
+):
+    """
+    Patch a Role with a strategic-merge patch. .. versionadded:: 2.1.0
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.patch_role
+    """
+    if source:
+        patch = __read_and_render_yaml_file(source, template, saltenv, template_context)
+        if isinstance(patch, dict) and patch.get("kind") == "Role":
+            patch = {k: v for k, v in patch.items() if k not in ("apiVersion", "kind")}
+    patch = _normalise_rbac_patch(patch, "Role")
+    cfg = _setup_conn(**kwargs)
+    try:
+        api_response = _rbac_api().patch_namespaced_role(
+            name, namespace, patch, dry_run="All" if dry_run else None
+        )
+        return ApiClient().sanitize_for_serialization(api_response)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            raise CommandExecutionError(f"Role {name} not found") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def patch_role_binding(
+    name,
+    namespace="default",
+    patch=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    dry_run=False,
+    **kwargs,
+):
+    """Patch a RoleBinding. .. versionadded:: 2.1.0
+
+    .. note::
+        ``roleRef`` is immutable; including it in *patch* will be rejected.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.patch_role_binding
+    """
+    if source:
+        patch = __read_and_render_yaml_file(source, template, saltenv, template_context)
+        if isinstance(patch, dict) and patch.get("kind") == "RoleBinding":
+            patch = {k: v for k, v in patch.items() if k not in ("apiVersion", "kind")}
+    patch = _normalise_rbac_patch(patch, "RoleBinding")
+    cfg = _setup_conn(**kwargs)
+    try:
+        api_response = _rbac_api().patch_namespaced_role_binding(
+            name, namespace, patch, dry_run="All" if dry_run else None
+        )
+        return ApiClient().sanitize_for_serialization(api_response)
+    except (ApiException, HTTPError) as exc:
+        if _is_immutable_role_ref_error(exc):
+            raise CommandExecutionError(
+                f"RoleBinding {name}: roleRef is immutable; remove it from the patch."
+            ) from exc
+        if isinstance(exc, ApiException) and exc.status == 404:
+            raise CommandExecutionError(f"RoleBinding {name} not found") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def patch_cluster_role(
+    name,
+    patch=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    dry_run=False,
+    **kwargs,
+):
+    """
+    Patch a ClusterRole. .. versionadded:: 2.1.0
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.patch_cluster_role
+    """
+    if source:
+        patch = __read_and_render_yaml_file(source, template, saltenv, template_context)
+        if isinstance(patch, dict) and patch.get("kind") == "ClusterRole":
+            patch = {k: v for k, v in patch.items() if k not in ("apiVersion", "kind")}
+    patch = _normalise_rbac_patch(patch, "ClusterRole")
+    cfg = _setup_conn(**kwargs)
+    try:
+        api_response = _rbac_api().patch_cluster_role(
+            name, patch, dry_run="All" if dry_run else None
+        )
+        return ApiClient().sanitize_for_serialization(api_response)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            raise CommandExecutionError(f"ClusterRole {name} not found") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def patch_cluster_role_binding(
+    name,
+    patch=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    dry_run=False,
+    **kwargs,
+):
+    """Patch a ClusterRoleBinding. .. versionadded:: 2.1.0
+
+    .. note::
+        ``roleRef`` is immutable; including it in *patch* will be rejected.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.patch_cluster_role_binding
+    """
+    if source:
+        patch = __read_and_render_yaml_file(source, template, saltenv, template_context)
+        if isinstance(patch, dict) and patch.get("kind") == "ClusterRoleBinding":
+            patch = {k: v for k, v in patch.items() if k not in ("apiVersion", "kind")}
+    patch = _normalise_rbac_patch(patch, "ClusterRoleBinding")
+    cfg = _setup_conn(**kwargs)
+    try:
+        api_response = _rbac_api().patch_cluster_role_binding(
+            name, patch, dry_run="All" if dry_run else None
+        )
+        return ApiClient().sanitize_for_serialization(api_response)
+    except (ApiException, HTTPError) as exc:
+        if _is_immutable_role_ref_error(exc):
+            raise CommandExecutionError(
+                f"ClusterRoleBinding {name}: roleRef is immutable; " "remove it from the patch."
+            ) from exc
+        if isinstance(exc, ApiException) and exc.status == 404:
+            raise CommandExecutionError(f"ClusterRoleBinding {name} not found") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def patch_service_account(
+    name,
+    namespace="default",
+    patch=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    dry_run=False,
+    **kwargs,
+):
+    """
+    Patch a ServiceAccount. .. versionadded:: 2.1.0
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.patch_service_account
+    """
+    if source:
+        patch = __read_and_render_yaml_file(source, template, saltenv, template_context)
+        if isinstance(patch, dict) and patch.get("kind") == "ServiceAccount":
+            patch = {k: v for k, v in patch.items() if k not in ("apiVersion", "kind")}
+    patch = _normalise_rbac_patch(patch, "ServiceAccount")
+    cfg = _setup_conn(**kwargs)
+    try:
+        api_instance = kubernetes.client.CoreV1Api()
+        api_response = api_instance.patch_namespaced_service_account(
+            name, namespace, patch, dry_run="All" if dry_run else None
+        )
+        return ApiClient().sanitize_for_serialization(api_response)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            raise CommandExecutionError(f"ServiceAccount {name} not found") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+# --- delete -----------------------------------------------------------------
+
+
+def delete_role(name, namespace="default", wait=False, timeout=60, **kwargs):
+    """
+    Delete a Role. .. versionadded:: 2.1.0
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.delete_role
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        api_instance = _rbac_api()
+        api_response = api_instance.delete_namespaced_role(name, namespace)
+        if wait:
+            if not _wait_for_resource_status(
+                api_instance, "role", name, namespace, "deleted", timeout
+            ):
+                raise CommandExecutionError(f"Timeout waiting for Role {name} to be deleted")
+        return ApiClient().sanitize_for_serialization(api_response)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            return None
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def delete_role_binding(name, namespace="default", wait=False, timeout=60, **kwargs):
+    """
+    Delete a RoleBinding. .. versionadded:: 2.1.0
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.delete_role_binding
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        api_instance = _rbac_api()
+        api_response = api_instance.delete_namespaced_role_binding(name, namespace)
+        if wait:
+            if not _wait_for_resource_status(
+                api_instance, "role_binding", name, namespace, "deleted", timeout
+            ):
+                raise CommandExecutionError(f"Timeout waiting for RoleBinding {name} to be deleted")
+        return ApiClient().sanitize_for_serialization(api_response)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            return None
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def delete_cluster_role(name, wait=False, timeout=60, **kwargs):
+    """
+    Delete a ClusterRole. .. versionadded:: 2.1.0
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.delete_cluster_role
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        api_instance = _rbac_api()
+        api_response = api_instance.delete_cluster_role(name)
+        if wait:
+            if not _wait_for_resource_status(
+                api_instance, "cluster_role", name, None, "deleted", timeout
+            ):
+                raise CommandExecutionError(f"Timeout waiting for ClusterRole {name} to be deleted")
+        return ApiClient().sanitize_for_serialization(api_response)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            return None
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def delete_cluster_role_binding(name, wait=False, timeout=60, **kwargs):
+    """
+    Delete a ClusterRoleBinding. .. versionadded:: 2.1.0
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.delete_cluster_role_binding
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        api_instance = _rbac_api()
+        api_response = api_instance.delete_cluster_role_binding(name)
+        if wait:
+            if not _wait_for_resource_status(
+                api_instance, "cluster_role_binding", name, None, "deleted", timeout
+            ):
+                raise CommandExecutionError(
+                    f"Timeout waiting for ClusterRoleBinding {name} to be deleted"
+                )
+        return ApiClient().sanitize_for_serialization(api_response)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            return None
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def delete_service_account(name, namespace="default", wait=False, timeout=60, **kwargs):
+    """
+    Delete a ServiceAccount. .. versionadded:: 2.1.0
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.delete_service_account
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        api_instance = kubernetes.client.CoreV1Api()
+        api_response = api_instance.delete_namespaced_service_account(name, namespace)
+        if wait:
+            if not _wait_for_resource_status(
+                api_instance, "service_account", name, namespace, "deleted", timeout
+            ):
+                raise CommandExecutionError(
+                    f"Timeout waiting for ServiceAccount {name} to be deleted"
+                )
+        return ApiClient().sanitize_for_serialization(api_response)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            return None
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
 def __is_base64(value):
     """
     Check if a string is base64 encoded by attempting to decode it.
@@ -4746,6 +5963,171 @@ def __dict_to_storageclass_spec(spec):
         raise CommandExecutionError(f"Invalid storageclass spec: {exc}") from exc
 
     return processed_spec
+
+
+# ---------------------------------------------------------------------------
+# RBAC spec builders.
+#
+# Role and ClusterRole carry a ``rules`` list (and ClusterRole optionally an
+# ``aggregation_rule``). RoleBinding and ClusterRoleBinding carry a
+# ``subjects`` list and a ``role_ref``. ServiceAccount has no spec block —
+# its top-level fields go directly on V1ServiceAccount.
+#
+# All builders accept either snake_case or camelCase keys at the top level
+# and return a dict ready to **kwargs into the corresponding V1 constructor.
+# ---------------------------------------------------------------------------
+
+
+# The kubernetes-client OpenAPI generator maps ``nonResourceURLs`` to the
+# awkward ``non_resource_ur_ls`` (the trailing capital sequence becomes its
+# own underscore-separated token). We accept both ``non_resource_urls`` and
+# ``nonResourceURLs`` from callers and translate to the actual constructor
+# kwarg name.
+_RULES_FIELD_MAP = {
+    "apiGroups": "api_groups",
+    "resources": "resources",
+    "verbs": "verbs",
+    "resourceNames": "resource_names",
+    "nonResourceURLs": "non_resource_ur_ls",
+    "non_resource_urls": "non_resource_ur_ls",
+}
+
+
+def __dict_to_policy_rule_list(rules):
+    """Build a list of V1PolicyRule from a list of rule dicts."""
+    if rules is None:
+        return []
+    if not isinstance(rules, list):
+        raise CommandExecutionError("Rules must be a list of rule dicts")
+    out = []
+    for rule in rules:
+        if not isinstance(rule, dict):
+            raise CommandExecutionError("Each rule must be a dictionary")
+        normalised = {_RULES_FIELD_MAP.get(k, k): v for k, v in rule.items()}
+        if "verbs" not in normalised or not normalised["verbs"]:
+            raise CommandExecutionError("Each rule must include a non-empty 'verbs' list")
+        try:
+            out.append(V1PolicyRule(**normalised))
+        except (TypeError, ValueError) as exc:
+            raise CommandExecutionError(f"Invalid rule {rule}: {exc}") from exc
+    return out
+
+
+def __dict_to_subject_list(subjects):
+    """Build a list of V1Subject from a list of subject dicts."""
+    if not isinstance(subjects, list):
+        raise CommandExecutionError("Subjects must be a list")
+    out = []
+    for subject in subjects:
+        if not isinstance(subject, dict):
+            raise CommandExecutionError("Each subject must be a dictionary")
+        # Build a fresh dict so we don't mutate the caller's input. Translate
+        # camelCase ``apiGroup`` to the snake_case kwarg the V1 class expects.
+        normalised = {("api_group" if k == "apiGroup" else k): v for k, v in subject.items()}
+        if "kind" not in normalised or "name" not in normalised:
+            raise CommandExecutionError("Each subject must include 'kind' and 'name'")
+        try:
+            out.append(V1Subject(**normalised))
+        except (TypeError, ValueError) as exc:
+            raise CommandExecutionError(f"Invalid subject {subject}: {exc}") from exc
+    return out
+
+
+def __dict_to_role_ref(role_ref):
+    """Build a V1RoleRef from a dict; defaults api_group to rbac.authorization.k8s.io."""
+    if not isinstance(role_ref, dict):
+        raise CommandExecutionError("roleRef must be a dictionary")
+    normalised = {**role_ref}
+    if "apiGroup" in normalised:
+        normalised["api_group"] = normalised.pop("apiGroup")
+    normalised.setdefault("api_group", "rbac.authorization.k8s.io")
+    if "kind" not in normalised or "name" not in normalised:
+        raise CommandExecutionError("roleRef must include 'kind' and 'name'")
+    try:
+        return V1RoleRef(**normalised)
+    except (TypeError, ValueError) as exc:
+        raise CommandExecutionError(f"Invalid roleRef: {exc}") from exc
+
+
+def __dict_to_role_spec(spec):
+    """Validate a dict and return kwargs for V1Role / V1ClusterRole."""
+    if not isinstance(spec, dict):
+        raise CommandExecutionError(f"Role spec must be a dictionary, not {type(spec).__name__}")
+    out = {"rules": __dict_to_policy_rule_list(spec.get("rules"))}
+    return out
+
+
+def __dict_to_cluster_role_spec(spec):
+    """Like __dict_to_role_spec but also accepts an optional aggregation_rule."""
+    if not isinstance(spec, dict):
+        raise CommandExecutionError(
+            f"ClusterRole spec must be a dictionary, not {type(spec).__name__}"
+        )
+    out = {"rules": __dict_to_policy_rule_list(spec.get("rules"))}
+    aggregation_rule = spec.get("aggregationRule") or spec.get("aggregation_rule")
+    if aggregation_rule is not None:
+        if not isinstance(aggregation_rule, dict):
+            raise CommandExecutionError("aggregationRule must be a dictionary")
+        selectors = aggregation_rule.get("clusterRoleSelectors") or aggregation_rule.get(
+            "cluster_role_selectors"
+        )
+        if not isinstance(selectors, list):
+            raise CommandExecutionError("aggregationRule.clusterRoleSelectors must be a list")
+        out["aggregation_rule"] = kubernetes.client.V1AggregationRule(
+            cluster_role_selectors=[kubernetes.client.V1LabelSelector(**sel) for sel in selectors]
+        )
+    return out
+
+
+def __dict_to_role_binding_spec(spec):
+    """Validate a dict and return kwargs for V1RoleBinding / V1ClusterRoleBinding."""
+    if not isinstance(spec, dict):
+        raise CommandExecutionError(
+            f"RoleBinding spec must be a dictionary, not {type(spec).__name__}"
+        )
+    if "subjects" not in spec:
+        raise CommandExecutionError("RoleBinding spec must include 'subjects'")
+    role_ref_in = spec.get("roleRef") or spec.get("role_ref")
+    if role_ref_in is None:
+        raise CommandExecutionError("RoleBinding spec must include 'roleRef'")
+    return {
+        "subjects": __dict_to_subject_list(spec["subjects"]),
+        "role_ref": __dict_to_role_ref(role_ref_in),
+    }
+
+
+def __dict_to_service_account_spec(spec):
+    """
+    Validate a dict and return kwargs for V1ServiceAccount.
+
+    ServiceAccount has no .spec block; the supported fields are
+    ``automount_service_account_token``, ``image_pull_secrets`` and
+    ``secrets``. We accept either snake_case or camelCase top-level keys.
+    """
+    if spec is None:
+        spec = {}
+    if not isinstance(spec, dict):
+        raise CommandExecutionError(
+            f"ServiceAccount spec must be a dictionary, not {type(spec).__name__}"
+        )
+    out = {}
+    if "automountServiceAccountToken" in spec or "automount_service_account_token" in spec:
+        out["automount_service_account_token"] = spec.get(
+            "automount_service_account_token", spec.get("automountServiceAccountToken")
+        )
+    pull_secrets = spec.get("imagePullSecrets") or spec.get("image_pull_secrets")
+    if pull_secrets is not None:
+        if not isinstance(pull_secrets, list):
+            raise CommandExecutionError("imagePullSecrets must be a list of {name: ...} dicts")
+        out["image_pull_secrets"] = [
+            kubernetes.client.V1LocalObjectReference(**ps) for ps in pull_secrets
+        ]
+    secrets = spec.get("secrets")
+    if secrets is not None:
+        if not isinstance(secrets, list):
+            raise CommandExecutionError("secrets must be a list of object reference dicts")
+        out["secrets"] = [kubernetes.client.V1ObjectReference(**s) for s in secrets]
+    return out
 
 
 def __enforce_only_strings_dict(dictionary):

@@ -166,6 +166,42 @@ _KIND_REGISTRY: dict[str, KindOps] = {
         namespaced=False,
         ready_predicate=_always_ready,
     ),
+    # RBAC
+    "role": KindOps(
+        api_class_attr="RbacAuthorizationV1Api",
+        list_method="list_namespaced_role",
+        read_method="read_namespaced_role",
+        namespaced=True,
+        ready_predicate=_always_ready,
+    ),
+    "role_binding": KindOps(
+        api_class_attr="RbacAuthorizationV1Api",
+        list_method="list_namespaced_role_binding",
+        read_method="read_namespaced_role_binding",
+        namespaced=True,
+        ready_predicate=_always_ready,
+    ),
+    "cluster_role": KindOps(
+        api_class_attr="RbacAuthorizationV1Api",
+        list_method="list_cluster_role",
+        read_method="read_cluster_role",
+        namespaced=False,
+        ready_predicate=_always_ready,
+    ),
+    "cluster_role_binding": KindOps(
+        api_class_attr="RbacAuthorizationV1Api",
+        list_method="list_cluster_role_binding",
+        read_method="read_cluster_role_binding",
+        namespaced=False,
+        ready_predicate=_always_ready,
+    ),
+    "service_account": KindOps(
+        api_class_attr="CoreV1Api",
+        list_method="list_namespaced_service_account",
+        read_method="read_namespaced_service_account",
+        namespaced=True,
+        ready_predicate=_always_ready,
+    ),
 }
 
 

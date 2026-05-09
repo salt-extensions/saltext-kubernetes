@@ -556,3 +556,135 @@ def labeled_node(kubernetes_exe, request, node_name):
 
         cleaned_labels = set(kubernetes_exe.node_labels(node_name))
         assert not cleaned_labels - set(initial_labels)
+
+
+# ---------------------------------------------------------------------------
+# RBAC fixtures (Role, RoleBinding, ClusterRole, ClusterRoleBinding,
+# ServiceAccount). Each follows the existing ``params=[True]`` convention so
+# tests can opt into "resource pre-created" or "test without resource" modes.
+#
+# .. versionadded:: 2.1.0
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def role_spec():
+    return {
+        "rules": [
+            {
+                "apiGroups": [""],
+                "resources": ["pods"],
+                "verbs": ["get", "list", "watch"],
+            }
+        ]
+    }
+
+
+@pytest.fixture(params=[True])
+def role(kubernetes_exe, role_spec, request):
+    """Create a Role in the default namespace; clean up on teardown."""
+    name = random_string("role-", uppercase=False)
+    if request.param:
+        res = kubernetes_exe.create_role(name=name, namespace="default", spec=role_spec)
+        assert isinstance(res, dict)
+        assert res["metadata"]["name"] == name
+    try:
+        yield {"name": name, "namespace": "default", "spec": role_spec}
+    finally:
+        kubernetes_exe.delete_role(name=name, namespace="default")
+        assert kubernetes_exe.show_role(name=name, namespace="default") is None
+
+
+@pytest.fixture
+def role_binding_spec(role):
+    return {
+        "subjects": [{"kind": "User", "name": "alice"}],
+        "roleRef": {"kind": "Role", "name": role["name"]},
+    }
+
+
+@pytest.fixture(params=[True])
+def role_binding(kubernetes_exe, role_binding_spec, request):
+    """Create a RoleBinding referencing the ``role`` fixture's Role."""
+    name = random_string("rolebinding-", uppercase=False)
+    if request.param:
+        res = kubernetes_exe.create_role_binding(
+            name=name, namespace="default", spec=role_binding_spec
+        )
+        assert isinstance(res, dict)
+        assert res["metadata"]["name"] == name
+    try:
+        yield {"name": name, "namespace": "default", "spec": role_binding_spec}
+    finally:
+        kubernetes_exe.delete_role_binding(name=name, namespace="default")
+        assert kubernetes_exe.show_role_binding(name=name, namespace="default") is None
+
+
+@pytest.fixture
+def cluster_role_spec():
+    return {
+        "rules": [
+            {
+                "apiGroups": [""],
+                "resources": ["nodes"],
+                "verbs": ["get", "list"],
+            }
+        ]
+    }
+
+
+@pytest.fixture(params=[True])
+def cluster_role(kubernetes_exe, cluster_role_spec, request):
+    name = random_string("clusterrole-", uppercase=False)
+    if request.param:
+        res = kubernetes_exe.create_cluster_role(name=name, spec=cluster_role_spec)
+        assert isinstance(res, dict)
+        assert res["metadata"]["name"] == name
+    try:
+        yield {"name": name, "spec": cluster_role_spec}
+    finally:
+        kubernetes_exe.delete_cluster_role(name=name)
+        assert kubernetes_exe.show_cluster_role(name=name) is None
+
+
+@pytest.fixture
+def cluster_role_binding_spec(cluster_role):
+    return {
+        "subjects": [{"kind": "User", "name": "alice"}],
+        "roleRef": {"kind": "ClusterRole", "name": cluster_role["name"]},
+    }
+
+
+@pytest.fixture(params=[True])
+def cluster_role_binding(kubernetes_exe, cluster_role_binding_spec, request):
+    name = random_string("clusterrolebinding-", uppercase=False)
+    if request.param:
+        res = kubernetes_exe.create_cluster_role_binding(name=name, spec=cluster_role_binding_spec)
+        assert isinstance(res, dict)
+        assert res["metadata"]["name"] == name
+    try:
+        yield {"name": name, "spec": cluster_role_binding_spec}
+    finally:
+        kubernetes_exe.delete_cluster_role_binding(name=name)
+        assert kubernetes_exe.show_cluster_role_binding(name=name) is None
+
+
+@pytest.fixture
+def service_account_spec():
+    return {"automountServiceAccountToken": False}
+
+
+@pytest.fixture(params=[True])
+def service_account(kubernetes_exe, service_account_spec, request):
+    name = random_string("sa-", uppercase=False)
+    if request.param:
+        res = kubernetes_exe.create_service_account(
+            name=name, namespace="default", spec=service_account_spec
+        )
+        assert isinstance(res, dict)
+        assert res["metadata"]["name"] == name
+    try:
+        yield {"name": name, "namespace": "default", "spec": service_account_spec}
+    finally:
+        kubernetes_exe.delete_service_account(name=name, namespace="default")
+        assert kubernetes_exe.show_service_account(name=name, namespace="default") is None

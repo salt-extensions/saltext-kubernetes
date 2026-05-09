@@ -34,6 +34,11 @@ EXPECTED_KINDS = {
     "configmap",
     "namespace",
     "storageclass",
+    "role",
+    "role_binding",
+    "cluster_role",
+    "cluster_role_binding",
+    "service_account",
 }
 
 

@@ -2489,3 +2489,408 @@ def node_label_present(name, node, value, **kwargs):
         ret["changes"] = {}
 
     return ret
+
+
+# ---------------------------------------------------------------------------
+# RBAC states: Role, RoleBinding, ClusterRole, ClusterRoleBinding,
+# ServiceAccount.
+#
+# .. versionadded:: 2.1.0
+#
+# All five kinds share a near-identical present/absent pattern, so the
+# bulk of the logic lives in :py:func:`_rbac_absent_impl` and
+# :py:func:`_rbac_present_impl` — the public ``*_present`` / ``*_absent``
+# states are thin per-kind wrappers around those helpers.
+# ---------------------------------------------------------------------------
+
+
+def _rbac_absent_impl(name, kind_lower, kind_pretty, namespaced, namespace, wait, timeout, kwargs):
+    """Shared body for the RBAC *_absent state functions."""
+    ret = {"name": name, "changes": {}, "result": False, "comment": ""}
+
+    show_fn = __salt__[f"kubernetes.show_{kind_lower}"]
+    delete_fn = __salt__[f"kubernetes.delete_{kind_lower}"]
+
+    show_args = (name, namespace) if namespaced else (name,)
+    delete_args = {"wait": wait, "timeout": timeout}
+    if namespaced:
+        delete_args["namespace"] = namespace
+
+    try:
+        existing = show_fn(*show_args, **kwargs)
+        if existing is None:
+            ret["result"] = True
+            ret["comment"] = f"The {kind_pretty} does not exist"
+            return ret
+        if __opts__["test"]:
+            ret["result"] = None
+            ret["comment"] = f"The {kind_pretty} is going to be deleted"
+            ret["changes"] = {"old": "present", "new": "absent"}
+            return ret
+        delete_fn(name, **delete_args, **kwargs)
+        ret["result"] = True
+        ret["changes"] = {"old": "present", "new": "absent"}
+        ret["comment"] = f"{kind_pretty} {name} deleted"
+    except CommandExecutionError as err:
+        log.error(str(err), exc_info_on_loglevel=logging.DEBUG)
+        ret["result"] = False
+        ret["comment"] = str(err)
+        ret["changes"] = {}
+    return ret
+
+
+def _rbac_present_impl(
+    name,
+    kind_lower,
+    kind_pretty,
+    namespaced,
+    namespace,
+    metadata,
+    spec,
+    source,
+    template,
+    template_context,
+    kwargs,
+):
+    """Shared body for the RBAC *_present state functions."""
+    ret = {"name": name, "changes": {}, "result": False, "comment": ""}
+
+    if (metadata or spec) and source:
+        return _error(ret, "'source' cannot be used in combination with 'metadata' or 'spec'")
+    if not source and metadata is None:
+        metadata = {}
+    if not source and spec is None:
+        spec = {}
+
+    show_fn = __salt__[f"kubernetes.show_{kind_lower}"]
+    create_fn = __salt__[f"kubernetes.create_{kind_lower}"]
+    patch_fn = __salt__[f"kubernetes.patch_{kind_lower}"]
+
+    show_args = (name, namespace) if namespaced else (name,)
+
+    create_kwargs = {
+        "name": name,
+        "metadata": metadata,
+        "spec": spec,
+        "source": source,
+        "template": template,
+        "saltenv": __env__,
+        "template_context": template_context,
+        "dry_run": bool(__opts__["test"]),
+    }
+    patch_kwargs = {"name": name, "dry_run": bool(__opts__["test"])}
+    if namespaced:
+        create_kwargs["namespace"] = namespace
+        patch_kwargs["namespace"] = namespace
+
+    try:
+        existing = show_fn(*show_args, **kwargs)
+
+        if existing is None:
+            try:
+                res = create_fn(**create_kwargs, **kwargs)
+            except CommandExecutionError as err:
+                if not __opts__["test"]:
+                    raise
+                ret["result"] = None
+                ret["comment"] = (
+                    f"The {kind_pretty} is going to be created. "
+                    f"Dry run failed, possibly due to dependencies not created yet: {err}"
+                )
+                return ret
+            ret["changes"] = {"old": {}, "new": res}
+            if __opts__["test"]:
+                ret["result"] = None
+                ret["comment"] = f"The {kind_pretty} is going to be created"
+            else:
+                ret["result"] = True
+                ret["comment"] = f"{kind_pretty} created"
+            return ret
+
+        if source:
+            patch_kwargs.update(
+                {"source": source, "template": template, "template_context": template_context}
+            )
+        else:
+            patch_obj = {}
+            if metadata:
+                patch_obj["metadata"] = metadata
+            if spec:
+                patch_obj["spec"] = spec
+            patch_kwargs["patch"] = patch_obj
+
+        try:
+            res = patch_fn(**patch_kwargs, **kwargs)
+        except CommandExecutionError as err:
+            if not __opts__["test"]:
+                raise
+            ret["result"] = None
+            ret["comment"] = (
+                f"The {kind_pretty} is going to be updated. "
+                f"Dry run failed, possibly due to dependencies not created yet: {err}"
+            )
+            return ret
+
+        if res == existing:
+            ret["result"] = True
+            ret["comment"] = f"The {kind_pretty} is already in the desired state"
+            return ret
+
+        ret["changes"] = _changes(existing, res)
+        if __opts__["test"]:
+            ret["result"] = None
+            ret["comment"] = f"The {kind_pretty} is going to be updated"
+        else:
+            ret["result"] = True
+            ret["comment"] = f"{kind_pretty} updated"
+    except CommandExecutionError as err:
+        log.error(str(err), exc_info_on_loglevel=logging.DEBUG)
+        ret["result"] = False
+        ret["comment"] = str(err)
+        ret["changes"] = {}
+    return ret
+
+
+def role_absent(name, namespace="default", wait=False, timeout=60, **kwargs):
+    """
+    Ensure the named Role is absent from *namespace*.
+
+    .. versionadded:: 2.1.0
+
+    .. code-block:: yaml
+
+        pod-reader:
+          kubernetes.role_absent:
+            - namespace: default
+    """
+    return _rbac_absent_impl(name, "role", "Role", True, namespace, wait, timeout, kwargs)
+
+
+def role_present(
+    name,
+    namespace="default",
+    metadata=None,
+    spec=None,
+    source="",
+    template="",
+    template_context=None,
+    **kwargs,
+):
+    """
+    Ensure the named Role is present with the given rules.
+
+    .. versionadded:: 2.1.0
+
+    .. code-block:: yaml
+
+        pod-reader:
+          kubernetes.role_present:
+            - namespace: default
+            - spec:
+                rules:
+                  - apiGroups: [""]
+                    resources: ["pods"]
+                    verbs: ["get", "list", "watch"]
+    """
+    return _rbac_present_impl(
+        name,
+        "role",
+        "Role",
+        True,
+        namespace,
+        metadata,
+        spec,
+        source,
+        template,
+        template_context,
+        kwargs,
+    )
+
+
+def role_binding_absent(name, namespace="default", wait=False, timeout=60, **kwargs):
+    """Ensure the named RoleBinding is absent from *namespace*. .. versionadded:: 2.1.0"""
+    return _rbac_absent_impl(
+        name, "role_binding", "RoleBinding", True, namespace, wait, timeout, kwargs
+    )
+
+
+def role_binding_present(
+    name,
+    namespace="default",
+    metadata=None,
+    spec=None,
+    source="",
+    template="",
+    template_context=None,
+    **kwargs,
+):
+    """
+    Ensure the named RoleBinding exists with the given subjects + roleRef.
+
+    .. versionadded:: 2.1.0
+
+    .. note::
+        ``roleRef`` is immutable. To change the referenced Role, declare
+        ``role_binding_absent`` first and then ``role_binding_present`` with
+        the new ``roleRef`` — patching ``roleRef`` will be rejected by the API.
+
+    .. code-block:: yaml
+
+        read-pods:
+          kubernetes.role_binding_present:
+            - namespace: default
+            - spec:
+                subjects:
+                  - kind: User
+                    name: alice
+                    apiGroup: rbac.authorization.k8s.io
+                roleRef:
+                  kind: Role
+                  name: pod-reader
+                  apiGroup: rbac.authorization.k8s.io
+    """
+    return _rbac_present_impl(
+        name,
+        "role_binding",
+        "RoleBinding",
+        True,
+        namespace,
+        metadata,
+        spec,
+        source,
+        template,
+        template_context,
+        kwargs,
+    )
+
+
+def cluster_role_absent(name, wait=False, timeout=60, **kwargs):
+    """Ensure the named ClusterRole is absent. .. versionadded:: 2.1.0"""
+    return _rbac_absent_impl(
+        name, "cluster_role", "ClusterRole", False, None, wait, timeout, kwargs
+    )
+
+
+def cluster_role_present(
+    name,
+    metadata=None,
+    spec=None,
+    source="",
+    template="",
+    template_context=None,
+    **kwargs,
+):
+    """
+    Ensure the named ClusterRole is present with the given rules.
+
+    .. versionadded:: 2.1.0
+
+    .. code-block:: yaml
+
+        pod-reader:
+          kubernetes.cluster_role_present:
+            - spec:
+                rules:
+                  - apiGroups: [""]
+                    resources: ["pods"]
+                    verbs: ["get", "list", "watch"]
+    """
+    return _rbac_present_impl(
+        name,
+        "cluster_role",
+        "ClusterRole",
+        False,
+        None,
+        metadata,
+        spec,
+        source,
+        template,
+        template_context,
+        kwargs,
+    )
+
+
+def cluster_role_binding_absent(name, wait=False, timeout=60, **kwargs):
+    """Ensure the named ClusterRoleBinding is absent. .. versionadded:: 2.1.0"""
+    return _rbac_absent_impl(
+        name, "cluster_role_binding", "ClusterRoleBinding", False, None, wait, timeout, kwargs
+    )
+
+
+def cluster_role_binding_present(
+    name,
+    metadata=None,
+    spec=None,
+    source="",
+    template="",
+    template_context=None,
+    **kwargs,
+):
+    """
+    Ensure the named ClusterRoleBinding is present.
+
+    .. versionadded:: 2.1.0
+
+    .. note::
+        ``roleRef`` is immutable; see :py:func:`role_binding_present`.
+    """
+    return _rbac_present_impl(
+        name,
+        "cluster_role_binding",
+        "ClusterRoleBinding",
+        False,
+        None,
+        metadata,
+        spec,
+        source,
+        template,
+        template_context,
+        kwargs,
+    )
+
+
+def service_account_absent(name, namespace="default", wait=False, timeout=60, **kwargs):
+    """Ensure the named ServiceAccount is absent from *namespace*. .. versionadded:: 2.1.0"""
+    return _rbac_absent_impl(
+        name, "service_account", "ServiceAccount", True, namespace, wait, timeout, kwargs
+    )
+
+
+def service_account_present(
+    name,
+    namespace="default",
+    metadata=None,
+    spec=None,
+    source="",
+    template="",
+    template_context=None,
+    **kwargs,
+):
+    """
+    Ensure the named ServiceAccount is present in *namespace*.
+
+    .. versionadded:: 2.1.0
+
+    .. code-block:: yaml
+
+        my-sa:
+          kubernetes.service_account_present:
+            - namespace: default
+            - spec:
+                automount_service_account_token: false
+                image_pull_secrets:
+                  - name: my-registry-secret
+    """
+    return _rbac_present_impl(
+        name,
+        "service_account",
+        "ServiceAccount",
+        True,
+        namespace,
+        metadata,
+        spec,
+        source,
+        template,
+        template_context,
+        kwargs,
+    )
