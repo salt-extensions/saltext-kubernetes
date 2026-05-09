@@ -10,3 +10,4 @@ _________
     :toctree:
 
     _connection
+    _kinds

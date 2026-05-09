@@ -73,6 +73,8 @@ import salt.utils.templates
 import salt.utils.yaml
 from salt.exceptions import CommandExecutionError
 
+from saltext.kubernetes.utils import _kinds
+
 # Re-exports kept on the module surface for backwards compatibility with any
 # external code that imported these from ``kubernetesmod`` before the helpers
 # were extracted to ``saltext.kubernetes.utils._connection``.
@@ -4764,6 +4766,12 @@ def _wait_for_resource_status(
 ):
     """
     .. versionadded:: 2.0.0
+    .. versionchanged:: 2.1.0
+
+        Internal dispatch routes through
+        :py:data:`saltext.kubernetes.utils._kinds._KIND_REGISTRY`. The
+        public signature, kwargs, and return semantics are unchanged;
+        new typed kinds are added by registering one entry there.
 
     Helper function to wait for a resource to reach an expected status.
 
@@ -4777,11 +4785,9 @@ def _wait_for_resource_status(
         Name of the resource
 
     namespace
-        Namespace of the resource
+        Namespace of the resource (ignored for cluster-scoped kinds)
 
     expected_status
-        .. versionchanged:: 2.1.0
-
         Expected status to wait for ('created', 'deleted', 'ready')
 
     timeout
@@ -4789,130 +4795,70 @@ def _wait_for_resource_status(
 
     Returns True if the resource reached the expected status, False otherwise.
     """
+    kind = _kinds.get_kind(resource_type)
+
     try:
-        w = Watch()
-        start_time = time.time()
-
         if expected_status == "deleted":
-            method = None
-            if resource_type != "namespace":
-                # Compound resource names map differently in the k8s client.
-                method_name = {
-                    "statefulset": "read_namespaced_stateful_set",
-                    "replicaset": "read_namespaced_replica_set",
-                    "daemonset": "read_namespaced_daemon_set",
-                    "configmap": "read_namespaced_config_map",
-                    "storageclass": "read_storage_class",
-                }.get(resource_type, f"read_namespaced_{resource_type}")
+            return _wait_for_deleted(api_instance, kind, name, namespace, timeout)
 
-                try:
-                    method = getattr(api_instance, method_name)
-                except AttributeError as exc:
-                    raise CommandExecutionError(
-                        f"Unsupported resource type for wait operation: {resource_type}"
-                    ) from exc
-
-            # For deletion, periodically check if the resource still exists until timeout
-            while time.time() - start_time < timeout:
-                try:
-                    if resource_type == "namespace":
-                        api_instance.read_namespace(name)
-                    elif resource_type == "storageclass":
-                        method(name)
-                    else:
-                        method(name, namespace)
-                except ApiException as e:
-                    if e.status == 404:
-                        # Resource is gone, deletion successful
-                        return True
-                # Resource still exists, wait before retrying
-                time.sleep(1)
-            # Timed out waiting for deletion
-            return False
-
-        # Compound resource names map differently in the k8s client.
-        method_name = {
-            "statefulset": "list_namespaced_stateful_set",
-            "replicaset": "list_namespaced_replica_set",
-            "daemonset": "list_namespaced_daemon_set",
-            "configmap": "list_namespaced_config_map",
-            "storageclass": "list_storage_class",
-        }.get(resource_type, f"list_namespaced_{resource_type}")
-
+        w = Watch()
         try:
-            list_method = getattr(api_instance, method_name)
-        except AttributeError as exc:
-            raise CommandExecutionError(
-                f"Unsupported resource type for wait operation: {resource_type}"
-            ) from exc
-
-        if resource_type == "storageclass":
-            stream = w.stream(
-                func=list_method,
-                field_selector=f"metadata.name={name}",
-                timeout_seconds=timeout,
-            )
-        else:
-            stream = w.stream(
-                func=list_method,
-                namespace=namespace,
-                field_selector=f"metadata.name={name}",
-                timeout_seconds=timeout,
-            )
-
-        for event in stream:
-            if event["object"].metadata.name == name:
-                if expected_status == "created":
-                    return True
-                elif expected_status == "ready":
-                    if resource_type == "deployment":
-                        if (
-                            event["object"].status.available_replicas
-                            and event["object"].status.available_replicas
-                            == event["object"].spec.replicas
-                        ):
-                            return True
-                    elif resource_type == "pod":
-                        # More detailed pod readiness check
-                        if event["object"].status.phase == "Running":
-                            if not event["object"].status.container_statuses:
-                                continue
-
-                            all_containers_ready = True
-                            unready_containers = []
-
-                            for container_status in event["object"].status.container_statuses:
-                                if not container_status.ready:
-                                    all_containers_ready = False
-                                    unready_containers.append(container_status.name)
-
-                            if all_containers_ready:
-                                return True
-                    elif resource_type == "service":
-                        # Services are considered ready once they exist and have a clusterIP assigned
-                        if event["object"].spec.cluster_ip:
-                            return True
-                    else:
-                        return True  # For other resources, assume ready when created
-
-            if time.time() - start_time >= timeout:
-                log.warning(
-                    "Timeout reached while waiting for %s/%s to become %s",
-                    resource_type,
-                    name,
-                    expected_status,
-                )
-                return False
-
-        log.warning(
-            "Watch stream ended before %s/%s reached %s status",
-            resource_type,
-            name,
-            expected_status,
-        )
-        return False
-
+            return _wait_via_watch(w, api_instance, kind, name, namespace, expected_status, timeout)
+        finally:
+            w.stop()
     except (ApiException, HTTPError) as exc:
         raise CommandExecutionError(exc) from exc
-    finally:
-        w.stop()
+
+
+def _wait_for_deleted(api_instance, kind, name, namespace, timeout):
+    """Poll the read endpoint until a 404 is observed or timeout elapses."""
+    read = getattr(api_instance, kind.read_method)
+    start_time = time.time()
+    while time.time() - start_time < timeout:
+        try:
+            if kind.namespaced:
+                read(name, namespace)
+            else:
+                read(name)
+        except ApiException as exc:
+            if exc.status == 404:
+                return True
+        time.sleep(1)
+    return False
+
+
+def _wait_via_watch(w, api_instance, kind, name, namespace, expected_status, timeout):
+    """Stream list events filtered by name; apply the per-kind ready predicate."""
+    list_method = getattr(api_instance, kind.list_method)
+    start_time = time.time()
+    stream_kwargs = {
+        "func": list_method,
+        "field_selector": f"metadata.name={name}",
+        "timeout_seconds": timeout,
+    }
+    if kind.namespaced:
+        stream_kwargs["namespace"] = namespace
+
+    for event in w.stream(**stream_kwargs):
+        obj = event["object"]
+        if obj.metadata.name == name:
+            if expected_status == "created":
+                return True
+            if expected_status == "ready" and kind.ready_predicate(obj):
+                return True
+        if time.time() - start_time >= timeout:
+            log.warning(
+                "Timeout reached while waiting for %s/%s to become %s",
+                kind.list_method,
+                name,
+                expected_status,
+            )
+            return False
+
+    log.warning(
+        "Watch stream ended before %s/%s reached %s status",
+        kind.list_method,
+        name,
+        expected_status,
+    )
+    return False
