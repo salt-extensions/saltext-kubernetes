@@ -33,7 +33,7 @@ This project uses [Semantic Versioning](https://semver.org/) - MAJOR.MINOR.PATCH
 
 ### Changed
 
-- Updated `kubernetesmod` to work with newer versions of the Kubernetes Python client. [#1](https://github.com/salt-extensions/saltext-kubernetes/issues/1)
+- Updated `kubernetesmod` to work with newer versions of the Kubernetes Python client. [#1](https://github.com/salt-extensions/saltext-kubernetes/pull/1)
 
 
 ## 1.0.1 (2023-12-29)
