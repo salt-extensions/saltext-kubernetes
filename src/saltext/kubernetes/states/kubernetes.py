@@ -2489,3 +2489,760 @@ def node_label_present(name, node, value, **kwargs):
         ret["changes"] = {}
 
     return ret
+
+
+# ---------------------------------------------------------------------------
+# RBAC states: Role, RoleBinding, ClusterRole, ClusterRoleBinding,
+# ServiceAccount.
+#
+# .. versionadded:: 2.1.0
+#
+# All five kinds share a near-identical present/absent pattern, so the
+# bulk of the logic lives in :py:func:`_rbac_absent_impl` and
+# :py:func:`_rbac_present_impl` — the public ``*_present`` / ``*_absent``
+# states are thin per-kind wrappers around those helpers.
+# ---------------------------------------------------------------------------
+
+
+def _rbac_absent_impl(name, kind_lower, kind_pretty, namespaced, namespace, wait, timeout, kwargs):
+    """Shared body for the RBAC *_absent state functions."""
+    ret = {"name": name, "changes": {}, "result": False, "comment": ""}
+
+    show_fn = __salt__[f"kubernetes.show_{kind_lower}"]
+    delete_fn = __salt__[f"kubernetes.delete_{kind_lower}"]
+
+    show_args = (name, namespace) if namespaced else (name,)
+    delete_args = {"wait": wait, "timeout": timeout}
+    if namespaced:
+        delete_args["namespace"] = namespace
+
+    try:
+        existing = show_fn(*show_args, **kwargs)
+        if existing is None:
+            ret["result"] = True
+            ret["comment"] = f"The {kind_pretty} does not exist"
+            return ret
+        if __opts__["test"]:
+            ret["result"] = None
+            ret["comment"] = f"The {kind_pretty} is going to be deleted"
+            ret["changes"] = {"old": "present", "new": "absent"}
+            return ret
+        delete_fn(name, **delete_args, **kwargs)
+        ret["result"] = True
+        ret["changes"] = {"old": "present", "new": "absent"}
+        ret["comment"] = f"{kind_pretty} {name} deleted"
+    except CommandExecutionError as err:
+        log.error(str(err), exc_info_on_loglevel=logging.DEBUG)
+        ret["result"] = False
+        ret["comment"] = str(err)
+        ret["changes"] = {}
+    return ret
+
+
+def _rbac_present_impl(
+    name,
+    kind_lower,
+    kind_pretty,
+    namespaced,
+    namespace,
+    metadata,
+    spec,
+    source,
+    template,
+    template_context,
+    kwargs,
+):
+    """Shared body for the RBAC *_present state functions."""
+    ret = {"name": name, "changes": {}, "result": False, "comment": ""}
+
+    if (metadata or spec) and source:
+        return _error(ret, "'source' cannot be used in combination with 'metadata' or 'spec'")
+    if not source and metadata is None:
+        metadata = {}
+    if not source and spec is None:
+        spec = {}
+
+    show_fn = __salt__[f"kubernetes.show_{kind_lower}"]
+    create_fn = __salt__[f"kubernetes.create_{kind_lower}"]
+    patch_fn = __salt__[f"kubernetes.patch_{kind_lower}"]
+
+    show_args = (name, namespace) if namespaced else (name,)
+
+    create_kwargs = {
+        "name": name,
+        "metadata": metadata,
+        "spec": spec,
+        "source": source,
+        "template": template,
+        "saltenv": __env__,
+        "template_context": template_context,
+        "dry_run": bool(__opts__["test"]),
+    }
+    patch_kwargs = {"name": name, "dry_run": bool(__opts__["test"])}
+    if namespaced:
+        create_kwargs["namespace"] = namespace
+        patch_kwargs["namespace"] = namespace
+
+    try:
+        existing = show_fn(*show_args, **kwargs)
+
+        if existing is None:
+            try:
+                res = create_fn(**create_kwargs, **kwargs)
+            except CommandExecutionError as err:
+                if not __opts__["test"]:
+                    raise
+                ret["result"] = None
+                ret["comment"] = (
+                    f"The {kind_pretty} is going to be created. "
+                    f"Dry run failed, possibly due to dependencies not created yet: {err}"
+                )
+                return ret
+            ret["changes"] = {"old": {}, "new": res}
+            if __opts__["test"]:
+                ret["result"] = None
+                ret["comment"] = f"The {kind_pretty} is going to be created"
+            else:
+                ret["result"] = True
+                ret["comment"] = f"{kind_pretty} created"
+            return ret
+
+        if source:
+            patch_kwargs.update(
+                {"source": source, "template": template, "template_context": template_context}
+            )
+        else:
+            patch_obj = {}
+            if metadata:
+                patch_obj["metadata"] = metadata
+            if spec:
+                patch_obj["spec"] = spec
+            patch_kwargs["patch"] = patch_obj
+
+        try:
+            res = patch_fn(**patch_kwargs, **kwargs)
+        except CommandExecutionError as err:
+            if not __opts__["test"]:
+                raise
+            ret["result"] = None
+            ret["comment"] = (
+                f"The {kind_pretty} is going to be updated. "
+                f"Dry run failed, possibly due to dependencies not created yet: {err}"
+            )
+            return ret
+
+        if res == existing:
+            ret["result"] = True
+            ret["comment"] = f"The {kind_pretty} is already in the desired state"
+            return ret
+
+        ret["changes"] = _changes(existing, res)
+        if __opts__["test"]:
+            ret["result"] = None
+            ret["comment"] = f"The {kind_pretty} is going to be updated"
+        else:
+            ret["result"] = True
+            ret["comment"] = f"{kind_pretty} updated"
+    except CommandExecutionError as err:
+        log.error(str(err), exc_info_on_loglevel=logging.DEBUG)
+        ret["result"] = False
+        ret["comment"] = str(err)
+        ret["changes"] = {}
+    return ret
+
+
+def role_absent(name, namespace="default", wait=False, timeout=60, **kwargs):
+    """
+    Ensure the named Role is absent from *namespace*.
+
+    .. versionadded:: 2.1.0
+
+    .. code-block:: yaml
+
+        pod-reader:
+          kubernetes.role_absent:
+            - namespace: default
+    """
+    return _rbac_absent_impl(name, "role", "Role", True, namespace, wait, timeout, kwargs)
+
+
+def role_present(
+    name,
+    namespace="default",
+    metadata=None,
+    spec=None,
+    source="",
+    template="",
+    template_context=None,
+    **kwargs,
+):
+    """
+    Ensure the named Role is present with the given rules.
+
+    .. versionadded:: 2.1.0
+
+    .. code-block:: yaml
+
+        pod-reader:
+          kubernetes.role_present:
+            - namespace: default
+            - spec:
+                rules:
+                  - apiGroups: [""]
+                    resources: ["pods"]
+                    verbs: ["get", "list", "watch"]
+    """
+    return _rbac_present_impl(
+        name,
+        "role",
+        "Role",
+        True,
+        namespace,
+        metadata,
+        spec,
+        source,
+        template,
+        template_context,
+        kwargs,
+    )
+
+
+def role_binding_absent(name, namespace="default", wait=False, timeout=60, **kwargs):
+    """Ensure the named RoleBinding is absent from *namespace*. .. versionadded:: 2.1.0"""
+    return _rbac_absent_impl(
+        name, "role_binding", "RoleBinding", True, namespace, wait, timeout, kwargs
+    )
+
+
+def role_binding_present(
+    name,
+    namespace="default",
+    metadata=None,
+    spec=None,
+    source="",
+    template="",
+    template_context=None,
+    **kwargs,
+):
+    """
+    Ensure the named RoleBinding exists with the given subjects + roleRef.
+
+    .. versionadded:: 2.1.0
+
+    .. note::
+        ``roleRef`` is immutable. To change the referenced Role, declare
+        ``role_binding_absent`` first and then ``role_binding_present`` with
+        the new ``roleRef`` — patching ``roleRef`` will be rejected by the API.
+
+    .. code-block:: yaml
+
+        read-pods:
+          kubernetes.role_binding_present:
+            - namespace: default
+            - spec:
+                subjects:
+                  - kind: User
+                    name: alice
+                    apiGroup: rbac.authorization.k8s.io
+                roleRef:
+                  kind: Role
+                  name: pod-reader
+                  apiGroup: rbac.authorization.k8s.io
+    """
+    return _rbac_present_impl(
+        name,
+        "role_binding",
+        "RoleBinding",
+        True,
+        namespace,
+        metadata,
+        spec,
+        source,
+        template,
+        template_context,
+        kwargs,
+    )
+
+
+def cluster_role_absent(name, wait=False, timeout=60, **kwargs):
+    """Ensure the named ClusterRole is absent. .. versionadded:: 2.1.0"""
+    return _rbac_absent_impl(
+        name, "cluster_role", "ClusterRole", False, None, wait, timeout, kwargs
+    )
+
+
+def cluster_role_present(
+    name,
+    metadata=None,
+    spec=None,
+    source="",
+    template="",
+    template_context=None,
+    **kwargs,
+):
+    """
+    Ensure the named ClusterRole is present with the given rules.
+
+    .. versionadded:: 2.1.0
+
+    .. code-block:: yaml
+
+        pod-reader:
+          kubernetes.cluster_role_present:
+            - spec:
+                rules:
+                  - apiGroups: [""]
+                    resources: ["pods"]
+                    verbs: ["get", "list", "watch"]
+    """
+    return _rbac_present_impl(
+        name,
+        "cluster_role",
+        "ClusterRole",
+        False,
+        None,
+        metadata,
+        spec,
+        source,
+        template,
+        template_context,
+        kwargs,
+    )
+
+
+def cluster_role_binding_absent(name, wait=False, timeout=60, **kwargs):
+    """Ensure the named ClusterRoleBinding is absent. .. versionadded:: 2.1.0"""
+    return _rbac_absent_impl(
+        name, "cluster_role_binding", "ClusterRoleBinding", False, None, wait, timeout, kwargs
+    )
+
+
+def cluster_role_binding_present(
+    name,
+    metadata=None,
+    spec=None,
+    source="",
+    template="",
+    template_context=None,
+    **kwargs,
+):
+    """
+    Ensure the named ClusterRoleBinding is present.
+
+    .. versionadded:: 2.1.0
+
+    .. note::
+        ``roleRef`` is immutable; see :py:func:`role_binding_present`.
+    """
+    return _rbac_present_impl(
+        name,
+        "cluster_role_binding",
+        "ClusterRoleBinding",
+        False,
+        None,
+        metadata,
+        spec,
+        source,
+        template,
+        template_context,
+        kwargs,
+    )
+
+
+def service_account_absent(name, namespace="default", wait=False, timeout=60, **kwargs):
+    """Ensure the named ServiceAccount is absent from *namespace*. .. versionadded:: 2.1.0"""
+    return _rbac_absent_impl(
+        name, "service_account", "ServiceAccount", True, namespace, wait, timeout, kwargs
+    )
+
+
+def service_account_present(
+    name,
+    namespace="default",
+    metadata=None,
+    spec=None,
+    source="",
+    template="",
+    template_context=None,
+    **kwargs,
+):
+    """
+    Ensure the named ServiceAccount is present in *namespace*.
+
+    .. versionadded:: 2.1.0
+
+    .. code-block:: yaml
+
+        my-sa:
+          kubernetes.service_account_present:
+            - namespace: default
+            - spec:
+                automount_service_account_token: false
+                image_pull_secrets:
+                  - name: my-registry-secret
+    """
+    return _rbac_present_impl(
+        name,
+        "service_account",
+        "ServiceAccount",
+        True,
+        namespace,
+        metadata,
+        spec,
+        source,
+        template,
+        template_context,
+        kwargs,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Node lifecycle states (cordon, uncordon, taint, untaint).
+#
+# Drain is intentionally NOT exposed as a state: it's an imperative
+# operation that depends on cluster runtime state (which pods are where)
+# rather than a desired-state declaration. Use ``kubernetes.drain`` from
+# an execution call.
+#
+# .. versionadded:: 2.1.0
+# ---------------------------------------------------------------------------
+
+
+def node_cordoned(name, **kwargs):
+    """
+    Ensure the named node is cordoned (unschedulable).
+
+    .. versionadded:: 2.1.0
+
+    .. code-block:: yaml
+
+        my-node:
+          kubernetes.node_cordoned: []
+    """
+    ret = {"name": name, "changes": {}, "result": False, "comment": ""}
+    try:
+        node = __salt__["kubernetes.node"](name, **kwargs)
+        if node is None:
+            return _error(ret, f"Node {name} not found")
+        currently_unschedulable = bool((node.get("spec") or {}).get("unschedulable", False))
+        if currently_unschedulable:
+            ret["result"] = True
+            ret["comment"] = "Node is already cordoned"
+            return ret
+        if __opts__["test"]:
+            ret["result"] = None
+            ret["comment"] = "Node would be cordoned"
+            ret["changes"] = {"old": "schedulable", "new": "cordoned"}
+            return ret
+        __salt__["kubernetes.cordon"](name, **kwargs)
+        ret["result"] = True
+        ret["comment"] = f"Node {name} cordoned"
+        ret["changes"] = {"old": "schedulable", "new": "cordoned"}
+    except CommandExecutionError as err:
+        log.error(str(err), exc_info_on_loglevel=logging.DEBUG)
+        ret["result"] = False
+        ret["comment"] = str(err)
+    return ret
+
+
+def node_uncordoned(name, **kwargs):
+    """
+    Ensure the named node is uncordoned (schedulable).
+
+    .. versionadded:: 2.1.0
+    """
+    ret = {"name": name, "changes": {}, "result": False, "comment": ""}
+    try:
+        node = __salt__["kubernetes.node"](name, **kwargs)
+        if node is None:
+            return _error(ret, f"Node {name} not found")
+        currently_unschedulable = bool((node.get("spec") or {}).get("unschedulable", False))
+        if not currently_unschedulable:
+            ret["result"] = True
+            ret["comment"] = "Node is already schedulable"
+            return ret
+        if __opts__["test"]:
+            ret["result"] = None
+            ret["comment"] = "Node would be uncordoned"
+            ret["changes"] = {"old": "cordoned", "new": "schedulable"}
+            return ret
+        __salt__["kubernetes.uncordon"](name, **kwargs)
+        ret["result"] = True
+        ret["comment"] = f"Node {name} uncordoned"
+        ret["changes"] = {"old": "cordoned", "new": "schedulable"}
+    except CommandExecutionError as err:
+        log.error(str(err), exc_info_on_loglevel=logging.DEBUG)
+        ret["result"] = False
+        ret["comment"] = str(err)
+    return ret
+
+
+def node_tainted(name, key, effect, value=None, **kwargs):
+    """
+    Ensure the named node has the given taint.
+
+    .. versionadded:: 2.1.0
+
+    .. note::
+        State name (``name``) is the node name. ``key`` and ``effect``
+        identify the taint within the node's taint list (matching the
+        Kubernetes taint identity rule of (key, effect) uniqueness).
+
+    .. code-block:: yaml
+
+        gpu-node:
+          kubernetes.node_tainted:
+            - key: gpu
+            - effect: NoSchedule
+            - value: "true"
+    """
+    ret = {"name": name, "changes": {}, "result": False, "comment": ""}
+    try:
+        node = __salt__["kubernetes.node"](name, **kwargs)
+        if node is None:
+            return _error(ret, f"Node {name} not found")
+        existing = (node.get("spec") or {}).get("taints") or []
+        match = next(
+            (t for t in existing if t.get("key") == key and t.get("effect") == effect),
+            None,
+        )
+        if match is not None and match.get("value") == value:
+            ret["result"] = True
+            ret["comment"] = f"Taint {key}={value}:{effect} already present"
+            return ret
+        if __opts__["test"]:
+            ret["result"] = None
+            ret["comment"] = f"Taint {key}={value}:{effect} would be applied"
+            ret["changes"] = {"old": match, "new": {"key": key, "value": value, "effect": effect}}
+            return ret
+        __salt__["kubernetes.taint"](name, key=key, effect=effect, value=value, **kwargs)
+        ret["result"] = True
+        ret["comment"] = f"Taint {key}={value}:{effect} applied"
+        ret["changes"] = {"old": match, "new": {"key": key, "value": value, "effect": effect}}
+    except CommandExecutionError as err:
+        log.error(str(err), exc_info_on_loglevel=logging.DEBUG)
+        ret["result"] = False
+        ret["comment"] = str(err)
+    return ret
+
+
+def node_untainted(name, key, effect=None, **kwargs):
+    """
+    Ensure the named node does not carry a taint with the given *key*.
+
+    .. versionadded:: 2.1.0
+
+    If *effect* is given, only the taint with matching ``(key, effect)``
+    is removed; otherwise every taint with this key is removed.
+    """
+    ret = {"name": name, "changes": {}, "result": False, "comment": ""}
+    try:
+        node = __salt__["kubernetes.node"](name, **kwargs)
+        if node is None:
+            return _error(ret, f"Node {name} not found")
+        existing = (node.get("spec") or {}).get("taints") or []
+        if effect is None:
+            matches = [t for t in existing if t.get("key") == key]
+        else:
+            matches = [t for t in existing if t.get("key") == key and t.get("effect") == effect]
+        if not matches:
+            ret["result"] = True
+            ret["comment"] = f"No taint with key '{key}' present"
+            return ret
+        if __opts__["test"]:
+            ret["result"] = None
+            ret["comment"] = f"{len(matches)} taint(s) with key '{key}' would be removed"
+            ret["changes"] = {"old": matches, "new": []}
+            return ret
+        __salt__["kubernetes.untaint"](name, key=key, effect=effect, **kwargs)
+        ret["result"] = True
+        ret["comment"] = f"Removed {len(matches)} taint(s) with key '{key}'"
+        ret["changes"] = {"old": matches, "new": []}
+    except CommandExecutionError as err:
+        log.error(str(err), exc_info_on_loglevel=logging.DEBUG)
+        ret["result"] = False
+        ret["comment"] = str(err)
+    return ret
+
+
+# ---------------------------------------------------------------------------
+# Generic manifest states (manifest_present, manifest_absent).
+#
+# These wrap kubernetes.apply / kubernetes.delete_manifest and provide
+# the desired-state semantics Salt callers expect: idempotent reapply
+# of the same manifest is a no-op; ``test=True`` produces a dry-run
+# preview via the API server's own validation.
+#
+# .. versionadded:: 2.1.0
+# ---------------------------------------------------------------------------
+
+
+def manifest_present(
+    name,
+    source=None,
+    manifest=None,
+    namespace=None,
+    field_manager="salt",
+    force_conflicts=False,
+    template=None,
+    template_context=None,
+    **kwargs,
+):
+    """
+    Ensure one or more Kubernetes objects described by a manifest are
+    present, using server-side apply.
+
+    .. versionadded:: 2.1.0
+
+    The manifest may be a Python dict, a list of dicts, a YAML string,
+    or — via ``source`` — a salt:// fileserver path. Multi-document
+    YAML files are supported; every document in the file is applied as
+    a single state operation.
+
+    name
+        The state ID. Used as the ``name`` field of the result; not
+        sent to the API. Use whatever identifies the SLS rule for you.
+
+    source
+        Salt fileserver path to a YAML manifest. Mutually exclusive
+        with ``manifest``.
+
+    manifest
+        Inline manifest (dict, list of dicts, or YAML string). Mutually
+        exclusive with ``source``.
+
+    namespace
+        Fallback namespace for namespaced manifests that don't declare
+        their own ``metadata.namespace``. Cluster-scoped kinds ignore.
+
+    field_manager
+        SSA fieldManager. Default: ``"salt"``.
+
+    force_conflicts
+        Override fields owned by another field manager. Default: off.
+
+    template
+        Source-file template engine (e.g. ``"jinja"``).
+
+    template_context
+        Variables passed to the renderer.
+
+    .. code-block:: yaml
+
+        my-app-stack:
+          kubernetes.manifest_present:
+            - source: salt://manifests/my-app.yaml
+            - namespace: production
+            - template: jinja
+
+        # Or inline:
+        my-config:
+          kubernetes.manifest_present:
+            - manifest:
+                apiVersion: v1
+                kind: ConfigMap
+                metadata:
+                  name: app-config
+                  namespace: default
+                data:
+                  greeting: hello
+    """
+    ret = {"name": name, "changes": {}, "result": False, "comment": ""}
+
+    if source and manifest is not None:
+        return _error(ret, "'source' and 'manifest' are mutually exclusive")
+    if not source and manifest is None:
+        return _error(ret, "Provide either 'source' or 'manifest'")
+
+    apply_kwargs = {
+        "manifest": manifest,
+        "source": source,
+        "namespace": namespace,
+        "field_manager": field_manager,
+        "force_conflicts": force_conflicts,
+        "template": template,
+        "saltenv": __env__,
+        "template_context": template_context,
+    }
+
+    try:
+        if __opts__["test"]:
+            res = __salt__["kubernetes.apply"](dry_run=True, **apply_kwargs, **kwargs)
+            ret["result"] = None
+            ret["comment"] = "Manifests would be applied (server-side dry run)"
+            ret["changes"] = {"applied": res}
+            return ret
+
+        res = __salt__["kubernetes.apply"](**apply_kwargs, **kwargs)
+        ret["result"] = True
+        ret["comment"] = "Manifests applied via server-side apply"
+        ret["changes"] = {"applied": res}
+    except CommandExecutionError as err:
+        log.error(str(err), exc_info_on_loglevel=logging.DEBUG)
+        ret["result"] = False
+        ret["comment"] = str(err)
+        ret["changes"] = {}
+    return ret
+
+
+def manifest_absent(
+    name,
+    source=None,
+    manifest=None,
+    namespace=None,
+    propagation_policy=None,
+    grace_period_seconds=None,
+    template=None,
+    template_context=None,
+    **kwargs,
+):
+    """
+    Ensure one or more Kubernetes objects described by a manifest are
+    absent.
+
+    .. versionadded:: 2.1.0
+
+    Accepts the same manifest / source shapes as :py:func:`manifest_present`.
+
+    .. code-block:: yaml
+
+        my-app-stack:
+          kubernetes.manifest_absent:
+            - source: salt://manifests/my-app.yaml
+            - propagation_policy: Foreground
+    """
+    ret = {"name": name, "changes": {}, "result": False, "comment": ""}
+
+    if source and manifest is not None:
+        return _error(ret, "'source' and 'manifest' are mutually exclusive")
+    if not source and manifest is None:
+        return _error(ret, "Provide either 'source' or 'manifest'")
+
+    delete_kwargs = {
+        "manifest": manifest,
+        "source": source,
+        "namespace": namespace,
+        "propagation_policy": propagation_policy,
+        "grace_period_seconds": grace_period_seconds,
+        "template": template,
+        "saltenv": __env__,
+        "template_context": template_context,
+    }
+
+    try:
+        if __opts__["test"]:
+            ret["result"] = None
+            ret["comment"] = "Manifests would be deleted"
+            ret["changes"] = {"old": "present", "new": "absent"}
+            return ret
+
+        res = __salt__["kubernetes.delete_manifest"](**delete_kwargs, **kwargs)
+        ret["result"] = True
+        ret["comment"] = "Manifests deleted"
+        ret["changes"] = {"deleted": res}
+    except CommandExecutionError as err:
+        log.error(str(err), exc_info_on_loglevel=logging.DEBUG)
+        ret["result"] = False
+        ret["comment"] = str(err)
+        ret["changes"] = {}
+    return ret
