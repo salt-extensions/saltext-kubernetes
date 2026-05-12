@@ -138,3 +138,6 @@ artifacts/
 exitstatus-*/
 salt-extension-packages/
 html-docs/
+
+# Claude Code runtime state (scheduled-task locks etc.)
+.claude/

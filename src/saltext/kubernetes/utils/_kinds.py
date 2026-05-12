@@ -88,6 +88,148 @@ def _service_ready(obj):
 
 
 # ---------------------------------------------------------------------------
+# User-driven wait predicates: condition= and jsonpath= matching against the
+# live API object. Used by ``kubernetes.wait_for`` and the ``wait_for=`` block
+# accepted by ``manifest_present`` / typed ``*_present`` states.
+# ---------------------------------------------------------------------------
+
+
+def match_condition(obj, condition_type, expected_status="True"):
+    """
+    Match ``obj.status.conditions[?type == condition_type].status``.
+
+    Mirrors ``kubectl wait --for=condition=Ready=true`` semantics.
+
+    Returns ``True`` when a condition with the given ``type`` is present and
+    its ``status`` matches ``expected_status`` (case-insensitive).
+    """
+    status = getattr(obj, "status", None)
+    conditions = getattr(status, "conditions", None) if status is not None else None
+    if not conditions:
+        return False
+    want = str(expected_status).strip().lower()
+    for cond in conditions:
+        if getattr(cond, "type", None) == condition_type:
+            return str(getattr(cond, "status", "")).strip().lower() == want
+    return False
+
+
+def _resolve_jsonpath(obj, path):
+    """
+    Resolve a kubectl-style jsonpath against ``obj``.
+
+    Subset accepted (matches the most common ``kubectl get -o jsonpath`` forms):
+
+      * ``.foo.bar``                — attribute access
+      * ``.foo.bar[0]``             — list index
+      * ``.foo.bar[*]``             — list, returns last element (kubectl
+                                      semantics for scalar coercion)
+      * ``{.foo.bar}``              — surrounding braces are stripped
+
+    Tries snake_case (Python model attr) then the camelCase form spelled in
+    the path. Returns ``None`` if any segment is missing.
+    """
+    import re as _re  # pylint: disable=import-outside-toplevel
+
+    if path.startswith("{") and path.endswith("}"):
+        path = path[1:-1]
+    if not path.startswith("."):
+        return None
+    current = obj
+    segments = []
+    for piece in path[1:].split("."):
+        if not piece:
+            continue
+        bracket = piece.find("[")
+        if bracket == -1:
+            segments.append((piece, None))
+        else:
+            key = piece[:bracket]
+            index = piece[bracket + 1 : -1]
+            segments.append((key, index))
+    for key, index in segments:
+        # Try multiple snake-case conversions. The kubernetes-client's
+        # OpenAPI generator uses an inconsistent convention for acronyms:
+        # ``clusterIP`` becomes ``cluster_ip`` (smart split) but
+        # ``clusterIPs`` becomes ``cluster_i_ps`` (naive split). We try
+        # both so callers can use the natural kubectl-style camelCase
+        # spelling without knowing which form happens to match.
+        smart = _re.sub(r"(?<=[a-z])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])", "_", key).lower()
+        naive = _re.sub(r"(?<!^)(?=[A-Z])", "_", key).lower()
+        candidates = []
+        for cand in (key, smart, naive):
+            if cand not in candidates:
+                candidates.append(cand)
+        resolved = None
+        for cand in candidates:
+            if isinstance(current, dict):
+                if cand in current:
+                    resolved = current[cand]
+                    break
+            else:
+                got = getattr(current, cand, None)
+                if got is not None:
+                    resolved = got
+                    break
+        current = resolved
+        if current is None:
+            return None
+        if index is not None:
+            try:
+                if not isinstance(current, (list, tuple)):
+                    return None
+                if not current:
+                    return None
+                if index == "*":
+                    current = current[-1]
+                else:
+                    current = current[int(index)]
+            except (ValueError, IndexError):
+                return None
+    return current
+
+
+def match_jsonpath(obj, path, value=None, regex=None):
+    """
+    Match ``obj`` against a kubectl-style jsonpath.
+
+    Returns ``True`` when:
+
+      * ``value`` is given and the resolved value equals ``value``, OR
+      * ``regex`` is given and the stringified value matches ``re.search``, OR
+      * neither is given and the resolved value is truthy (existence test).
+
+    Returns ``False`` if the path does not resolve.
+    """
+    import re as _re  # pylint: disable=import-outside-toplevel
+
+    resolved = _resolve_jsonpath(obj, path)
+    if resolved is None:
+        return False
+    if value is not None:
+        return resolved == value
+    if regex is not None:
+        return bool(_re.search(regex, str(resolved)))
+    return bool(resolved)
+
+
+def build_predicate(condition=None, status="True", jsonpath=None, value=None, regex=None):
+    """
+    Build a predicate callable from user-supplied wait criteria.
+
+    Exactly one of ``condition`` or ``jsonpath`` must be set. The returned
+    callable accepts a live API object and returns a ``bool``.
+    """
+    if condition and jsonpath:
+        raise CommandExecutionError("wait_for accepts either 'condition' or 'jsonpath', not both")
+    if condition:
+        return lambda obj: match_condition(obj, condition, status)
+    if jsonpath:
+        return lambda obj: match_jsonpath(obj, jsonpath, value=value, regex=regex)
+    raise CommandExecutionError("wait_for requires one of 'condition' or 'jsonpath'")
+
+
+# ---------------------------------------------------------------------------
 # The registry. New kinds get an entry here and (in the same PR) their CRUD
 # functions on kubernetesmod. The wait subsystem then supports them for free.
 # ---------------------------------------------------------------------------

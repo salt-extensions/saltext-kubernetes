@@ -2106,3 +2106,114 @@ def test_node_label_folder_absent(kubernetes, labeled_node, kubernetes_exe):
     assert ret.result is True
     assert "The label folder does not exist" in ret.comment
     assert not ret.changes
+
+
+# ---------------------------------------------------------------------------
+# Node annotation states. Mirror the node_label_* tests; verify the state
+# wrappers around ``kubernetes.node_annotations`` /
+# ``kubernetes.node_add_annotation`` / ``kubernetes.node_remove_annotation``.
+#
+# .. versionadded:: 2.1.0
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("annotated_node", [False], indirect=True)
+def test_node_annotation_present(kubernetes, annotated_node, testmode, kubernetes_exe):
+    """``node_annotation_present`` creates the annotation."""
+    key = "salt-test.example.com/test"
+    value = "value1"
+    ret = kubernetes.node_annotation_present(
+        name=key, node=annotated_node["name"], value=value, test=testmode
+    )
+    assert ret.result in (None, True)
+    assert (ret.result is None) is testmode
+    assert ret.changes["new"][key] == value
+    assert key not in ret.changes["old"]
+    live = kubernetes_exe.node_annotations(annotated_node["name"])
+    if not testmode:
+        assert live[key] == value
+    else:
+        assert key not in live
+        assert "The annotation is going to be set" in ret.comment
+
+
+def test_node_annotation_present_idempotency(kubernetes, annotated_node, testmode):
+    """Re-applying the same key=value is a no-op."""
+    key = next(iter(annotated_node["annotations"]))
+    ret = kubernetes.node_annotation_present(
+        name=key,
+        node=annotated_node["name"],
+        value=annotated_node["annotations"][key],
+        test=testmode,
+    )
+    assert ret.result is True
+    assert "already set and has the specified value" in ret.comment
+    assert not ret.changes
+
+
+def test_node_annotation_present_replace(kubernetes, annotated_node, testmode, kubernetes_exe):
+    """Setting a different value replaces it."""
+    key = next(iter(annotated_node["annotations"]))
+    new_value = "value2"
+    ret = kubernetes.node_annotation_present(
+        name=key, node=annotated_node["name"], value=new_value, test=testmode
+    )
+    assert ret.result in (None, True)
+    assert (ret.result is None) is testmode
+    assert ret.changes["new"][key] == new_value
+    assert ret.changes["old"][key] == annotated_node["annotations"][key]
+    live = kubernetes_exe.node_annotations(annotated_node["name"])
+    if not testmode:
+        assert live[key] == new_value
+    else:
+        assert live[key] == annotated_node["annotations"][key]
+        assert "going to be updated" in ret.comment
+
+
+def test_node_annotation_absent(kubernetes, annotated_node, testmode, kubernetes_exe):
+    """``node_annotation_absent`` removes the annotation."""
+    key = next(iter(annotated_node["annotations"]))
+    ret = kubernetes.node_annotation_absent(name=key, node=annotated_node["name"], test=testmode)
+    assert ret.result in (None, True)
+    assert (ret.result is None) is testmode
+    if not testmode:
+        assert ret.changes["new"] == "absent"
+        live = kubernetes_exe.node_annotations(annotated_node["name"])
+        assert key not in live
+    else:
+        live = kubernetes_exe.node_annotations(annotated_node["name"])
+        assert key in live
+
+
+def test_node_annotation_absent_idempotency(kubernetes, node_name, testmode):
+    """Removing a non-existent annotation reports already absent."""
+    ret = kubernetes.node_annotation_absent(
+        name="never.example.com/missing", node=node_name, test=testmode
+    )
+    assert ret.result is True
+    assert "does not exist" in ret.comment
+    assert not ret.changes
+
+
+def test_node_annotation_folder_absent(kubernetes, annotated_node, kubernetes_exe):
+    """All annotations under the named prefix are removed."""
+    prefix = next(iter(annotated_node["annotations"])).split("/")[0]
+    pre = kubernetes_exe.node_annotations(annotated_node["name"])
+    assert set(pre).intersection(annotated_node["annotations"]) == set(
+        annotated_node["annotations"]
+    )
+
+    ret = kubernetes.node_annotation_folder_absent(name=prefix, node=annotated_node["name"])
+    assert ret.result is True
+    assert ret.changes
+    assert any(prefix in old for old in ret.changes["old"])
+    assert not any(prefix in new for new in ret.changes["new"])
+
+    live = kubernetes_exe.node_annotations(annotated_node["name"])
+    assert not set(live).intersection(annotated_node["annotations"])
+
+    # Idempotent.
+    ret2 = kubernetes.node_annotation_folder_absent(name=prefix, node=annotated_node["name"])
+    assert ret2.result is True
+    assert "does not exist" in ret2.comment
+    assert not ret2.changes
