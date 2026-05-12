@@ -135,3 +135,6 @@ src/saltext/kubernetes/version.py
 
 # Ignore CI generated artifacts
 artifacts/
+exitstatus-*/
+salt-extension-packages/
+html-docs/

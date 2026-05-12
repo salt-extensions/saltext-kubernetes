@@ -8,7 +8,12 @@ jobs:
 
   Linux:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    # Local override of the copier template's 30-minute default. The kind
+    # cluster fixtures + the matrix of Salt versions cause Linux runs to
+    # land in the 28-31 minute range; 3006 was hitting 29:58 right at the
+    # cap. Submit the same bump upstream to salt-extension-copier so the
+    # next ``copier update`` doesn't revert it.
+    timeout-minutes: 45
 
     strategy:
       fail-fast: false

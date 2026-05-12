@@ -10,3 +10,5 @@ _________
     :toctree:
 
     _connection
+    _dynamic
+    _kinds

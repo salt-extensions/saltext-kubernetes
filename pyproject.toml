@@ -34,7 +34,11 @@ requires-python = ">= 3.10"
 dynamic = ["version"]
 dependencies = [
     "salt>=3006",
-    "kubernetes>=19.15.0; platform_system == 'Linux'",
+    # The 24.2.0 floor is required for the dynamic-client server-side
+    # apply convenience method (Resource.server_side_apply); earlier
+    # versions had it but with subtle bugs around field-manager and
+    # force-conflicts query-param plumbing.
+    "kubernetes>=24.2.0; platform_system == 'Linux'",
 ]
 
 [project.readme]
@@ -82,7 +86,7 @@ tests = [
     "pytest-salt-factories>=1.0.0; sys_platform == 'win32'",
     "pytest-salt-factories[docker]>=1.0.0; sys_platform != 'win32'",
     "pytest-instafail",
-    "kubernetes>=19.15.0",
+    "kubernetes>=24.2.0",
     "pytest-helpers-namespace>=2019.1.8",
     "pytest-subtests",
     "pytest-timeout",
