@@ -155,7 +155,7 @@ def _looks_in_cluster(env):
     return "KUBERNETES_SERVICE_HOST" in env and "KUBERNETES_SERVICE_PORT" in env
 
 
-def _setup_conn(get_config_option, env=None, **kwargs):
+def _setup_conn(get_config_option, env=None, cluster=None, **kwargs):
     """
     Set up the kubernetes API connection and install it as the default.
 
@@ -167,14 +167,75 @@ def _setup_conn(get_config_option, env=None, **kwargs):
     :param get_config_option: callable resolving Salt config / pillar keys.
     :param env: optional env-like mapping (defaults to ``os.environ``);
         injection point for tests.
+    :param cluster: alias name into the ``kubernetes.clusters`` pillar map.
+        When set, the alias's nested config dict overrides top-level
+        ``kubernetes.*`` keys for this call only. ``None`` and ``"default"``
+        both pick the legacy top-level path.
     :returns: a marker dict whose contents depend on the resolved mode;
         the only stable contract is that ``_cleanup(**result)`` is safe.
     """
+    if cluster is not None and cluster != "default":
+        clusters = get_config_option("kubernetes.clusters", {}) or {}
+        if cluster not in clusters:
+            raise CommandExecutionError(
+                f"Unknown kubernetes cluster alias {cluster!r}. "
+                f"Configured aliases: {sorted(clusters) or '(none)'}"
+            )
+        alias_cfg = clusters[cluster] or {}
+        get_config_option = _alias_config_shim(alias_cfg, get_config_option)
     return _resolve_auth(get_config_option, env=env, **kwargs)
+
+
+def _alias_config_shim(alias_cfg, parent_get):
+    """
+    Build a ``get_config_option``-shaped callable that checks the alias
+    config block first, then defers to the original callable.
+
+    ``alias_cfg`` is a flat dict whose keys may be either the legacy
+    ``kubernetes.foo`` form or the bare ``foo`` form. Both are consulted.
+    """
+
+    def _shim(key, default=""):
+        if key in alias_cfg:
+            return alias_cfg[key]
+        bare = key.split(".", 1)[-1] if "." in key else key
+        if bare in alias_cfg:
+            return alias_cfg[bare]
+        return parent_get(key, default)
+
+    return _shim
+
+
+def list_configured_clusters(get_config_option):
+    """
+    Return the sorted list of configured cluster aliases.
+
+    Always includes the implicit ``"default"`` alias representing the
+    legacy top-level ``kubernetes.*`` config block.
+    """
+    clusters = get_config_option("kubernetes.clusters", {}) or {}
+    aliases = sorted(clusters)
+    if "default" not in aliases:
+        aliases.insert(0, "default")
+    return aliases
 
 
 def _resolve_auth(get_config_option, env=None, **kwargs):
     env = env if env is not None else os.environ
+
+    # Explicit kwargs win over pillar/env entirely. This lets a caller
+    # override a kubeconfig-configured minion with e.g.
+    # ``namespaces(host=..., exec={...})`` — the alternative (pillar
+    # always wins) means the exec/api_key/cert paths are unreachable
+    # whenever a kubeconfig is configured at the pillar level.
+    if kwargs.get("kubeconfig"):
+        return _resolve_kubeconfig_file(kwargs["kubeconfig"], get_config_option, env, kwargs)
+    if kwargs.get("kubeconfig-data"):
+        return _resolve_kubeconfig_data(kwargs["kubeconfig-data"], get_config_option, env, kwargs)
+    if kwargs.get("host"):
+        return _resolve_explicit(kwargs["host"], get_config_option, env, kwargs)
+    if _coerce_bool(kwargs.get("in_cluster")) is True:
+        return _resolve_in_cluster(get_config_option, env, kwargs)
 
     kubeconfig = _get("kubernetes.kubeconfig", kwargs, get_config_option, env)
     if kubeconfig:
@@ -254,6 +315,7 @@ def _resolve_explicit(host, get_config_option, env, kwargs):
     api_key = _get("kubernetes.api_key", kwargs, get_config_option, env)
     username = _get("kubernetes.username", kwargs, get_config_option, env)
     client_cert = _get("kubernetes.client_cert", kwargs, get_config_option, env)
+    exec_cfg = _get("kubernetes.exec", kwargs, get_config_option, env)
 
     if api_key:
         prefix = _get("kubernetes.api_key_prefix", kwargs, get_config_option, env) or "Bearer"
@@ -267,6 +329,8 @@ def _resolve_explicit(host, get_config_option, env, kwargs):
         client_key = _get("kubernetes.client_key", kwargs, get_config_option, env)
         if client_key:
             config.key_file = client_key
+    elif exec_cfg:
+        _apply_exec_auth(config, exec_cfg)
     # No credentials with a host is allowed (e.g. an unauthenticated
     # local kube-apiserver in test harnesses); we rely on the API
     # server to reject if it requires auth.
@@ -298,6 +362,76 @@ def _apply_post_hooks(config, get_config_option, env, kwargs):
     verify = _coerce_bool(_get("kubernetes.verify_ssl", kwargs, get_config_option, env))
     if verify is not None:
         config.verify_ssl = verify
+
+
+def _apply_exec_auth(config, exec_cfg):
+    """
+    Wire an exec credential plugin into ``config``.
+
+    ``exec_cfg`` is a dict matching the kubeconfig ``users[].user.exec``
+    block (the same shape EKS / GKE / OIDC plugins use):
+
+    .. code-block:: yaml
+
+        command: aws-iam-authenticator
+        args: [token, -i, prod-cluster]
+        env:
+          AWS_PROFILE: prod
+        api_version: client.authentication.k8s.io/v1beta1
+        install_hint: |
+          aws-iam-authenticator not found. Install from ...
+
+    The kubernetes Python client's ``ExecProvider`` handles invocation,
+    parsing the JSON ``ExecCredential`` reply, and re-invoking the plugin
+    when the previous credential's ``status.expirationTimestamp`` passes.
+
+    Refuses ``command`` paths that are not absolute and not resolvable on
+    ``PATH``. Args are passed as a list and never go through a shell.
+    """
+    if not isinstance(exec_cfg, dict):
+        raise CommandExecutionError(
+            "kubernetes.exec must be a mapping (command/args/env/api_version)"
+        )
+    command = exec_cfg.get("command")
+    if not command:
+        raise CommandExecutionError("kubernetes.exec.command is required")
+    if not os.path.isabs(command):
+        import shutil  # pylint: disable=import-outside-toplevel
+
+        resolved = shutil.which(command)
+        if not resolved:
+            hint = exec_cfg.get("install_hint", "")
+            raise CommandExecutionError(
+                f"kubernetes.exec.command {command!r} not found on PATH. {hint}".rstrip()
+            )
+        command = resolved
+
+    exec_block = {
+        "command": command,
+        "args": list(exec_cfg.get("args") or []),
+        "env": [{"name": k, "value": str(v)} for k, v in (exec_cfg.get("env") or {}).items()],
+        "apiVersion": exec_cfg.get("api_version") or "client.authentication.k8s.io/v1beta1",
+        "installHint": exec_cfg.get("install_hint", ""),
+    }
+    # pylint: disable=import-outside-toplevel,import-error,no-name-in-module
+    from kubernetes.config.kube_config import ConfigNode
+    from kubernetes.config.kube_config import ExecProvider
+
+    # ExecProvider expects a ConfigNode (a thin kubeconfig-style
+    # wrapper providing ``safe_get``), not a plain dict.
+    provider = ExecProvider(ConfigNode("exec", exec_block), None, None)
+
+    def _refresh_token(cfg):
+        result = provider.run()
+        token = result.get("token") if isinstance(result, dict) else None
+        if token:
+            cfg.api_key["authorization"] = f"Bearer {token}"
+        return cfg.api_key.get("authorization", "")
+
+    config.api_key = config.api_key or {}
+    config.api_key["authorization"] = ""
+    config.api_key_prefix = config.api_key_prefix or {}
+    config.refresh_api_key_hook = _refresh_token
 
 
 def _cleanup(**kwargs):

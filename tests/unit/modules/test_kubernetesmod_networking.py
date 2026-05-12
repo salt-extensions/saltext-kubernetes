@@ -117,3 +117,28 @@ def test_pdb_spec_rejects_neither_min_nor_max():
 def test_pdb_spec_requires_selector():
     with pytest.raises(CommandExecutionError, match="must include 'selector'"):
         kubernetesmod.__dict_to_pdb_spec({"minAvailable": 1})
+
+
+def test_pdb_spec_selector_accepts_camelcase_matchlabels():
+    """Users write YAML-style ``matchLabels``; the helper must accept it.
+
+    Forwarding camelCase straight into ``V1LabelSelector`` previously
+    raised ``TypeError: unexpected keyword argument 'matchLabels'``
+    because the kubernetes-client uses snake_case.
+    """
+    out = kubernetesmod.__dict_to_pdb_spec(
+        {"minAvailable": 1, "selector": {"matchLabels": {"app": "pdb-target"}}}
+    )
+    assert out["selector"].match_labels == {"app": "pdb-target"}
+
+
+def test_pdb_spec_selector_accepts_camelcase_match_expressions():
+    out = kubernetesmod.__dict_to_pdb_spec(
+        {
+            "minAvailable": 1,
+            "selector": {
+                "matchExpressions": [{"key": "tier", "operator": "In", "values": ["web"]}]
+            },
+        }
+    )
+    assert out["selector"].match_expressions[0]["key"] == "tier"

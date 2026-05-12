@@ -2,7 +2,8 @@
 Internal dynamic-client wrapper for the saltext-kubernetes extension.
 
 Wraps :py:class:`kubernetes.dynamic.DynamicClient` with the small
-helpers the upcoming generic-apply path needs:
+helpers the generic-apply / generic-patch / generic-read code paths
+need:
 
 * :py:func:`get_dynamic_client` — lazily-cached client per process,
   rebuilt when the auth Configuration changes (which happens whenever
@@ -15,14 +16,44 @@ helpers the upcoming generic-apply path needs:
 
 * :py:func:`apply_manifest` — performs a server-side apply against the
   resolved resource, surfacing the field-manager and force-conflicts
-  knobs that ``kubectl apply --server-side`` exposes. Returns the
-  applied object as a dict (sanitised the same way the typed CRUD
-  paths do).
+  knobs that ``kubectl apply --server-side`` exposes.
 
-This module is internal — public callers should reach for the
-``kubernetes.apply`` execution-module function shipped in PR10, which
-adds source-file rendering, multi-doc support, diffing, and the
-``test=True``-aware dry-run plumbing on top of these primitives.
+* :py:func:`patch_object` — generic kind-agnostic patch with selectable
+  patch type (strategic / RFC 7396 merge / RFC 6902 json-patch).
+
+* :py:func:`get_object`, :py:func:`delete_object`,
+  :py:func:`list_resource` — generic read/delete/list-by-GVK
+  counterparts to the typed CRUD wrappers in
+  :py:mod:`saltext.kubernetes.modules.kubernetesmod`.
+
+This module is **internal**. Public callers should never import from
+here — every helper has a public counterpart in the ``kubernetes``
+execution module (:py:mod:`saltext.kubernetes.modules.kubernetesmod`)
+that adds the user-facing concerns these helpers deliberately omit:
+
+* connection lifecycle (``_setup_conn`` / ``_cleanup`` around each call)
+* kwarg marshalling from the Salt loader (kubeconfig, context, cluster
+  alias, env-var precedence, etc.)
+* kind-name inference from the typed kind-registry so callers can pass
+  ``kind="Deployment"`` without spelling out ``api_version="apps/v1"``
+* source-file rendering, multi-doc YAML, diff/idempotency tracking,
+  ``test=True`` plumbing on the apply path
+
+In short: this module's functions are **pure GVK plumbing**, and they
+assume an already-installed default Configuration on
+``kubernetes.client.Configuration``. The public ``kubernetes.*``
+execution-module functions are the thin wrappers that bring those
+preconditions about.
+
+Public ↔ internal counterparts:
+
+================================  ========================================
+``kubernetes.apply``              :py:func:`apply_manifest`
+``kubernetes.patch_object``       :py:func:`patch_object`
+``kubernetes.get_object``         :py:func:`get_object`
+``kubernetes.delete_manifest``    :py:func:`delete_object`
+``kubernetes.list_*``             :py:func:`list_resource`
+================================  ========================================
 
 .. versionadded:: 2.1.0
 """
@@ -207,6 +238,88 @@ def apply_manifest(
     # ``server_side_apply`` returns a ResourceInstance whose ``.to_dict()``
     # produces the same shape ``ApiClient().sanitize_for_serialization``
     # produces for the typed paths.
+    if hasattr(result, "to_dict"):
+        return result.to_dict()
+    return ApiClient().sanitize_for_serialization(result)
+
+
+def patch_object(
+    api_version: str,
+    kind: str,
+    name: str,
+    patch,
+    namespace: str | None = None,
+    patch_type: str = "strategic",
+    field_manager: str | None = None,
+    dry_run: bool = False,
+) -> dict:
+    """
+    Patch an object by GVK with a caller-selected patch type.
+
+    Internal plumbing for the public
+    :py:func:`saltext.kubernetes.modules.kubernetesmod.patch_object`.
+    That public function is the one users call from Salt; it handles
+    connection setup, accepts the Salt-loader kwarg conventions, and
+    can infer ``api_version`` from the typed kind-registry when the
+    caller omits it. **This** function assumes both are already
+    resolved — ``api_version`` and ``kind`` must be supplied, and a
+    default :py:class:`kubernetes.client.Configuration` must already
+    be installed (as :py:func:`_setup_conn` installs on every call).
+
+    ``patch_type`` selects the HTTP ``Content-Type`` and, with it, the
+    semantics of how ``patch`` is interpreted server-side:
+
+      * ``"strategic"`` — ``application/strategic-merge-patch+json``
+        (kubectl's default; works only on built-in kinds with
+        registered strategic-merge directives).
+      * ``"merge"`` / ``"json-merge"`` — ``application/merge-patch+json``
+        (RFC 7396); whole-object replacement at each key. Works on
+        CRDs and any kind.
+      * ``"json"`` / ``"json-patch"`` — ``application/json-patch+json``
+        (RFC 6902); ``patch`` must be a list of operation dicts like
+        ``[{"op": "replace", "path": "/spec/replicas", "value": 5}]``.
+
+    Returns the patched object as a dict (same shape as
+    :py:func:`apply_manifest`).
+    """
+    content_types = {
+        "strategic": "application/strategic-merge-patch+json",
+        "merge": "application/merge-patch+json",
+        "json-merge": "application/merge-patch+json",
+        "json": "application/json-patch+json",
+        "json-patch": "application/json-patch+json",
+    }
+    if patch_type not in content_types:
+        raise CommandExecutionError(
+            f"Unknown patch_type {patch_type!r}. " f"Accepted: {sorted(set(content_types))}"
+        )
+    if patch_type in ("json", "json-patch") and not isinstance(patch, list):
+        raise CommandExecutionError(
+            "json-patch requires a list of operation dicts "
+            "(e.g. [{'op': 'replace', 'path': '/spec/replicas', 'value': 5}])"
+        )
+
+    resource = get_resource(api_version, kind)
+    if resource.namespaced and not namespace:
+        raise CommandExecutionError(f"Namespaced kind {kind} requires 'namespace'.")
+
+    patch_kwargs: dict[str, Any] = {
+        "name": name,
+        "body": patch,
+        "content_type": content_types[patch_type],
+    }
+    if namespace:
+        patch_kwargs["namespace"] = namespace
+    if field_manager:
+        patch_kwargs["field_manager"] = field_manager
+    if dry_run:
+        patch_kwargs["dry_run"] = "All"
+
+    try:
+        result = resource.patch(**patch_kwargs)
+    except (ApiException, HTTPError) as exc:
+        raise CommandExecutionError(exc) from exc
+
     if hasattr(result, "to_dict"):
         return result.to_dict()
     return ApiClient().sanitize_for_serialization(result)

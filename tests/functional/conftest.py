@@ -558,6 +558,38 @@ def labeled_node(kubernetes_exe, request, node_name):
         assert not cleaned_labels - set(initial_labels)
 
 
+@pytest.fixture(params=[True])
+def annotated_node(kubernetes_exe, request, node_name):
+    """Fixture to create an annotated test node.
+
+    Mirrors :py:func:`labeled_node`. ``request.param=True`` pre-creates
+    the test annotation; ``False`` leaves it absent so a test can
+    exercise the create-from-scratch path.
+
+    .. versionadded:: 2.1.0
+    """
+    initial = kubernetes_exe.node_annotations(node_name)
+    assert isinstance(initial, dict)
+    annotations = None
+
+    if request.param:
+        if request.param is True:
+            annotations = {"salt-test.example.com/test": "value"}
+        else:
+            annotations = request.param
+        for k, v in annotations.items():
+            kubernetes_exe.node_add_annotation(node_name, k, v)
+        updated = kubernetes_exe.node_annotations(node_name)
+        for k, v in annotations.items():
+            assert updated.get(k) == v
+    try:
+        yield {"name": node_name, "annotations": annotations}
+    finally:
+        final = set(kubernetes_exe.node_annotations(node_name))
+        for key in final - set(initial):
+            kubernetes_exe.node_remove_annotation(node_name, key)
+
+
 # ---------------------------------------------------------------------------
 # RBAC fixtures (Role, RoleBinding, ClusterRole, ClusterRoleBinding,
 # ServiceAccount). Each follows the existing ``params=[True]`` convention so
@@ -688,3 +720,319 @@ def service_account(kubernetes_exe, service_account_spec, request):
     finally:
         kubernetes_exe.delete_service_account(name=name, namespace="default")
         assert kubernetes_exe.show_service_account(name=name, namespace="default") is None
+
+
+# ---------------------------------------------------------------------------
+# Batch fixtures (Job, CronJob).
+#
+# .. versionadded:: 2.1.0
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def job_spec():
+    """A trivial Job that completes in seconds; safe to run on every kind cluster."""
+    return {
+        "template": {
+            "metadata": {"labels": {"app": "test-job"}},
+            "spec": {
+                "restartPolicy": "Never",
+                "containers": [
+                    {
+                        "name": "true",
+                        "image": "registry.k8s.io/pause:3.9",
+                        "command": ["/pause"],
+                    }
+                ],
+            },
+        },
+        "backoffLimit": 0,
+        "ttlSecondsAfterFinished": 60,
+    }
+
+
+@pytest.fixture(params=[True])
+def job(kubernetes_exe, job_spec, request):
+    name = random_string("job-", uppercase=False)
+    if request.param:
+        res = kubernetes_exe.create_job(name=name, namespace="default", spec=job_spec)
+        assert isinstance(res, dict)
+        assert res["metadata"]["name"] == name
+    try:
+        yield {"name": name, "namespace": "default", "spec": job_spec}
+    finally:
+        kubernetes_exe.delete_job(name=name, namespace="default")
+        assert kubernetes_exe.show_job(name=name, namespace="default") is None
+
+
+@pytest.fixture
+def cron_job_spec(job_spec):
+    return {
+        "schedule": "*/5 * * * *",
+        "jobTemplate": {"spec": job_spec},
+    }
+
+
+@pytest.fixture(params=[True])
+def cron_job(kubernetes_exe, cron_job_spec, request):
+    name = random_string("cj-", uppercase=False)
+    if request.param:
+        res = kubernetes_exe.create_cron_job(name=name, namespace="default", spec=cron_job_spec)
+        assert isinstance(res, dict)
+        assert res["metadata"]["name"] == name
+    try:
+        yield {"name": name, "namespace": "default", "spec": cron_job_spec}
+    finally:
+        kubernetes_exe.delete_cron_job(name=name, namespace="default")
+        assert kubernetes_exe.show_cron_job(name=name, namespace="default") is None
+
+
+# ---------------------------------------------------------------------------
+# Networking / Autoscaling / Policy fixtures.
+#
+# .. versionadded:: 2.1.0
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def ingress_spec():
+    return {
+        "rules": [
+            {
+                "host": "example.test",
+                "http": {
+                    "paths": [
+                        {
+                            "path": "/",
+                            "pathType": "Prefix",
+                            "backend": {"service": {"name": "noop", "port": {"number": 80}}},
+                        }
+                    ]
+                },
+            }
+        ]
+    }
+
+
+@pytest.fixture(params=[True])
+def ingress(kubernetes_exe, ingress_spec, request):
+    name = random_string("ing-", uppercase=False)
+    if request.param:
+        res = kubernetes_exe.create_ingress(name=name, namespace="default", spec=ingress_spec)
+        assert isinstance(res, dict)
+        assert res["metadata"]["name"] == name
+    try:
+        yield {"name": name, "namespace": "default", "spec": ingress_spec}
+    finally:
+        kubernetes_exe.delete_ingress(name=name, namespace="default")
+        assert kubernetes_exe.show_ingress(name=name, namespace="default") is None
+
+
+@pytest.fixture
+def hpa_target_deployment(kubernetes_exe):
+    """A scalable Deployment for an HPA to target."""
+    name = random_string("hpa-tgt-", uppercase=False)
+    spec = {
+        "replicas": 1,
+        "selector": {"matchLabels": {"app": name}},
+        "template": {
+            "metadata": {"labels": {"app": name}},
+            "spec": {
+                "containers": [
+                    {
+                        "name": "pause",
+                        "image": "registry.k8s.io/pause:3.9",
+                        "resources": {"requests": {"cpu": "10m"}},
+                    }
+                ]
+            },
+        },
+    }
+    kubernetes_exe.create_deployment(
+        name=name, namespace="default", metadata={}, spec=spec, wait=False
+    )
+    try:
+        yield name
+    finally:
+        kubernetes_exe.delete_deployment(name=name, namespace="default", wait=True)
+
+
+@pytest.fixture
+def horizontal_pod_autoscaler_spec(hpa_target_deployment):
+    return {
+        "scaleTargetRef": {
+            "apiVersion": "apps/v1",
+            "kind": "Deployment",
+            "name": hpa_target_deployment,
+        },
+        "minReplicas": 1,
+        "maxReplicas": 3,
+        "metrics": [
+            {
+                "type": "Resource",
+                "resource": {
+                    "name": "cpu",
+                    "target": {"type": "Utilization", "averageUtilization": 80},
+                },
+            }
+        ],
+    }
+
+
+@pytest.fixture(params=[True])
+def horizontal_pod_autoscaler(kubernetes_exe, horizontal_pod_autoscaler_spec, request):
+    name = random_string("hpa-", uppercase=False)
+    if request.param:
+        res = kubernetes_exe.create_horizontal_pod_autoscaler(
+            name=name, namespace="default", spec=horizontal_pod_autoscaler_spec
+        )
+        assert isinstance(res, dict)
+        assert res["metadata"]["name"] == name
+    try:
+        yield {"name": name, "namespace": "default", "spec": horizontal_pod_autoscaler_spec}
+    finally:
+        kubernetes_exe.delete_horizontal_pod_autoscaler(name=name, namespace="default")
+        assert kubernetes_exe.show_horizontal_pod_autoscaler(name=name, namespace="default") is None
+
+
+@pytest.fixture
+def pod_disruption_budget_spec():
+    return {
+        "selector": {"matchLabels": {"app": "pdb-target"}},
+        "minAvailable": 1,
+    }
+
+
+@pytest.fixture(params=[True])
+def pod_disruption_budget(kubernetes_exe, pod_disruption_budget_spec, request):
+    name = random_string("pdb-", uppercase=False)
+    if request.param:
+        res = kubernetes_exe.create_pod_disruption_budget(
+            name=name, namespace="default", spec=pod_disruption_budget_spec
+        )
+        assert isinstance(res, dict)
+        assert res["metadata"]["name"] == name
+    try:
+        yield {"name": name, "namespace": "default", "spec": pod_disruption_budget_spec}
+    finally:
+        kubernetes_exe.delete_pod_disruption_budget(name=name, namespace="default")
+        assert kubernetes_exe.show_pod_disruption_budget(name=name, namespace="default") is None
+
+
+# ---------------------------------------------------------------------------
+# Persistent-volume fixtures.
+#
+# .. versionadded:: 2.1.0
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def persistent_volume_spec():
+    return {
+        "capacity": {"storage": "10Mi"},
+        "accessModes": ["ReadWriteOnce"],
+        "persistentVolumeReclaimPolicy": "Retain",
+        "hostPath": {"path": "/tmp/saltext-pv-test"},
+    }
+
+
+@pytest.fixture(params=[True])
+def persistent_volume(kubernetes_exe, persistent_volume_spec, request):
+    name = random_string("pv-", uppercase=False)
+    if request.param:
+        res = kubernetes_exe.create_persistent_volume(name=name, spec=persistent_volume_spec)
+        assert isinstance(res, dict)
+        assert res["metadata"]["name"] == name
+    try:
+        yield {"name": name, "spec": persistent_volume_spec}
+    finally:
+        kubernetes_exe.delete_persistent_volume(name=name)
+        assert kubernetes_exe.show_persistent_volume(name=name) is None
+
+
+@pytest.fixture
+def persistent_volume_claim_spec():
+    return {
+        "accessModes": ["ReadWriteOnce"],
+        "resources": {"requests": {"storage": "10Mi"}},
+        "storageClassName": "",
+    }
+
+
+@pytest.fixture(params=[True])
+def persistent_volume_claim(kubernetes_exe, persistent_volume_claim_spec, request):
+    name = random_string("pvc-", uppercase=False)
+    if request.param:
+        res = kubernetes_exe.create_persistent_volume_claim(
+            name=name, namespace="default", spec=persistent_volume_claim_spec
+        )
+        assert isinstance(res, dict)
+        assert res["metadata"]["name"] == name
+    try:
+        yield {"name": name, "namespace": "default", "spec": persistent_volume_claim_spec}
+    finally:
+        # PVCs have a ``kubernetes.io/pvc-protection`` finalizer that
+        # keeps them around briefly after delete is requested. Wait
+        # for actual disappearance rather than asserting synchronous
+        # deletion.
+        kubernetes_exe.delete_persistent_volume_claim(name=name, namespace="default", wait=True)
+        import time as _time  # pylint: disable=import-outside-toplevel
+
+        for _ in range(30):
+            if kubernetes_exe.show_persistent_volume_claim(name=name, namespace="default") is None:
+                break
+            _time.sleep(1)
+        assert kubernetes_exe.show_persistent_volume_claim(name=name, namespace="default") is None
+
+
+# ---------------------------------------------------------------------------
+# Dual-cluster fixture for multi-cluster real-isolation tests.
+#
+# Gated by ``RUN_MULTI_CLUSTER_TESTS=1`` so the default CI cycle doesn't
+# pay the ~90 second cost of materialising a second kind cluster.
+#
+# .. versionadded:: 2.1.0
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="session")
+def multi_kind_cluster(tmp_path_factory):  # pragma: no cover
+    """Spin up a second kind cluster alongside ``kind_cluster``.
+
+    Returns a dict with paths to both kubeconfigs:
+
+    .. code-block:: python
+
+        {
+            "primary_kubeconfig": <Path>,
+            "secondary_kubeconfig": <Path>,
+            "primary_context":   "kind-salt-test",
+            "secondary_context": "kind-saltext-secondary",
+        }
+
+    The test that uses this fixture is responsible for wiring the
+    minion's pillar to point at both clusters via the
+    ``kubernetes.clusters`` alias map (see
+    ``test_kubernetesmod_multi_cluster_real.py``).
+    """
+    import os  # pylint: disable=import-outside-toplevel
+
+    if os.environ.get("RUN_MULTI_CLUSTER_TESTS") != "1":
+        pytest.skip("Set RUN_MULTI_CLUSTER_TESTS=1 to enable dual-kind-cluster tests")
+    # pylint: disable=import-outside-toplevel
+    from pytest_kind import KindCluster
+
+    secondary_name = "saltext-secondary"
+    workdir = tmp_path_factory.mktemp("kind-secondary")
+    cluster = KindCluster(name=secondary_name, kubeconfig=workdir / "kubeconfig")
+    cluster.create()
+    try:
+        yield {
+            "primary_kubeconfig": None,  # filled in by caller (uses kind_cluster fixture)
+            "secondary_kubeconfig": str(cluster.kubeconfig_path),
+            "primary_context": "kind-salt-test",
+            "secondary_context": f"kind-{secondary_name}",
+            "secondary_cluster": cluster,
+        }
+    finally:
+        cluster.delete()

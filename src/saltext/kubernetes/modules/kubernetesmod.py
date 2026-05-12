@@ -63,7 +63,9 @@ CLI Example:
 """
 
 import base64
+import copy
 import datetime
+import hashlib
 import io
 import json
 import logging
@@ -90,6 +92,7 @@ from saltext.kubernetes.utils import _kinds
 from saltext.kubernetes.utils._connection import POLLING_TIME_LIMIT  # noqa: F401
 from saltext.kubernetes.utils._connection import _cleanup  # noqa: F401
 from saltext.kubernetes.utils._connection import _setup_conn as _setup_conn_impl  # noqa: F401
+from saltext.kubernetes.utils._connection import list_configured_clusters
 
 # pylint: enable=unused-import
 
@@ -106,6 +109,10 @@ try:
     from kubernetes.client import V1ClusterRoleBinding
     from kubernetes.client import V1CronJob
     from kubernetes.client import V1CronJobSpec
+    from kubernetes.client import V1CustomResourceDefinition
+    from kubernetes.client import V1CustomResourceDefinitionNames
+    from kubernetes.client import V1CustomResourceDefinitionSpec
+    from kubernetes.client import V1CustomResourceDefinitionVersion
     from kubernetes.client import V1Deployment
     from kubernetes.client import V1DeploymentSpec
     from kubernetes.client import V1Ingress
@@ -113,6 +120,11 @@ try:
     from kubernetes.client import V1Job
     from kubernetes.client import V1JobSpec
     from kubernetes.client import V1JobTemplateSpec
+    from kubernetes.client import V1LimitRange
+    from kubernetes.client import V1LimitRangeItem
+    from kubernetes.client import V1LimitRangeSpec
+    from kubernetes.client import V1NetworkPolicy
+    from kubernetes.client import V1NetworkPolicySpec
     from kubernetes.client import V1PersistentVolume
     from kubernetes.client import V1PersistentVolumeClaim
     from kubernetes.client import V1PersistentVolumeClaimSpec
@@ -120,6 +132,9 @@ try:
     from kubernetes.client import V1PodDisruptionBudget
     from kubernetes.client import V1PodDisruptionBudgetSpec
     from kubernetes.client import V1PolicyRule
+    from kubernetes.client import V1PriorityClass
+    from kubernetes.client import V1ResourceQuota
+    from kubernetes.client import V1ResourceQuotaSpec
     from kubernetes.client import V1Role
     from kubernetes.client import V1RoleBinding
     from kubernetes.client import V1RoleRef
@@ -1953,6 +1968,7 @@ def create_secret(
     dry_run=False,
     wait=False,
     timeout=60,
+    append_hash=False,
     **kwargs,
 ):
     """
@@ -2054,6 +2070,13 @@ def create_secret(
         else:
             encoded_data[key] = base64.b64encode(str(value).encode("utf-8")).decode("utf-8")
 
+    # ``append_hash`` makes the resulting object effectively immutable:
+    # any change to data produces a new name, so consumers (Deployments
+    # mounting the secret) trigger a rollout on data drift instead of
+    # silently picking up new values. Mirrors kubectl/Ansible behaviour.
+    if append_hash:
+        name = f"{name}-{_hash_suffix(encoded_data, secret_type or '')}"
+
     body = kubernetes.client.V1Secret(
         metadata=__dict_to_object_meta(name, namespace, metadata),
         data=encoded_data,
@@ -2097,6 +2120,7 @@ def create_configmap(
     dry_run=False,
     wait=False,
     timeout=60,
+    append_hash=False,
     **kwargs,
 ):
     """
@@ -2172,6 +2196,10 @@ def create_configmap(
         raise CommandExecutionError("Data must be a dictionary")
 
     data = __enforce_only_strings_dict(data)
+
+    # See ``create_secret`` for the rationale behind ``append_hash``.
+    if append_hash:
+        name = f"{name}-{_hash_suffix(data)}"
 
     body = kubernetes.client.V1ConfigMap(
         metadata=__dict_to_object_meta(name, namespace, {}), data=data
@@ -7038,15 +7066,24 @@ def _camel_to_snake(name):
     return _CAMEL_TO_SNAKE_RE.sub("_", name).lower()
 
 
-def _normalise_field_map(spec, mapping):
+def _normalise_field_map(spec, mapping=None):
     """
-    Translate camelCase keys to snake_case.
+    Translate top-level camelCase keys to snake_case.
 
-    *mapping* takes precedence (so per-kind overrides for fields with
-    awkward auto-translations win); unmapped camelCase keys fall back
-    to a generic camel→snake conversion. Keys already in snake_case
-    pass through unchanged.
+    *mapping* is an optional per-kind override dict, consulted first so
+    fields with awkward auto-translations (acronyms like ``clusterIP``
+    → ``cluster_ip``, suffixed plurals like ``nonResourceURLs`` →
+    ``non_resource_urls``) can be pinned explicitly. Keys not in
+    *mapping* fall back to a generic camel→snake conversion via
+    :py:func:`_camel_to_snake`. Keys already in snake_case pass through
+    unchanged.
+
+    Non-mapping inputs (lists, scalars, ``None``) are returned
+    unchanged so callers can apply this defensively to user input.
     """
+    if not isinstance(spec, dict):
+        return spec
+    mapping = mapping or {}
     out = {}
     for k, v in spec.items():
         if k in mapping:
@@ -7056,6 +7093,17 @@ def _normalise_field_map(spec, mapping):
         else:
             out[k] = v
     return out
+
+
+def _snake_caseify_keys(spec):
+    """Translate top-level camelCase keys to snake_case (no overrides).
+
+    Thin alias for :py:func:`_normalise_field_map` with no per-kind
+    override mapping. Use this when no field needs an explicit override
+    (no acronyms or plurals the OpenAPI generator translates oddly);
+    use :py:func:`_normalise_field_map` directly when one is needed.
+    """
+    return _normalise_field_map(spec)
 
 
 _INGRESS_FIELD_MAP = {
@@ -7139,12 +7187,200 @@ def __dict_to_pdb_spec(spec):
         )
     if not isinstance(normalised.get("selector"), dict):
         raise CommandExecutionError("PDB spec must include 'selector' (a label-selector dict)")
-    normalised["selector"] = kubernetes.client.V1LabelSelector(**normalised["selector"])
+    selector = normalised["selector"]
+    selector_kwargs = {}
+    if "matchLabels" in selector:
+        selector_kwargs["match_labels"] = selector["matchLabels"]
+    elif "match_labels" in selector:
+        selector_kwargs["match_labels"] = selector["match_labels"]
+    if "matchExpressions" in selector:
+        selector_kwargs["match_expressions"] = selector["matchExpressions"]
+    elif "match_expressions" in selector:
+        selector_kwargs["match_expressions"] = selector["match_expressions"]
+    normalised["selector"] = kubernetes.client.V1LabelSelector(**selector_kwargs)
     try:
         V1PodDisruptionBudgetSpec(**normalised)
     except (TypeError, ValueError) as exc:
         raise CommandExecutionError(f"Invalid PDB spec: {exc}") from exc
     return normalised
+
+
+def _label_selector_from_dict(selector):
+    """Build a V1LabelSelector from a kubectl-style mixed-case dict.
+
+    Accepts both YAML-native ``matchLabels``/``matchExpressions`` and the
+    snake_case spellings the kubernetes-client uses.
+    """
+    if selector is None:
+        return None
+    if not isinstance(selector, dict):
+        raise CommandExecutionError("selector must be a dictionary")
+    kwargs = {}
+    if "matchLabels" in selector or "match_labels" in selector:
+        kwargs["match_labels"] = selector.get("matchLabels") or selector.get("match_labels")
+    if "matchExpressions" in selector or "match_expressions" in selector:
+        kwargs["match_expressions"] = selector.get("matchExpressions") or selector.get(
+            "match_expressions"
+        )
+    return kubernetes.client.V1LabelSelector(**kwargs)
+
+
+_NETPOL_FIELD_MAP = {
+    "podSelector": "pod_selector",
+    "policyTypes": "policy_types",
+}
+
+
+def __dict_to_network_policy_spec(spec):
+    """Validate dict, return kwargs for V1NetworkPolicySpec.
+
+    The full NetworkPolicy rule schema (ingress/egress rules with
+    ``from``/``to`` selectors, ports, ipBlock CIDRs) is large; we pass
+    ingress/egress through as-is and let the kubernetes-client OpenAPI
+    serializer validate at request time. We do normalize the top-level
+    camelCase keys and convert ``podSelector`` to a V1LabelSelector.
+    """
+    if not isinstance(spec, dict):
+        raise CommandExecutionError(
+            f"NetworkPolicy spec must be a dictionary, not {type(spec).__name__}"
+        )
+    normalised = _normalise_field_map(spec, _NETPOL_FIELD_MAP)
+    if "pod_selector" not in normalised:
+        raise CommandExecutionError("NetworkPolicy spec must include 'podSelector'")
+    normalised["pod_selector"] = _label_selector_from_dict(normalised["pod_selector"])
+    if normalised.get("policy_types") is not None and not isinstance(
+        normalised["policy_types"], list
+    ):
+        raise CommandExecutionError("NetworkPolicy policyTypes must be a list")
+    try:
+        V1NetworkPolicySpec(**normalised)
+    except (TypeError, ValueError) as exc:
+        raise CommandExecutionError(f"Invalid NetworkPolicy spec: {exc}") from exc
+    return normalised
+
+
+_RESOURCE_QUOTA_FIELD_MAP = {
+    "scopeSelector": "scope_selector",
+}
+
+
+def __dict_to_resource_quota_spec(spec):
+    """Validate dict, return kwargs for V1ResourceQuotaSpec."""
+    if not isinstance(spec, dict):
+        raise CommandExecutionError(
+            f"ResourceQuota spec must be a dictionary, not {type(spec).__name__}"
+        )
+    normalised = _normalise_field_map(spec, _RESOURCE_QUOTA_FIELD_MAP)
+    if "hard" in normalised and not isinstance(normalised["hard"], dict):
+        raise CommandExecutionError("ResourceQuota 'hard' must be a dictionary")
+    if "scopes" in normalised and not isinstance(normalised["scopes"], list):
+        raise CommandExecutionError("ResourceQuota 'scopes' must be a list")
+    try:
+        V1ResourceQuotaSpec(**normalised)
+    except (TypeError, ValueError) as exc:
+        raise CommandExecutionError(f"Invalid ResourceQuota spec: {exc}") from exc
+    return normalised
+
+
+def __dict_to_limit_range_spec(spec):
+    """Validate dict, return kwargs for V1LimitRangeSpec.
+
+    Each entry in ``limits`` is a V1LimitRangeItem — we translate camelCase
+    keys (``defaultRequest``, ``maxLimitRequestRatio``) to snake_case before
+    construction so users can write kubectl-style YAML.
+    """
+    if not isinstance(spec, dict):
+        raise CommandExecutionError(
+            f"LimitRange spec must be a dictionary, not {type(spec).__name__}"
+        )
+    limits = spec.get("limits")
+    if not isinstance(limits, list) or not limits:
+        raise CommandExecutionError("LimitRange spec must include a non-empty 'limits' list")
+    items = []
+    for entry in limits:
+        if not isinstance(entry, dict):
+            raise CommandExecutionError("Each LimitRange 'limits' entry must be a dictionary")
+        item_kwargs = _snake_caseify_keys(entry)
+        try:
+            items.append(V1LimitRangeItem(**item_kwargs))
+        except (TypeError, ValueError) as exc:
+            raise CommandExecutionError(f"Invalid LimitRange item: {exc}") from exc
+    return {"limits": items}
+
+
+_PRIORITY_CLASS_FIELD_MAP = {
+    "globalDefault": "global_default",
+    "preemptionPolicy": "preemption_policy",
+}
+
+
+def __dict_to_priority_class_kwargs(spec):
+    """Validate dict, return kwargs for V1PriorityClass.
+
+    V1PriorityClass has no separate spec class; ``value``,
+    ``description``, ``globalDefault`` and ``preemptionPolicy`` live on
+    the object itself. ``value`` is required.
+    """
+    if not isinstance(spec, dict):
+        raise CommandExecutionError(
+            f"PriorityClass spec must be a dictionary, not {type(spec).__name__}"
+        )
+    normalised = _normalise_field_map(spec, _PRIORITY_CLASS_FIELD_MAP)
+    if "value" not in normalised:
+        raise CommandExecutionError("PriorityClass spec must include 'value' (integer)")
+    return normalised
+
+
+def _build_crd_names(names):
+    """V1CustomResourceDefinitionNames from a dict, camelCase-tolerant."""
+    if not isinstance(names, dict):
+        raise CommandExecutionError("CRD spec.names must be a dictionary")
+    kwargs = _snake_caseify_keys(names)
+    try:
+        return V1CustomResourceDefinitionNames(**kwargs)
+    except (TypeError, ValueError) as exc:
+        raise CommandExecutionError(f"Invalid CRD names: {exc}") from exc
+
+
+def _build_crd_versions(versions):
+    """List of V1CustomResourceDefinitionVersion from a list-of-dicts."""
+    if not isinstance(versions, list) or not versions:
+        raise CommandExecutionError("CRD spec.versions must be a non-empty list")
+    built = []
+    for entry in versions:
+        if not isinstance(entry, dict):
+            raise CommandExecutionError("Each CRD version entry must be a dictionary")
+        kwargs = _snake_caseify_keys(entry)
+        try:
+            built.append(V1CustomResourceDefinitionVersion(**kwargs))
+        except (TypeError, ValueError) as exc:
+            raise CommandExecutionError(f"Invalid CRD version entry: {exc}") from exc
+    return built
+
+
+def __dict_to_crd_spec(spec):
+    """Validate dict, return kwargs for V1CustomResourceDefinitionSpec.
+
+    Builds the nested ``names`` and ``versions`` objects from their dict
+    representations. Schema validation is delegated to the API server —
+    OpenAPI schemas are deeply nested and best validated server-side.
+    """
+    if not isinstance(spec, dict):
+        raise CommandExecutionError(f"CRD spec must be a dictionary, not {type(spec).__name__}")
+    if "group" not in spec:
+        raise CommandExecutionError("CRD spec must include 'group'")
+    if "names" not in spec:
+        raise CommandExecutionError("CRD spec must include 'names'")
+    if "versions" not in spec:
+        raise CommandExecutionError("CRD spec must include 'versions'")
+    if "scope" not in spec:
+        raise CommandExecutionError("CRD spec must include 'scope' ('Namespaced' or 'Cluster')")
+    return {
+        "group": spec["group"],
+        "names": _build_crd_names(spec["names"]),
+        "scope": spec["scope"],
+        "versions": _build_crd_versions(spec["versions"]),
+    }
 
 
 # --- API instance helpers --------------------------------------------------
@@ -7160,6 +7396,18 @@ def _autoscaling_api():
 
 def _policy_api():
     return kubernetes.client.PolicyV1Api()
+
+
+def _scheduling_api():
+    return kubernetes.client.SchedulingV1Api()
+
+
+def _apiextensions_api():
+    return kubernetes.client.ApiextensionsV1Api()
+
+
+def _core_v1_api():
+    return kubernetes.client.CoreV1Api()
 
 
 # --- Ingress ---------------------------------------------------------------
@@ -8220,6 +8468,1301 @@ def delete_pod_disruption_budget(name, namespace="default", wait=False, timeout=
 
 
 # ---------------------------------------------------------------------------
+# Typed wrappers for the remaining "first-class" kinds called out in #14:
+# NetworkPolicy, ResourceQuota, LimitRange, PriorityClass,
+# CustomResourceDefinition.
+#
+# Each kind gets the standard six-function surface (list, show, create,
+# replace, patch, delete) plus a present/absent state pair in
+# saltext.kubernetes.states.kubernetes. The generic kubernetes.apply path
+# also works for them, but typed wrappers make them targetable from SLS
+# (via ``*_present``/``*_absent``) and addressable by the resources
+# subsystem.
+#
+# .. versionadded:: 2.1.0
+# ---------------------------------------------------------------------------
+
+
+# --- NetworkPolicy (namespaced) --------------------------------------------
+
+
+def network_policies(namespace="default", **kwargs):
+    """List NetworkPolicies in *namespace*.
+
+    .. versionadded:: 2.1.0
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.network_policies namespace=default
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        resp = _networking_api().list_namespaced_network_policy(namespace)
+        return [item.metadata.name for item in resp.items]
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            return []
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def show_network_policy(name, namespace="default", **kwargs):
+    """Return the NetworkPolicy or ``None`` if absent.
+
+    .. versionadded:: 2.1.0
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.show_network_policy name=deny-all namespace=default
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        return ApiClient().sanitize_for_serialization(
+            _networking_api().read_namespaced_network_policy(name, namespace)
+        )
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            return None
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def _build_network_policy(name, namespace, metadata, spec):
+    return V1NetworkPolicy(
+        metadata=__dict_to_object_meta(name, namespace, metadata or {}),
+        spec=V1NetworkPolicySpec(**__dict_to_network_policy_spec(spec or {})),
+    )
+
+
+def create_network_policy(
+    name,
+    namespace="default",
+    metadata=None,
+    spec=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    dry_run=False,
+    **kwargs,
+):
+    """Create a NetworkPolicy.
+
+    .. versionadded:: 2.1.0
+
+    name
+        Name of the NetworkPolicy.
+
+    namespace
+        Namespace to create the policy in. Defaults to ``default``.
+
+    metadata
+        Object metadata dict (labels, annotations).
+
+    spec
+        NetworkPolicySpec dict. ``podSelector`` is required (an empty
+        ``{}`` selects every pod in the namespace). Optional
+        ``policyTypes``, ``ingress``, ``egress``.
+
+    source
+        Salt fileserver path to a YAML manifest. Mutually exclusive
+        with ``metadata`` + ``spec``.
+
+    template
+        Template engine for ``source`` (e.g. ``"jinja"``).
+
+    saltenv
+        Salt environment for ``source``.
+
+    template_context
+        Variables for the renderer.
+
+    dry_run
+        Server-side validate only; do not persist.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.create_network_policy name=deny-all namespace=default \
+            spec='{"podSelector": {}, "policyTypes": ["Ingress", "Egress"]}'
+    """
+    if source:
+        metadata, spec = _resolve_rbac_source(
+            source, "NetworkPolicy", template, saltenv, template_context, metadata, spec
+        )
+    body = _build_network_policy(name, namespace, metadata, spec)
+    cfg = _setup_conn(**kwargs)
+    try:
+        resp = _networking_api().create_namespaced_network_policy(
+            namespace, body, dry_run="All" if dry_run else None
+        )
+        return ApiClient().sanitize_for_serialization(resp)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 409:
+            raise CommandExecutionError(f"NetworkPolicy {name} already exists") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def replace_network_policy(
+    name,
+    namespace="default",
+    metadata=None,
+    spec=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    dry_run=False,
+    **kwargs,
+):
+    """Replace a NetworkPolicy in full.
+
+    .. versionadded:: 2.1.0
+
+    name
+        Name of the existing NetworkPolicy.
+
+    namespace
+        Namespace of the NetworkPolicy.
+
+    metadata, spec, source, template, saltenv, template_context, dry_run
+        See :py:func:`create_network_policy`.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.replace_network_policy name=deny-all namespace=default \
+            spec='{"podSelector": {"matchLabels": {"app": "web"}}}'
+    """
+    if source:
+        metadata, spec = _resolve_rbac_source(
+            source, "NetworkPolicy", template, saltenv, template_context, metadata, spec
+        )
+    body = _build_network_policy(name, namespace, metadata, spec)
+    cfg = _setup_conn(**kwargs)
+    try:
+        resp = _networking_api().replace_namespaced_network_policy(
+            name, namespace, body, dry_run="All" if dry_run else None
+        )
+        return ApiClient().sanitize_for_serialization(resp)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            raise CommandExecutionError(f"NetworkPolicy {name} not found") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def patch_network_policy(
+    name,
+    namespace="default",
+    patch=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    dry_run=False,
+    **kwargs,
+):
+    """Strategic-merge-patch a NetworkPolicy.
+
+    .. versionadded:: 2.1.0
+
+    name
+        Name of the existing NetworkPolicy.
+
+    namespace
+        Namespace of the NetworkPolicy.
+
+    patch
+        Patch dictionary applied via strategic merge.
+
+    source
+        Salt fileserver path to a YAML patch document.
+
+    template, saltenv, template_context
+        Renderer wiring for ``source``.
+
+    dry_run
+        Server-side validate only.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.patch_network_policy name=deny-all namespace=default \
+            patch='{"spec": {"policyTypes": ["Ingress"]}}'
+    """
+    if source:
+        patch_doc = __read_and_render_yaml_file(source, template, saltenv, template_context)
+    else:
+        patch_doc = patch
+    cfg = _setup_conn(**kwargs)
+    try:
+        resp = _networking_api().patch_namespaced_network_policy(
+            name, namespace, patch_doc, dry_run="All" if dry_run else None
+        )
+        return ApiClient().sanitize_for_serialization(resp)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            raise CommandExecutionError(f"NetworkPolicy {name} not found") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def delete_network_policy(name, namespace="default", wait=False, timeout=60, **kwargs):
+    """Delete a NetworkPolicy.
+
+    .. versionadded:: 2.1.0
+
+    name
+        Name of the NetworkPolicy.
+
+    namespace
+        Namespace of the NetworkPolicy.
+
+    wait
+        Block until the object is fully gone.
+
+    timeout
+        Seconds to wait when ``wait=True``.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.delete_network_policy name=deny-all namespace=default
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        api = _networking_api()
+        resp = api.delete_namespaced_network_policy(name, namespace)
+        if wait and not _wait_for_resource_status(
+            api, "network_policy", name, namespace, "deleted", timeout
+        ):
+            raise CommandExecutionError(f"Timeout waiting for NetworkPolicy {name} to be deleted")
+        return ApiClient().sanitize_for_serialization(resp)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            return None
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+# --- ResourceQuota (namespaced) -------------------------------------------
+
+
+def resource_quotas(namespace="default", **kwargs):
+    """List ResourceQuotas in *namespace*.
+
+    .. versionadded:: 2.1.0
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.resource_quotas namespace=team-a
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        resp = _core_v1_api().list_namespaced_resource_quota(namespace)
+        return [item.metadata.name for item in resp.items]
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            return []
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def show_resource_quota(name, namespace="default", **kwargs):
+    """Return the ResourceQuota or ``None`` if absent.
+
+    .. versionadded:: 2.1.0
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.show_resource_quota name=team-a-quota namespace=team-a
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        return ApiClient().sanitize_for_serialization(
+            _core_v1_api().read_namespaced_resource_quota(name, namespace)
+        )
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            return None
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def _build_resource_quota(name, namespace, metadata, spec):
+    return V1ResourceQuota(
+        metadata=__dict_to_object_meta(name, namespace, metadata or {}),
+        spec=V1ResourceQuotaSpec(**__dict_to_resource_quota_spec(spec or {})),
+    )
+
+
+def create_resource_quota(
+    name,
+    namespace="default",
+    metadata=None,
+    spec=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    dry_run=False,
+    **kwargs,
+):
+    """Create a ResourceQuota.
+
+    .. versionadded:: 2.1.0
+
+    name
+        Name of the ResourceQuota.
+
+    namespace
+        Namespace to create the quota in.
+
+    metadata
+        Object metadata dict.
+
+    spec
+        ResourceQuotaSpec dict (``hard``, optional ``scopes`` /
+        ``scopeSelector``).
+
+    source, template, saltenv, template_context, dry_run
+        Standard manifest-source plumbing.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.create_resource_quota name=team-quota namespace=team-a \
+            spec='{"hard": {"pods": "10", "limits.cpu": "4"}}'
+    """
+    if source:
+        metadata, spec = _resolve_rbac_source(
+            source, "ResourceQuota", template, saltenv, template_context, metadata, spec
+        )
+    body = _build_resource_quota(name, namespace, metadata, spec)
+    cfg = _setup_conn(**kwargs)
+    try:
+        resp = _core_v1_api().create_namespaced_resource_quota(
+            namespace, body, dry_run="All" if dry_run else None
+        )
+        return ApiClient().sanitize_for_serialization(resp)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 409:
+            raise CommandExecutionError(f"ResourceQuota {name} already exists") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def replace_resource_quota(
+    name,
+    namespace="default",
+    metadata=None,
+    spec=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    dry_run=False,
+    **kwargs,
+):
+    """Replace a ResourceQuota.
+
+    .. versionadded:: 2.1.0
+
+    name, namespace, metadata, spec, source, template, saltenv, template_context, dry_run
+        See :py:func:`create_resource_quota`.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.replace_resource_quota name=team-quota namespace=team-a \
+            spec='{"hard": {"pods": "20"}}'
+    """
+    if source:
+        metadata, spec = _resolve_rbac_source(
+            source, "ResourceQuota", template, saltenv, template_context, metadata, spec
+        )
+    body = _build_resource_quota(name, namespace, metadata, spec)
+    cfg = _setup_conn(**kwargs)
+    try:
+        resp = _core_v1_api().replace_namespaced_resource_quota(
+            name, namespace, body, dry_run="All" if dry_run else None
+        )
+        return ApiClient().sanitize_for_serialization(resp)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            raise CommandExecutionError(f"ResourceQuota {name} not found") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def patch_resource_quota(
+    name,
+    namespace="default",
+    patch=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    dry_run=False,
+    **kwargs,
+):
+    """Patch a ResourceQuota (strategic merge).
+
+    .. versionadded:: 2.1.0
+
+    name
+        Name of the ResourceQuota.
+
+    namespace
+        Namespace of the ResourceQuota.
+
+    patch
+        Patch dict.
+
+    source
+        Salt fileserver path to a YAML patch document.
+
+    template, saltenv, template_context
+        Renderer wiring for ``source``.
+
+    dry_run
+        Server-side validate only.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.patch_resource_quota name=team-quota namespace=team-a \
+            patch='{"spec": {"hard": {"pods": "15"}}}'
+    """
+    if source:
+        patch_doc = __read_and_render_yaml_file(source, template, saltenv, template_context)
+    else:
+        patch_doc = patch
+    cfg = _setup_conn(**kwargs)
+    try:
+        resp = _core_v1_api().patch_namespaced_resource_quota(
+            name, namespace, patch_doc, dry_run="All" if dry_run else None
+        )
+        return ApiClient().sanitize_for_serialization(resp)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            raise CommandExecutionError(f"ResourceQuota {name} not found") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def delete_resource_quota(name, namespace="default", wait=False, timeout=60, **kwargs):
+    """Delete a ResourceQuota.
+
+    .. versionadded:: 2.1.0
+
+    name, namespace
+        Identify the ResourceQuota.
+
+    wait
+        Block until the object is fully gone.
+
+    timeout
+        Seconds to wait when ``wait=True``.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.delete_resource_quota name=team-quota namespace=team-a
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        api = _core_v1_api()
+        resp = api.delete_namespaced_resource_quota(name, namespace)
+        if wait and not _wait_for_resource_status(
+            api, "resource_quota", name, namespace, "deleted", timeout
+        ):
+            raise CommandExecutionError(f"Timeout waiting for ResourceQuota {name} to be deleted")
+        return ApiClient().sanitize_for_serialization(resp)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            return None
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+# --- LimitRange (namespaced) -----------------------------------------------
+
+
+def limit_ranges(namespace="default", **kwargs):
+    """List LimitRanges in *namespace*.
+
+    .. versionadded:: 2.1.0
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.limit_ranges namespace=team-a
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        resp = _core_v1_api().list_namespaced_limit_range(namespace)
+        return [item.metadata.name for item in resp.items]
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            return []
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def show_limit_range(name, namespace="default", **kwargs):
+    """Return the LimitRange or ``None`` if absent.
+
+    .. versionadded:: 2.1.0
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.show_limit_range name=mem-defaults namespace=team-a
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        return ApiClient().sanitize_for_serialization(
+            _core_v1_api().read_namespaced_limit_range(name, namespace)
+        )
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            return None
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def _build_limit_range(name, namespace, metadata, spec):
+    return V1LimitRange(
+        metadata=__dict_to_object_meta(name, namespace, metadata or {}),
+        spec=V1LimitRangeSpec(**__dict_to_limit_range_spec(spec or {})),
+    )
+
+
+def create_limit_range(
+    name,
+    namespace="default",
+    metadata=None,
+    spec=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    dry_run=False,
+    **kwargs,
+):
+    """Create a LimitRange.
+
+    .. versionadded:: 2.1.0
+
+    name
+        Name of the LimitRange.
+
+    namespace
+        Namespace to operate in.
+
+    metadata
+        Object metadata.
+
+    spec
+        LimitRangeSpec dict — ``limits`` is a list of
+        ``LimitRangeItem`` entries (``type``, ``max``, ``min``,
+        ``default``, ``defaultRequest``, ``maxLimitRequestRatio``).
+
+    source, template, saltenv, template_context, dry_run
+        Standard manifest-source plumbing.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.create_limit_range name=mem-defaults namespace=team-a \
+            spec='{"limits": [{"type": "Container", "default": {"memory": "256Mi"}}]}'
+    """
+    if source:
+        metadata, spec = _resolve_rbac_source(
+            source, "LimitRange", template, saltenv, template_context, metadata, spec
+        )
+    body = _build_limit_range(name, namespace, metadata, spec)
+    cfg = _setup_conn(**kwargs)
+    try:
+        resp = _core_v1_api().create_namespaced_limit_range(
+            namespace, body, dry_run="All" if dry_run else None
+        )
+        return ApiClient().sanitize_for_serialization(resp)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 409:
+            raise CommandExecutionError(f"LimitRange {name} already exists") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def replace_limit_range(
+    name,
+    namespace="default",
+    metadata=None,
+    spec=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    dry_run=False,
+    **kwargs,
+):
+    """Replace a LimitRange.
+
+    .. versionadded:: 2.1.0
+
+    name, namespace, metadata, spec, source, template, saltenv, template_context, dry_run
+        See :py:func:`create_limit_range`.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.replace_limit_range name=mem-defaults namespace=team-a \
+            spec='{"limits": [{"type": "Container", "default": {"memory": "512Mi"}}]}'
+    """
+    if source:
+        metadata, spec = _resolve_rbac_source(
+            source, "LimitRange", template, saltenv, template_context, metadata, spec
+        )
+    body = _build_limit_range(name, namespace, metadata, spec)
+    cfg = _setup_conn(**kwargs)
+    try:
+        resp = _core_v1_api().replace_namespaced_limit_range(
+            name, namespace, body, dry_run="All" if dry_run else None
+        )
+        return ApiClient().sanitize_for_serialization(resp)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            raise CommandExecutionError(f"LimitRange {name} not found") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def patch_limit_range(
+    name,
+    namespace="default",
+    patch=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    dry_run=False,
+    **kwargs,
+):
+    """Patch a LimitRange (strategic merge).
+
+    .. versionadded:: 2.1.0
+
+    name, namespace, patch, source, template, saltenv, template_context, dry_run
+        See :py:func:`patch_resource_quota`.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.patch_limit_range name=mem-defaults namespace=team-a \
+            patch='{"spec": {"limits": [{"type": "Container", "default": {"memory": "1Gi"}}]}}'
+    """
+    if source:
+        patch_doc = __read_and_render_yaml_file(source, template, saltenv, template_context)
+    else:
+        patch_doc = patch
+    cfg = _setup_conn(**kwargs)
+    try:
+        resp = _core_v1_api().patch_namespaced_limit_range(
+            name, namespace, patch_doc, dry_run="All" if dry_run else None
+        )
+        return ApiClient().sanitize_for_serialization(resp)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            raise CommandExecutionError(f"LimitRange {name} not found") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def delete_limit_range(name, namespace="default", wait=False, timeout=60, **kwargs):
+    """Delete a LimitRange.
+
+    .. versionadded:: 2.1.0
+
+    name, namespace, wait, timeout
+        See :py:func:`delete_resource_quota`.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.delete_limit_range name=mem-defaults namespace=team-a
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        api = _core_v1_api()
+        resp = api.delete_namespaced_limit_range(name, namespace)
+        if wait and not _wait_for_resource_status(
+            api, "limit_range", name, namespace, "deleted", timeout
+        ):
+            raise CommandExecutionError(f"Timeout waiting for LimitRange {name} to be deleted")
+        return ApiClient().sanitize_for_serialization(resp)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            return None
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+# --- PriorityClass (cluster-scoped) ----------------------------------------
+
+
+def priority_classes(**kwargs):
+    """List PriorityClasses cluster-wide.
+
+    .. versionadded:: 2.1.0
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.priority_classes
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        resp = _scheduling_api().list_priority_class()
+        return [item.metadata.name for item in resp.items]
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            return []
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def show_priority_class(name, **kwargs):
+    """Return the PriorityClass or ``None`` if absent.
+
+    .. versionadded:: 2.1.0
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.show_priority_class name=high-priority
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        return ApiClient().sanitize_for_serialization(_scheduling_api().read_priority_class(name))
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            return None
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def _build_priority_class(name, metadata, spec):
+    fields = __dict_to_priority_class_kwargs(spec or {})
+    return V1PriorityClass(metadata=__dict_to_object_meta(name, None, metadata or {}), **fields)
+
+
+def create_priority_class(
+    name,
+    metadata=None,
+    spec=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    dry_run=False,
+    **kwargs,
+):
+    """Create a PriorityClass (cluster-scoped).
+
+    .. versionadded:: 2.1.0
+
+    name
+        Name of the PriorityClass.
+
+    metadata
+        Object metadata dict (labels, annotations).
+
+    spec
+        Body fields (PriorityClass has no nested spec):
+
+        * ``value`` (int) — required priority weight.
+        * ``description`` (str) — optional human-readable text.
+        * ``globalDefault`` (bool) — at most one PriorityClass per
+          cluster may set this to ``true``.
+        * ``preemptionPolicy`` — ``"PreemptLowerPriority"`` (default)
+          or ``"Never"``.
+
+    source, template, saltenv, template_context, dry_run
+        Standard manifest-source plumbing.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.create_priority_class name=high \
+            spec='{"value": 1000000, "globalDefault": false, "description": "High prio"}'
+    """
+    if source:
+        metadata, spec = _resolve_rbac_source(
+            source, "PriorityClass", template, saltenv, template_context, metadata, spec
+        )
+    body = _build_priority_class(name, metadata, spec)
+    cfg = _setup_conn(**kwargs)
+    try:
+        resp = _scheduling_api().create_priority_class(body, dry_run="All" if dry_run else None)
+        return ApiClient().sanitize_for_serialization(resp)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 409:
+            raise CommandExecutionError(f"PriorityClass {name} already exists") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def replace_priority_class(
+    name,
+    metadata=None,
+    spec=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    dry_run=False,
+    **kwargs,
+):
+    """Replace a PriorityClass.
+
+    .. versionadded:: 2.1.0
+
+    name, metadata, spec, source, template, saltenv, template_context, dry_run
+        See :py:func:`create_priority_class`. Note: the ``value`` and
+        ``globalDefault`` fields are immutable post-creation.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.replace_priority_class name=high \
+            spec='{"value": 1000000, "description": "Updated description"}'
+    """
+    if source:
+        metadata, spec = _resolve_rbac_source(
+            source, "PriorityClass", template, saltenv, template_context, metadata, spec
+        )
+    body = _build_priority_class(name, metadata, spec)
+    cfg = _setup_conn(**kwargs)
+    try:
+        resp = _scheduling_api().replace_priority_class(
+            name, body, dry_run="All" if dry_run else None
+        )
+        return ApiClient().sanitize_for_serialization(resp)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            raise CommandExecutionError(f"PriorityClass {name} not found") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def patch_priority_class(
+    name,
+    patch=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    dry_run=False,
+    **kwargs,
+):
+    """Patch a PriorityClass (strategic merge).
+
+    .. versionadded:: 2.1.0
+
+    name
+        Name of the PriorityClass.
+
+    patch
+        Patch dict.
+
+    source, template, saltenv, template_context, dry_run
+        Standard plumbing.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.patch_priority_class name=high \
+            patch='{"metadata": {"annotations": {"reviewed": "2026-05"}}}'
+    """
+    if source:
+        patch_doc = __read_and_render_yaml_file(source, template, saltenv, template_context)
+    else:
+        patch_doc = patch
+    cfg = _setup_conn(**kwargs)
+    try:
+        resp = _scheduling_api().patch_priority_class(
+            name, patch_doc, dry_run="All" if dry_run else None
+        )
+        return ApiClient().sanitize_for_serialization(resp)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            raise CommandExecutionError(f"PriorityClass {name} not found") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def delete_priority_class(name, wait=False, timeout=60, **kwargs):
+    """Delete a PriorityClass.
+
+    .. versionadded:: 2.1.0
+
+    name
+        Name of the PriorityClass.
+
+    wait
+        Block until the object is fully gone.
+
+    timeout
+        Seconds to wait when ``wait=True``.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.delete_priority_class name=high
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        api = _scheduling_api()
+        resp = api.delete_priority_class(name)
+        if wait and not _wait_for_resource_status(
+            api, "priority_class", name, None, "deleted", timeout
+        ):
+            raise CommandExecutionError(f"Timeout waiting for PriorityClass {name} to be deleted")
+        return ApiClient().sanitize_for_serialization(resp)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            return None
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+# --- CustomResourceDefinition (cluster-scoped) ----------------------------
+
+
+def custom_resource_definitions(**kwargs):
+    """List installed CustomResourceDefinitions.
+
+    .. versionadded:: 2.1.0
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.custom_resource_definitions
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        resp = _apiextensions_api().list_custom_resource_definition()
+        return [item.metadata.name for item in resp.items]
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            return []
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def show_custom_resource_definition(name, **kwargs):
+    """Return the CRD or ``None`` if absent.
+
+    .. versionadded:: 2.1.0
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.show_custom_resource_definition name=widgets.example.io
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        return ApiClient().sanitize_for_serialization(
+            _apiextensions_api().read_custom_resource_definition(name)
+        )
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            return None
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def _build_crd(name, metadata, spec):
+    return V1CustomResourceDefinition(
+        metadata=__dict_to_object_meta(name, None, metadata or {}),
+        spec=V1CustomResourceDefinitionSpec(**__dict_to_crd_spec(spec or {})),
+    )
+
+
+def create_custom_resource_definition(
+    name,
+    metadata=None,
+    spec=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    dry_run=False,
+    **kwargs,
+):
+    """Create a CustomResourceDefinition.
+
+    .. versionadded:: 2.1.0
+
+    name
+        Fully-qualified CRD name (``<plural>.<group>``).
+
+    metadata
+        Object metadata.
+
+    spec
+        ``CustomResourceDefinitionSpec`` dict — ``group``, ``names`` (plural,
+        singular, kind, shortNames), ``scope`` (``Namespaced`` or
+        ``Cluster``) and ``versions`` (each with ``name``, ``served``,
+        ``storage``, ``schema``).
+
+    source, template, saltenv, template_context, dry_run
+        Standard plumbing.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.create_custom_resource_definition name=widgets.example.io \
+            spec='{"group": "example.io", "scope": "Namespaced", \
+                  "names": {"plural": "widgets", "singular": "widget", "kind": "Widget"}, \
+                  "versions": [{"name": "v1", "served": true, "storage": true, \
+                  "schema": {"openAPIV3Schema": {"type": "object"}}}]}'
+    """
+    if source:
+        metadata, spec = _resolve_rbac_source(
+            source,
+            "CustomResourceDefinition",
+            template,
+            saltenv,
+            template_context,
+            metadata,
+            spec,
+        )
+    body = _build_crd(name, metadata, spec)
+    cfg = _setup_conn(**kwargs)
+    try:
+        resp = _apiextensions_api().create_custom_resource_definition(
+            body, dry_run="All" if dry_run else None
+        )
+        return ApiClient().sanitize_for_serialization(resp)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 409:
+            raise CommandExecutionError(f"CustomResourceDefinition {name} already exists") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def replace_custom_resource_definition(
+    name,
+    metadata=None,
+    spec=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    dry_run=False,
+    **kwargs,
+):
+    """Replace a CRD.
+
+    .. versionadded:: 2.1.0
+
+    name, metadata, spec, source, template, saltenv, template_context, dry_run
+        See :py:func:`create_custom_resource_definition`.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.replace_custom_resource_definition name=widgets.example.io \
+            spec=@/path/to/spec.json
+    """
+    if source:
+        metadata, spec = _resolve_rbac_source(
+            source,
+            "CustomResourceDefinition",
+            template,
+            saltenv,
+            template_context,
+            metadata,
+            spec,
+        )
+    body = _build_crd(name, metadata, spec)
+    cfg = _setup_conn(**kwargs)
+    try:
+        resp = _apiextensions_api().replace_custom_resource_definition(
+            name, body, dry_run="All" if dry_run else None
+        )
+        return ApiClient().sanitize_for_serialization(resp)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            raise CommandExecutionError(f"CustomResourceDefinition {name} not found") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def patch_custom_resource_definition(
+    name,
+    patch=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    dry_run=False,
+    **kwargs,
+):
+    """Patch a CRD (strategic merge).
+
+    .. versionadded:: 2.1.0
+
+    name
+        Name of the CRD.
+
+    patch
+        Patch dict.
+
+    source, template, saltenv, template_context, dry_run
+        Standard plumbing.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.patch_custom_resource_definition name=widgets.example.io \
+            patch='{"metadata": {"annotations": {"owner": "platform"}}}'
+    """
+    if source:
+        patch_doc = __read_and_render_yaml_file(source, template, saltenv, template_context)
+    else:
+        patch_doc = patch
+    cfg = _setup_conn(**kwargs)
+    try:
+        resp = _apiextensions_api().patch_custom_resource_definition(
+            name, patch_doc, dry_run="All" if dry_run else None
+        )
+        return ApiClient().sanitize_for_serialization(resp)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            raise CommandExecutionError(f"CustomResourceDefinition {name} not found") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def delete_custom_resource_definition(name, wait=False, timeout=60, **kwargs):
+    """Delete a CRD.
+
+    .. versionadded:: 2.1.0
+
+    Deletes the definition and (cascade) every instance of the custom
+    resource. Use with care.
+
+    name
+        Name of the CRD.
+
+    wait
+        Block until the object is fully gone (the apiserver garbage-
+        collects custom-resource instances first).
+
+    timeout
+        Seconds to wait when ``wait=True``.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.delete_custom_resource_definition name=widgets.example.io wait=True
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        api = _apiextensions_api()
+        resp = api.delete_custom_resource_definition(name)
+        if wait:
+            # No registry entry for the CRD kind itself; poll show_ to
+            # confirm deletion. The apiserver clears the route in a
+            # finite window after the finalizer runs.
+            deadline = time.monotonic() + timeout
+            while time.monotonic() < deadline:
+                if show_custom_resource_definition(name) is None:
+                    break
+                time.sleep(1)
+            else:
+                raise CommandExecutionError(
+                    f"Timeout waiting for CustomResourceDefinition {name} to be deleted"
+                )
+        return ApiClient().sanitize_for_serialization(resp)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            return None
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+# ---------------------------------------------------------------------------
 # Pod operations: exec, logs, cp_to, cp_from
 #
 # These don't fit the {verb}_{kind} CRUD pattern — they're imperative Pod
@@ -9027,6 +10570,291 @@ def rollback(name, namespace="default", to_revision=None, **kwargs):
         _cleanup(**cfg)
 
 
+def patch_object(
+    kind,
+    name,
+    patch,
+    api_version=None,
+    namespace=None,
+    patch_type="strategic",
+    field_manager=None,
+    dry_run=False,
+    **kwargs,
+):
+    """
+    Generic object patch with a caller-selected merge strategy.
+
+    .. versionadded:: 2.1.0
+
+    Lets callers pick between strategic-merge (the kubectl/typed default),
+    JSON merge patch (RFC 7396), and JSON patch (RFC 6902). Useful for
+    CRDs (which only support merge / json patches) and for explicit
+    list-element manipulation via RFC 6902 operations.
+
+    This is the **public, user-facing** patch entry point. It is a thin
+    wrapper around the internal
+    :py:func:`saltext.kubernetes.utils._dynamic.patch_object` plumbing —
+    callers should never reach into ``_dynamic`` directly. The wrapping
+    adds three things on top of the GVK-level patch primitive:
+
+    1. Connection lifecycle — runs ``_setup_conn`` (which honours every
+       Salt config / pillar / kwarg / env-var precedence rule documented
+       on :py:func:`_setup_conn`) before the call and ``_cleanup`` after.
+    2. Kwarg marshalling — accepts the standard Salt-loader ``**kwargs``
+       (``kubeconfig``, ``context``, ``cluster``, ``host``, ``api_key``,
+       etc.) that the loader forwards to module functions.
+    3. ``api_version`` inference — when omitted, the function looks up
+       the GVK in the typed kind-registry (``_KIND_TO_GVK``) so callers
+       can pass ``kind="Deployment"`` without spelling out the
+       group/version. CRDs and other off-registry kinds require an
+       explicit ``api_version``.
+
+    kind
+        Kubernetes ``Kind`` (case-sensitive, e.g. ``"Deployment"``,
+        ``"ConfigMap"``, ``"MyCustomResource"``).
+
+    name
+        Object name.
+
+    patch
+        For ``patch_type="strategic"`` or ``"merge"``: a dict describing
+        the partial object. For ``patch_type="json"``: a list of
+        operation dicts in RFC 6902 format.
+
+    api_version
+        Group/version for the resource (e.g. ``"apps/v1"``,
+        ``"example.com/v1"``). If omitted, the function attempts to
+        infer it from the typed kind-registry — works for the bundled
+        kinds; CRDs require an explicit ``api_version``.
+
+    namespace
+        Namespace for namespaced kinds.
+
+    patch_type
+        One of ``"strategic"`` (default), ``"merge"`` /
+        ``"json-merge"``, or ``"json"`` / ``"json-patch"``.
+
+    field_manager
+        Optional fieldManager name (server-side apply convention).
+
+    dry_run
+        If ``True``, the API server validates the patch and returns the
+        resulting object without persisting changes.
+
+    CLI Examples:
+
+    .. code-block:: bash
+
+        # Strategic-merge replace replicas
+        salt '*' kubernetes.patch_object kind=Deployment name=nginx \
+            namespace=default api_version=apps/v1 \
+            patch='{"spec": {"replicas": 5}}'
+
+        # RFC 6902 JSON patch
+        salt '*' kubernetes.patch_object kind=Deployment name=nginx \
+            namespace=default api_version=apps/v1 patch_type=json \
+            patch='[{"op": "replace", "path": "/spec/replicas", "value": 5}]'
+    """
+    if api_version is None:
+        api_version = _infer_api_version(kind)
+    cfg = _setup_conn(**kwargs)
+    try:
+        return _dynamic.patch_object(
+            api_version=api_version,
+            kind=kind,
+            name=name,
+            patch=patch,
+            namespace=namespace,
+            patch_type=patch_type,
+            field_manager=field_manager,
+            dry_run=dry_run,
+        )
+    finally:
+        _cleanup(**cfg)
+
+
+# Maps the snake_case kind names used in ``_KIND_REGISTRY`` to the
+# (api_version, Kind) pair the dynamic client expects. Used by
+# ``patch_object`` when the caller omits ``api_version``.
+_KIND_TO_GVK = {
+    "deployment": ("apps/v1", "Deployment"),
+    "statefulset": ("apps/v1", "StatefulSet"),
+    "replicaset": ("apps/v1", "ReplicaSet"),
+    "daemonset": ("apps/v1", "DaemonSet"),
+    "pod": ("v1", "Pod"),
+    "service": ("v1", "Service"),
+    "secret": ("v1", "Secret"),
+    "configmap": ("v1", "ConfigMap"),
+    "namespace": ("v1", "Namespace"),
+    "storageclass": ("storage.k8s.io/v1", "StorageClass"),
+    "role": ("rbac.authorization.k8s.io/v1", "Role"),
+    "role_binding": ("rbac.authorization.k8s.io/v1", "RoleBinding"),
+    "cluster_role": ("rbac.authorization.k8s.io/v1", "ClusterRole"),
+    "cluster_role_binding": ("rbac.authorization.k8s.io/v1", "ClusterRoleBinding"),
+    "service_account": ("v1", "ServiceAccount"),
+    "job": ("batch/v1", "Job"),
+    "cron_job": ("batch/v1", "CronJob"),
+    "ingress": ("networking.k8s.io/v1", "Ingress"),
+    "horizontal_pod_autoscaler": ("autoscaling/v2", "HorizontalPodAutoscaler"),
+    "pod_disruption_budget": ("policy/v1", "PodDisruptionBudget"),
+    "persistent_volume": ("v1", "PersistentVolume"),
+    "persistent_volume_claim": ("v1", "PersistentVolumeClaim"),
+}
+
+
+def _infer_api_version(kind):
+    """
+    Return apiVersion for a registered Kind; raise for unknowns.
+
+    Caller may pass the kind in CamelCase (matching ``metadata.kind``), in
+    snake_case with separators (matching the kind-registry's
+    ``"cluster_role"`` form), or in lowercase-no-separator form
+    (matching the registry's ``"configmap"`` form). All three are tried.
+    """
+    lookup = _KIND_TO_GVK.get(kind)
+    if lookup is None:
+        snake = re.sub(r"(?<!^)(?=[A-Z])", "_", kind).lower()
+        lookup = _KIND_TO_GVK.get(snake) or _KIND_TO_GVK.get(snake.replace("_", ""))
+    if lookup is None:
+        raise CommandExecutionError(
+            f"Cannot infer api_version for kind {kind!r}; pass it explicitly."
+        )
+    return lookup[0]
+
+
+def _hash_suffix(*components):
+    """
+    Produce a short deterministic suffix from one or more dict / scalar
+    components. Used by ``append_hash=True`` on ``create_configmap`` and
+    ``create_secret``.
+
+    The suffix is the first 10 chars of the SHA-256 of the canonicalised
+    JSON encoding of *components*. This is not byte-identical to
+    kubectl's custom base32 algorithm, but achieves the same goals:
+    deterministic, DNS-label-safe, short enough for the 63-char name
+    limit, low collision risk for realistic data sizes. Stable across
+    Python versions because ``sort_keys=True`` removes dict-ordering
+    nondeterminism.
+    """
+    payload = _pyyaml.safe_dump(list(components), default_flow_style=False, sort_keys=True)
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    return digest[:10]
+
+
+def list_clusters():
+    """
+    Return the configured cluster aliases for this minion.
+
+    .. versionadded:: 2.1.0
+
+    Aliases are defined under the ``kubernetes.clusters`` pillar key:
+
+    .. code-block:: yaml
+
+        kubernetes:
+          clusters:
+            prod:
+              kubeconfig: /etc/k8s/prod.conf
+              context: prod-admin
+            staging:
+              host: https://staging.example.com:6443
+              api_key: ...
+
+    The implicit alias ``"default"`` always appears, representing the
+    top-level ``kubernetes.*`` config block.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.list_clusters
+    """
+    return list_configured_clusters(__salt__["config.option"])
+
+
+def wait_for(
+    name,
+    kind,
+    namespace=None,
+    condition=None,
+    status="True",
+    jsonpath=None,
+    value=None,
+    regex=None,
+    timeout=60,
+    **kwargs,
+):
+    """
+    Block until a live resource matches a user-supplied condition or jsonpath.
+
+    .. versionadded:: 2.1.0
+
+    Mirrors ``kubectl wait`` ergonomics. Pass exactly one of ``condition``
+    or ``jsonpath``.
+
+    name
+        Object name.
+
+    kind
+        Resource type as recognised by the kind registry
+        (e.g. ``deployment``, ``service``, ``pod``).
+
+    namespace
+        Namespace for namespaced kinds. Ignored for cluster-scoped kinds.
+
+    condition
+        ``status.conditions[*].type`` to match (e.g. ``Available``,
+        ``Ready``). The matching condition's ``status`` must equal ``status``.
+
+    status
+        Expected condition status when ``condition`` is given. Defaults to
+        ``"True"``.
+
+    jsonpath
+        kubectl-style jsonpath to resolve against the live object
+        (e.g. ``.status.loadBalancer.ingress[0].ip``). Mutually exclusive
+        with ``condition``.
+
+    value
+        When ``jsonpath`` is given, require equality with ``value``.
+
+    regex
+        When ``jsonpath`` is given, require the stringified value to match
+        this regex (``re.search``).
+
+    timeout
+        Seconds to wait before giving up. Default 60.
+
+    Returns ``True`` on match, raises :py:class:`CommandExecutionError` on
+    timeout or on watch errors.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.wait_for nginx kind=deployment condition=Available
+    """
+    predicate = _kinds.build_predicate(
+        condition=condition, status=status, jsonpath=jsonpath, value=value, regex=regex
+    )
+    kind_ops = _kinds.get_kind(kind)
+    cfg = _setup_conn(**kwargs)
+    try:
+        api_class = getattr(kubernetes.client, kind_ops.api_class_attr)
+        api_instance = api_class()
+        ok = _wait_for_resource_status(
+            api_instance, kind, name, namespace, "ready", timeout=timeout, predicate=predicate
+        )
+        if not ok:
+            criterion = f"condition={condition}={status}" if condition else f"jsonpath={jsonpath}"
+            raise CommandExecutionError(
+                f"Timeout waiting for {kind}/{name} to match {criterion} after {timeout}s"
+            )
+        return True
+    finally:
+        _cleanup(**cfg)
+
+
 def cluster_info(**kwargs):
     """
     Return a summary of the cluster (kubectl-cluster-info / kubectl-version
@@ -9572,6 +11400,10 @@ def apply(
     template=None,
     saltenv=None,
     template_context=None,
+    ignore_labels=None,
+    ignore_annotations=None,
+    ignore_fields=None,
+    validate=False,
     **kwargs,
 ):
     """
@@ -9632,6 +11464,29 @@ def apply(
     template_context
         Variables passed to the renderer.
 
+    ignore_labels
+        List of label keys to exclude from drift detection. The desired
+        manifest's values under these keys are dropped before apply; the
+        API server's existing values are preserved.
+
+    ignore_annotations
+        List of annotation keys to exclude from drift detection. Same
+        semantics as ``ignore_labels``. Note: kubectl bookkeeping
+        annotations (``kubectl.kubernetes.io/*`` and
+        ``deployment.kubernetes.io/*``) are always excluded.
+
+    ignore_fields
+        List of JSON-pointer paths (e.g. ``"/spec/replicas"``) to drop
+        from the desired manifest before apply. Useful when another
+        controller manages the field (HPA → ``replicas``,
+        admission-webhook → ``spec.template.spec.serviceAccountName``).
+
+    validate
+        If ``True``, run a server-side dry-run apply first to surface
+        validation errors (schema violations, admission-webhook
+        rejections, RBAC denials) before the real apply. Cheap to
+        enable; matches ``kubernetes.core`` ``validate.fail_on_error``.
+
     CLI Examples:
 
     .. code-block:: bash
@@ -9651,6 +11506,18 @@ def apply(
         results = []
         for doc in docs:
             _apply_namespace_default(doc, namespace)
+            doc = _strip_ignored(doc, ignore_labels, ignore_annotations, ignore_fields)
+            # When ``validate`` is requested, run a dry-run first. Any
+            # API-server-side validation error (schema, admission webhook,
+            # RBAC) surfaces as a CommandExecutionError that the caller
+            # can catch *before* anything is persisted.
+            if validate and not dry_run:
+                _dynamic.apply_manifest(
+                    doc,
+                    field_manager=field_manager,
+                    force_conflicts=force_conflicts,
+                    dry_run=True,
+                )
             results.append(
                 _dynamic.apply_manifest(
                     doc,
@@ -9662,6 +11529,151 @@ def apply(
         return results[0] if len(results) == 1 else results
     finally:
         _cleanup(**cfg)
+
+
+def _strip_ignored(doc, ignore_labels, ignore_annotations, ignore_fields):
+    """
+    Remove drift-suppressed paths from a manifest document before apply.
+
+    Server-side apply records ownership of each field by ``fieldManager``.
+    When the caller declares that *we* should not own a label / annotation
+    / field, we drop it from the desired document so SSA leaves the live
+    value alone. Returns a shallow copy with the requested deletions
+    applied; the input dict is not mutated.
+    """
+    if not (ignore_labels or ignore_annotations or ignore_fields):
+        return doc
+    out = copy.deepcopy(doc)
+    metadata = out.setdefault("metadata", {})
+    if ignore_labels:
+        labels = metadata.get("labels") or {}
+        for key in ignore_labels:
+            labels.pop(key, None)
+        if labels:
+            metadata["labels"] = labels
+        else:
+            metadata.pop("labels", None)
+    if ignore_annotations:
+        annotations = metadata.get("annotations") or {}
+        for key in ignore_annotations:
+            annotations.pop(key, None)
+        if annotations:
+            metadata["annotations"] = annotations
+        else:
+            metadata.pop("annotations", None)
+    if ignore_fields:
+        for pointer in ignore_fields:
+            _drop_json_pointer(out, pointer)
+    return out
+
+
+def _drop_json_pointer(target, pointer):
+    """
+    Drop a JSON-pointer-style path from ``target`` in place.
+
+    Accepts the leading-slash form used in RFC 6901 (e.g. ``/spec/replicas``)
+    and the dotted form (e.g. ``spec.replicas``) for convenience. Integer
+    path segments index into lists, as RFC 6901 specifies — without this
+    a pointer like ``/spec/template/spec/containers/0/image`` could not
+    target a specific container's field. Missing intermediate keys and
+    out-of-range list indices are no-ops.
+    """
+    if not pointer:
+        return
+    if pointer.startswith("/"):
+        parts = pointer.strip("/").split("/")
+    else:
+        parts = pointer.split(".")
+    parts = [p for p in parts if p]
+    if not parts:
+        return
+    cur = target
+    for part in parts[:-1]:
+        if isinstance(cur, list):
+            try:
+                idx = int(part)
+            except ValueError:
+                return
+            if idx < 0 or idx >= len(cur):
+                return
+            cur = cur[idx]
+        elif isinstance(cur, dict):
+            cur = cur.get(part)
+            if cur is None:
+                return
+        else:
+            return
+    last = parts[-1]
+    if isinstance(cur, dict):
+        cur.pop(last, None)
+    elif isinstance(cur, list):
+        try:
+            idx = int(last)
+        except ValueError:
+            return
+        if 0 <= idx < len(cur):
+            cur.pop(idx)
+
+
+def get_object(api_version, kind, name, namespace=None, **kwargs):
+    """Read a Kubernetes object by GVK, returning ``None`` if absent.
+
+    .. versionadded:: 2.1.0
+
+    The generic read-by-GVK counterpart to ``apply`` and
+    ``delete_manifest``. State code (``manifest_present`` /
+    ``manifest_absent``) uses this in ``test=True`` mode to detect
+    whether a target already exists.
+
+    api_version
+        Group/version, e.g. ``"v1"``, ``"apps/v1"``,
+        ``"networking.k8s.io/v1"``.
+
+    kind
+        Kubernetes kind name, e.g. ``"ConfigMap"``, ``"Deployment"``.
+
+    name
+        Object name.
+
+    namespace
+        Namespace for namespaced kinds; ignored for cluster-scoped kinds.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.get_object api_version=v1 kind=ConfigMap name=app namespace=default
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        return _dynamic.get_object(api_version, kind, name=name, namespace=namespace)
+    finally:
+        _cleanup(**cfg)
+
+
+def normalise_manifest_input(
+    manifest=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+):
+    """Return *manifest* / *source* as a list of dicts.
+
+    .. versionadded:: 2.1.0
+
+    Public helper for state code that needs to inspect the manifest
+    docs without actually applying or deleting them — for example, to
+    decide in ``test=True`` mode whether each doc would change. Accepts
+    the same input shapes as :py:func:`apply` / :py:func:`delete_manifest`.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.normalise_manifest_input source=salt://manifests/app.yaml
+    """
+    return _normalise_apply_input(manifest, source, template, saltenv, template_context)
 
 
 def delete_manifest(
@@ -10005,6 +12017,10 @@ def __dict_to_pod_spec(spec):
                         ) from exc
                 processed_ports.append(kubernetes.client.V1ContainerPort(**port_copy))
 
+        # Translate kubectl/YAML-native camelCase fields (imagePullPolicy,
+        # terminationMessagePath, workingDir, etc.) to the snake_case
+        # attribute names V1Container expects.
+        container_copy = _snake_caseify_keys(container_copy)
         containers.append(kubernetes.client.V1Container(**container_copy))
 
     processed_spec["containers"] = containers
@@ -10023,6 +12039,10 @@ def __dict_to_pod_spec(spec):
                 )
             processed_secrets.append(kubernetes.client.V1LocalObjectReference(**secret))
 
+    # Translate kubectl/YAML-native camelCase fields (restartPolicy,
+    # serviceAccountName, terminationGracePeriodSeconds, etc.) to the
+    # snake_case attribute names V1PodSpec expects.
+    processed_spec = _snake_caseify_keys(processed_spec)
     try:
         return kubernetes.client.V1PodSpec(**processed_spec)
     except (TypeError, ValueError) as exc:
@@ -10196,9 +12216,11 @@ def __dict_to_statefulset_spec(spec):
         except (TypeError, ValueError) as exc:
             raise CommandExecutionError(f"replicas must be an integer: {exc}") from exc
 
-    # Convert serviceName (camelCase from YAML/user input) to service_name (Python client)
-    if "serviceName" in processed_spec:
-        processed_spec["service_name"] = processed_spec.pop("serviceName")
+    # Normalise the remaining camelCase keys (serviceName,
+    # podManagementPolicy, revisionHistoryLimit, ...) to snake_case so
+    # they survive the V1StatefulSetSpec constructor. Selector + template
+    # are already typed objects at this point and pass through unchanged.
+    processed_spec = _normalise_field_map(processed_spec)
 
     # Create final spec
     try:
@@ -10332,25 +12354,14 @@ def __dict_to_storageclass_spec(spec):
             f"StorageClass spec must be a dictionary, not {type(spec).__name__}"
         )
 
-    processed_spec = spec.copy()
+    processed_spec = _normalise_field_map(spec, _STORAGECLASS_FIELD_MAP)
 
     if not processed_spec.get("provisioner"):
         raise CommandExecutionError("StorageClass spec must include provisioner")
 
-    if "reclaimPolicy" in processed_spec:
-        processed_spec["reclaim_policy"] = processed_spec.pop("reclaimPolicy")
-
-    if "allowVolumeExpansion" in processed_spec:
-        processed_spec["allow_volume_expansion"] = processed_spec.pop("allowVolumeExpansion")
-
-    if "volumeBindingMode" in processed_spec:
-        processed_spec["volume_binding_mode"] = processed_spec.pop("volumeBindingMode")
-
-    if "mountOptions" in processed_spec:
-        mount_options = processed_spec.pop("mountOptions")
-        if not isinstance(mount_options, list):
-            raise CommandExecutionError("StorageClass mountOptions must be a list")
-        processed_spec["mount_options"] = mount_options
+    mount_options = processed_spec.get("mount_options")
+    if mount_options is not None and not isinstance(mount_options, list):
+        raise CommandExecutionError("StorageClass mountOptions must be a list")
 
     if "parameters" in processed_spec:
         parameters = processed_spec["parameters"]
@@ -10358,8 +12369,8 @@ def __dict_to_storageclass_spec(spec):
             raise CommandExecutionError("StorageClass parameters must be a dictionary")
         processed_spec["parameters"] = __enforce_only_strings_dict(parameters)
 
-    if "allowedTopologies" in processed_spec:
-        allowed_topologies = processed_spec.pop("allowedTopologies")
+    allowed_topologies = processed_spec.get("allowed_topologies")
+    if allowed_topologies is not None:
         if not isinstance(allowed_topologies, list):
             raise CommandExecutionError("StorageClass allowedTopologies must be a list")
         processed_spec["allowed_topologies"] = [
@@ -10372,6 +12383,20 @@ def __dict_to_storageclass_spec(spec):
         raise CommandExecutionError(f"Invalid storageclass spec: {exc}") from exc
 
     return processed_spec
+
+
+# Explicit camelCase→snake_case overrides for StorageClass fields. Every
+# entry below would translate correctly via the generic ``_camel_to_snake``
+# fallback anyway; listing them keeps the per-kind contract documented in
+# one place and gives us a single spot to pin any future field whose
+# naive translation is wrong (acronyms, plural quirks).
+_STORAGECLASS_FIELD_MAP = {
+    "reclaimPolicy": "reclaim_policy",
+    "allowVolumeExpansion": "allow_volume_expansion",
+    "volumeBindingMode": "volume_binding_mode",
+    "mountOptions": "mount_options",
+    "allowedTopologies": "allowed_topologies",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -10652,7 +12677,13 @@ def __enforce_only_strings_dict(dictionary):
 
 
 def _wait_for_resource_status(
-    api_instance, resource_type, name, namespace, expected_status, timeout=60
+    api_instance,
+    resource_type,
+    name,
+    namespace,
+    expected_status,
+    timeout=60,
+    predicate=None,
 ):
     """
     .. versionadded:: 2.0.0
@@ -10693,7 +12724,16 @@ def _wait_for_resource_status(
 
         w = Watch()
         try:
-            return _wait_via_watch(w, api_instance, kind, name, namespace, expected_status, timeout)
+            return _wait_via_watch(
+                w,
+                api_instance,
+                kind,
+                name,
+                namespace,
+                expected_status,
+                timeout,
+                predicate=predicate,
+            )
         finally:
             w.stop()
     except (ApiException, HTTPError) as exc:
@@ -10717,8 +12757,15 @@ def _wait_for_deleted(api_instance, kind, name, namespace, timeout):
     return False
 
 
-def _wait_via_watch(w, api_instance, kind, name, namespace, expected_status, timeout):
-    """Stream list events filtered by name; apply the per-kind ready predicate."""
+def _wait_via_watch(
+    w, api_instance, kind, name, namespace, expected_status, timeout, predicate=None
+):
+    """Stream list events filtered by name; apply the per-kind ready predicate.
+
+    When ``predicate`` is supplied it overrides the per-kind ready predicate
+    for ``expected_status == "ready"`` and is the user-driven wait callable
+    built by :py:func:`saltext.kubernetes.utils._kinds.build_predicate`.
+    """
     list_method = getattr(api_instance, kind.list_method)
     start_time = time.time()
     stream_kwargs = {
@@ -10729,12 +12776,13 @@ def _wait_via_watch(w, api_instance, kind, name, namespace, expected_status, tim
     if kind.namespaced:
         stream_kwargs["namespace"] = namespace
 
+    active_predicate = predicate or kind.ready_predicate
     for event in w.stream(**stream_kwargs):
         obj = event["object"]
         if obj.metadata.name == name:
             if expected_status == "created":
                 return True
-            if expected_status == "ready" and kind.ready_predicate(obj):
+            if expected_status == "ready" and active_predicate(obj):
                 return True
         if time.time() - start_time >= timeout:
             log.warning(

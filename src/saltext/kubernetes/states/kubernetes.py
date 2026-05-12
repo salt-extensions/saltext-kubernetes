@@ -2491,6 +2491,203 @@ def node_label_present(name, node, value, **kwargs):
     return ret
 
 
+def node_annotation_absent(name, node, **kwargs):
+    """
+    Ensure the named annotation is absent from *node*.
+
+    .. versionadded:: 2.1.0
+
+    name
+        The annotation key (e.g. ``example.com/maintenance``).
+
+    node
+        The name of the node.
+
+    Example:
+
+    .. code-block:: yaml
+
+        clear-maintenance-flag:
+          kubernetes.node_annotation_absent:
+            - name: example.com/maintenance
+            - node: worker-0
+    """
+    ret = {"name": name, "changes": {}, "result": False, "comment": ""}
+
+    try:
+        annotations = __salt__["kubernetes.node_annotations"](node, **kwargs)
+
+        if name not in annotations:
+            ret["result"] = True
+            ret["comment"] = "The annotation does not exist"
+            return ret
+
+        if __opts__["test"]:
+            ret["comment"] = "The annotation is going to be deleted"
+            ret["result"] = None
+            ret["changes"] = {"old": "present", "new": "absent"}
+            return ret
+
+        __salt__["kubernetes.node_remove_annotation"](
+            node_name=node, annotation_name=name, **kwargs
+        )
+
+        ret["result"] = True
+        ret["changes"] = {"old": "present", "new": "absent"}
+        ret["comment"] = "Annotation removed from node"
+
+    except CommandExecutionError as err:
+        log.error(str(err), exc_info_on_loglevel=logging.DEBUG)
+        ret["result"] = False
+        ret["comment"] = str(err)
+        ret["changes"] = {}
+
+    return ret
+
+
+def node_annotation_folder_absent(name, node, **kwargs):
+    """
+    Ensure no annotations under the ``name/`` prefix exist on *node*.
+
+    .. versionadded:: 2.1.0
+
+    Useful for cleaning up a whole set of annotations written by a
+    departing controller — ``example.com/`` removes every annotation
+    whose key starts with that prefix.
+
+    name
+        The annotation prefix (e.g. ``example.com``); the trailing
+        ``/`` is added automatically.
+
+    node
+        The name of the node.
+
+    Example:
+
+    .. code-block:: yaml
+
+        example.com:
+          kubernetes.node_annotation_folder_absent:
+            - node: worker-0
+    """
+    ret = {"name": name, "changes": {}, "result": False, "comment": ""}
+
+    try:
+        annotations = __salt__["kubernetes.node_annotations"](node, **kwargs)
+
+        folder = name.strip("/") + "/"
+        to_drop = []
+        remaining = []
+        for key in annotations:
+            (to_drop if key.startswith(folder) else remaining).append(key)
+
+        if not to_drop:
+            ret["result"] = True
+            ret["comment"] = "The annotation folder does not exist"
+            return ret
+
+        if __opts__["test"]:
+            ret["comment"] = "The annotation folder is going to be deleted"
+            ret["result"] = None
+            ret["changes"] = {"old": list(annotations), "new": remaining}
+            return ret
+
+        for key in to_drop:
+            __salt__["kubernetes.node_remove_annotation"](
+                node_name=node, annotation_name=key, **kwargs
+            )
+
+        ret["result"] = True
+        ret["changes"] = {"old": list(annotations), "new": remaining}
+        ret["comment"] = "Annotation folder removed from node"
+
+    except CommandExecutionError as err:
+        log.error(str(err), exc_info_on_loglevel=logging.DEBUG)
+        ret["result"] = False
+        ret["comment"] = str(err)
+        ret["changes"] = {}
+
+    return ret
+
+
+def node_annotation_present(name, node, value, **kwargs):
+    """
+    Ensure the named annotation is set on *node* with *value*.
+
+    .. versionadded:: 2.1.0
+
+    If the annotation exists with a different value it is replaced.
+
+    name
+        The annotation key.
+
+    value
+        The annotation value (always stringified — Kubernetes annotations
+        are string-valued).
+
+    node
+        The name of the node.
+
+    Example:
+
+    .. code-block:: yaml
+
+        example.com/maintenance:
+          kubernetes.node_annotation_present:
+            - node: worker-0
+            - value: "2026-05-16"
+    """
+    ret = {"name": name, "changes": {}, "result": False, "comment": ""}
+
+    try:
+        annotations = __salt__["kubernetes.node_annotations"](node, **kwargs)
+
+        if name not in annotations:
+            if __opts__["test"]:
+                ret["result"] = None
+                ret["comment"] = "The annotation is going to be set"
+                old = copy.copy(annotations)
+                new = copy.copy(annotations)
+                new[name] = value
+                ret["changes"] = {"old": old, "new": new}
+                return ret
+
+            __salt__["kubernetes.node_add_annotation"](
+                annotation_name=name, annotation_value=value, node_name=node, **kwargs
+            )
+        elif annotations[name] == value:
+            ret["result"] = True
+            ret["comment"] = "The annotation is already set and has the specified value"
+            return ret
+        else:
+            if __opts__["test"]:
+                ret["result"] = None
+                ret["comment"] = "The annotation is going to be updated"
+                old = copy.copy(annotations)
+                new = copy.copy(annotations)
+                new[name] = value
+                ret["changes"] = {"old": old, "new": new}
+                return ret
+
+            ret["comment"] = "The annotation is already set, changing the value"
+            __salt__["kubernetes.node_add_annotation"](
+                node_name=node, annotation_name=name, annotation_value=value, **kwargs
+            )
+
+        old = copy.copy(annotations)
+        annotations[name] = value
+        ret["changes"] = {"old": old, "new": annotations}
+        ret["result"] = True
+
+    except CommandExecutionError as err:
+        log.error(str(err), exc_info_on_loglevel=logging.DEBUG)
+        ret["result"] = False
+        ret["comment"] = str(err)
+        ret["changes"] = {}
+
+    return ret
+
+
 # ---------------------------------------------------------------------------
 # RBAC states: Role, RoleBinding, ClusterRole, ClusterRoleBinding,
 # ServiceAccount.
@@ -2631,7 +2828,12 @@ def _rbac_present_impl(
             )
             return ret
 
-        if res == existing:
+        # ``res == existing`` would always be False because patching
+        # updates ``metadata.resourceVersion`` and ``managedFields``
+        # even when the user-visible spec is unchanged. Compare after
+        # stripping server-managed bookkeeping so idempotent re-applies
+        # report "already in desired state".
+        if _strip_server_metadata(res) == _strip_server_metadata(existing):
             ret["result"] = True
             ret["comment"] = f"The {kind_pretty} is already in the desired state"
             return ret
@@ -3167,10 +3369,35 @@ def manifest_present(
 
     try:
         if __opts__["test"]:
-            res = __salt__["kubernetes.apply"](dry_run=True, **apply_kwargs, **kwargs)
+            # Real change-detection: run a server-side dry-run apply for
+            # every doc, fetch the current live object, and diff them
+            # against each other (stripping server-set metadata). If
+            # nothing would change, we report ``result=True`` so callers
+            # can rely on state-runs for idempotency. Without this, every
+            # ``test=True`` invocation would always claim a pending
+            # change — defeating the point of idempotency checks.
+            applied = __salt__["kubernetes.apply"](dry_run=True, **apply_kwargs, **kwargs)
+            applied_list = applied if isinstance(applied, list) else [applied]
+            changes = {}
+            for desired in applied_list:
+                live = __salt__["kubernetes.get_object"](
+                    api_version=desired.get("apiVersion"),
+                    kind=desired.get("kind"),
+                    name=(desired.get("metadata") or {}).get("name"),
+                    namespace=(desired.get("metadata") or {}).get("namespace"),
+                )
+                obj_key = _manifest_key(desired)
+                if live is None:
+                    changes[obj_key] = {"old": None, "new": "would create"}
+                elif _strip_server_metadata(desired) != _strip_server_metadata(live):
+                    changes[obj_key] = {"old": "present", "new": "would update"}
+            if not changes:
+                ret["result"] = True
+                ret["comment"] = "Manifests already match desired state"
+                return ret
             ret["result"] = None
             ret["comment"] = "Manifests would be applied (server-side dry run)"
-            ret["changes"] = {"applied": res}
+            ret["changes"] = changes
             return ret
 
         res = __salt__["kubernetes.apply"](**apply_kwargs, **kwargs)
@@ -3183,6 +3410,47 @@ def manifest_present(
         ret["comment"] = str(err)
         ret["changes"] = {}
     return ret
+
+
+def _manifest_key(doc):
+    meta = doc.get("metadata") or {}
+    ns = meta.get("namespace") or ""
+    name = meta.get("name") or ""
+    kind = doc.get("kind") or ""
+    api = doc.get("apiVersion") or ""
+    return f"{api}/{kind}/{ns}/{name}" if ns else f"{api}/{kind}/{name}"
+
+
+_SERVER_METADATA_KEYS = {
+    "resourceVersion",
+    "uid",
+    "generation",
+    "creationTimestamp",
+    "managedFields",
+    "selfLink",
+    "deletionTimestamp",
+    "deletionGracePeriodSeconds",
+    "finalizers",
+}
+
+
+def _strip_server_metadata(obj):
+    """Return *obj* with API-server-controlled metadata fields removed.
+
+    Used for diffing a desired manifest against a live object: server
+    bookkeeping fields like ``resourceVersion`` and ``managedFields``
+    always differ even when nothing meaningful has changed, so they
+    must be excluded from the comparison.
+    """
+    if not isinstance(obj, dict):
+        return obj
+    out = copy.deepcopy(obj)
+    metadata = out.get("metadata")
+    if isinstance(metadata, dict):
+        for key in _SERVER_METADATA_KEYS:
+            metadata.pop(key, None)
+    out.pop("status", None)
+    return out
 
 
 def manifest_absent(
@@ -3231,9 +3499,30 @@ def manifest_absent(
 
     try:
         if __opts__["test"]:
+            docs = __salt__["kubernetes.normalise_manifest_input"](
+                manifest=manifest,
+                source=source,
+                template=template,
+                saltenv=__env__,
+                template_context=template_context,
+            )
+            changes = {}
+            for desired in docs:
+                live = __salt__["kubernetes.get_object"](
+                    api_version=desired.get("apiVersion"),
+                    kind=desired.get("kind"),
+                    name=(desired.get("metadata") or {}).get("name"),
+                    namespace=(desired.get("metadata") or {}).get("namespace") or namespace,
+                )
+                if live is not None:
+                    changes[_manifest_key(desired)] = {"old": "present", "new": "absent"}
+            if not changes:
+                ret["result"] = True
+                ret["comment"] = "Manifests already absent"
+                return ret
             ret["result"] = None
             ret["comment"] = "Manifests would be deleted"
-            ret["changes"] = {"old": "present", "new": "absent"}
+            ret["changes"] = changes
             return ret
 
         res = __salt__["kubernetes.delete_manifest"](**delete_kwargs, **kwargs)
@@ -3667,6 +3956,325 @@ def persistent_volume_claim_present(
         "PersistentVolumeClaim",
         True,
         namespace,
+        metadata,
+        spec,
+        source,
+        template,
+        template_context,
+        kwargs,
+    )
+
+
+# ---------------------------------------------------------------------------
+# First-class state functions for the remaining kinds in #14:
+# NetworkPolicy, ResourceQuota, LimitRange, PriorityClass,
+# CustomResourceDefinition. Each delegates to the shared
+# :py:func:`_rbac_present_impl` / :py:func:`_rbac_absent_impl` pattern.
+#
+# .. versionadded:: 2.1.0
+# ---------------------------------------------------------------------------
+
+
+def network_policy_absent(name, namespace="default", wait=False, timeout=60, **kwargs):
+    """Ensure the named NetworkPolicy is absent.
+
+    .. versionadded:: 2.1.0
+
+    .. code-block:: yaml
+
+        deny-all:
+          kubernetes.network_policy_absent:
+            - namespace: default
+    """
+    return _rbac_absent_impl(
+        name, "network_policy", "NetworkPolicy", True, namespace, wait, timeout, kwargs
+    )
+
+
+def network_policy_present(
+    name,
+    namespace="default",
+    metadata=None,
+    spec=None,
+    source="",
+    template="",
+    template_context=None,
+    **kwargs,
+):
+    """Ensure the named NetworkPolicy is present with the given spec.
+
+    .. versionadded:: 2.1.0
+
+    .. code-block:: yaml
+
+        deny-all:
+          kubernetes.network_policy_present:
+            - namespace: default
+            - spec:
+                podSelector: {}
+                policyTypes:
+                  - Ingress
+                  - Egress
+    """
+    return _rbac_present_impl(
+        name,
+        "network_policy",
+        "NetworkPolicy",
+        True,
+        namespace,
+        metadata,
+        spec,
+        source,
+        template,
+        template_context,
+        kwargs,
+    )
+
+
+def resource_quota_absent(name, namespace="default", wait=False, timeout=60, **kwargs):
+    """Ensure the named ResourceQuota is absent.
+
+    .. versionadded:: 2.1.0
+
+    .. code-block:: yaml
+
+        team-quota:
+          kubernetes.resource_quota_absent:
+            - namespace: team-a
+    """
+    return _rbac_absent_impl(
+        name, "resource_quota", "ResourceQuota", True, namespace, wait, timeout, kwargs
+    )
+
+
+def resource_quota_present(
+    name,
+    namespace="default",
+    metadata=None,
+    spec=None,
+    source="",
+    template="",
+    template_context=None,
+    **kwargs,
+):
+    """Ensure the named ResourceQuota is present with the given spec.
+
+    .. versionadded:: 2.1.0
+
+    .. code-block:: yaml
+
+        team-quota:
+          kubernetes.resource_quota_present:
+            - namespace: team-a
+            - spec:
+                hard:
+                  pods: "10"
+                  limits.cpu: "4"
+                  limits.memory: 4Gi
+    """
+    return _rbac_present_impl(
+        name,
+        "resource_quota",
+        "ResourceQuota",
+        True,
+        namespace,
+        metadata,
+        spec,
+        source,
+        template,
+        template_context,
+        kwargs,
+    )
+
+
+def limit_range_absent(name, namespace="default", wait=False, timeout=60, **kwargs):
+    """Ensure the named LimitRange is absent.
+
+    .. versionadded:: 2.1.0
+
+    .. code-block:: yaml
+
+        mem-defaults:
+          kubernetes.limit_range_absent:
+            - namespace: team-a
+    """
+    return _rbac_absent_impl(
+        name, "limit_range", "LimitRange", True, namespace, wait, timeout, kwargs
+    )
+
+
+def limit_range_present(
+    name,
+    namespace="default",
+    metadata=None,
+    spec=None,
+    source="",
+    template="",
+    template_context=None,
+    **kwargs,
+):
+    """Ensure the named LimitRange is present with the given spec.
+
+    .. versionadded:: 2.1.0
+
+    .. code-block:: yaml
+
+        mem-defaults:
+          kubernetes.limit_range_present:
+            - namespace: team-a
+            - spec:
+                limits:
+                  - type: Container
+                    default:
+                      memory: 256Mi
+                    defaultRequest:
+                      memory: 128Mi
+    """
+    return _rbac_present_impl(
+        name,
+        "limit_range",
+        "LimitRange",
+        True,
+        namespace,
+        metadata,
+        spec,
+        source,
+        template,
+        template_context,
+        kwargs,
+    )
+
+
+def priority_class_absent(name, wait=False, timeout=60, **kwargs):
+    """Ensure the named PriorityClass is absent.
+
+    .. versionadded:: 2.1.0
+
+    Cluster-scoped. Pods that reference a deleted PriorityClass keep
+    their existing priority — Kubernetes does not retroactively rewrite
+    pod specs.
+
+    .. code-block:: yaml
+
+        high-priority:
+          kubernetes.priority_class_absent: []
+    """
+    return _rbac_absent_impl(
+        name, "priority_class", "PriorityClass", False, None, wait, timeout, kwargs
+    )
+
+
+def priority_class_present(
+    name,
+    metadata=None,
+    spec=None,
+    source="",
+    template="",
+    template_context=None,
+    **kwargs,
+):
+    """Ensure the named PriorityClass is present.
+
+    .. versionadded:: 2.1.0
+
+    Cluster-scoped. ``value`` and ``globalDefault`` are immutable after
+    creation; changing them in-place will fail. Re-apply with the same
+    values, or delete-and-recreate, for true updates.
+
+    .. code-block:: yaml
+
+        high-priority:
+          kubernetes.priority_class_present:
+            - spec:
+                value: 1000000
+                description: Critical workloads
+                globalDefault: false
+                preemptionPolicy: PreemptLowerPriority
+    """
+    return _rbac_present_impl(
+        name,
+        "priority_class",
+        "PriorityClass",
+        False,
+        None,
+        metadata,
+        spec,
+        source,
+        template,
+        template_context,
+        kwargs,
+    )
+
+
+def custom_resource_definition_absent(name, wait=False, timeout=60, **kwargs):
+    """Ensure the named CustomResourceDefinition is absent.
+
+    .. versionadded:: 2.1.0
+
+    Cluster-scoped. Deletes every instance of the custom resource as a
+    side-effect (the apiserver garbage-collects them via the CRD's
+    deletion).
+
+    .. code-block:: yaml
+
+        widgets.example.io:
+          kubernetes.custom_resource_definition_absent: []
+    """
+    return _rbac_absent_impl(
+        name,
+        "custom_resource_definition",
+        "CustomResourceDefinition",
+        False,
+        None,
+        wait,
+        timeout,
+        kwargs,
+    )
+
+
+def custom_resource_definition_present(
+    name,
+    metadata=None,
+    spec=None,
+    source="",
+    template="",
+    template_context=None,
+    **kwargs,
+):
+    """Ensure the named CustomResourceDefinition is present.
+
+    .. versionadded:: 2.1.0
+
+    Use this to declaratively install operator-style CRDs. The CRD
+    becomes available after the apiserver registers and the storage
+    route is wired up; downstream states that create instances should
+    follow it (e.g. via ``require: kubernetes: widgets.example.io``).
+
+    .. code-block:: yaml
+
+        widgets.example.io:
+          kubernetes.custom_resource_definition_present:
+            - spec:
+                group: example.io
+                scope: Namespaced
+                names:
+                  plural: widgets
+                  singular: widget
+                  kind: Widget
+                versions:
+                  - name: v1
+                    served: true
+                    storage: true
+                    schema:
+                      openAPIV3Schema:
+                        type: object
+    """
+    return _rbac_present_impl(
+        name,
+        "custom_resource_definition",
+        "CustomResourceDefinition",
+        False,
+        None,
         metadata,
         spec,
         source,
