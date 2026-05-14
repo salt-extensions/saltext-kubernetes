@@ -68,6 +68,7 @@ import io
 import json
 import logging
 import os.path
+import re
 import sys
 import tarfile
 import time
@@ -103,13 +104,28 @@ try:
     from kubernetes.client import ApiClient
     from kubernetes.client import V1ClusterRole
     from kubernetes.client import V1ClusterRoleBinding
+    from kubernetes.client import V1CronJob
+    from kubernetes.client import V1CronJobSpec
     from kubernetes.client import V1Deployment
     from kubernetes.client import V1DeploymentSpec
+    from kubernetes.client import V1Ingress
+    from kubernetes.client import V1IngressSpec
+    from kubernetes.client import V1Job
+    from kubernetes.client import V1JobSpec
+    from kubernetes.client import V1JobTemplateSpec
+    from kubernetes.client import V1PersistentVolume
+    from kubernetes.client import V1PersistentVolumeClaim
+    from kubernetes.client import V1PersistentVolumeClaimSpec
+    from kubernetes.client import V1PersistentVolumeSpec
+    from kubernetes.client import V1PodDisruptionBudget
+    from kubernetes.client import V1PodDisruptionBudgetSpec
     from kubernetes.client import V1PolicyRule
     from kubernetes.client import V1Role
     from kubernetes.client import V1RoleBinding
     from kubernetes.client import V1RoleRef
     from kubernetes.client import V1ServiceAccount
+    from kubernetes.client import V2HorizontalPodAutoscaler
+    from kubernetes.client import V2HorizontalPodAutoscalerSpec
     from kubernetes.client.rest import ApiException
     from kubernetes.stream import stream as ws_stream
     from kubernetes.stream.ws_client import ERROR_CHANNEL
@@ -335,9 +351,117 @@ def node_remove_label(node_name, label_name, **kwargs):
         _cleanup(**cfg)
 
 
+def node_annotations(name, **kwargs):
+    """
+    Return the annotations on the named node, or an empty dict if the node
+    is absent.
+
+    .. versionadded:: 2.1.0
+
+    name
+        Name of the node to read.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.node_annotations name="minikube"
+    """
+    match = node(name, **kwargs)
+    if match is not None:
+        return match["metadata"].get("annotations") or {}
+    return {}
+
+
+def node_add_annotation(node_name, annotation_name, annotation_value, **kwargs):
+    """
+    Set or update an annotation on the named node.
+
+    .. versionadded:: 2.1.0
+
+    Creates the annotation if not present; updates the value if it is.
+    Annotations differ from labels in that they accept arbitrary string
+    values (no DNS-label syntax restriction) and are not used for
+    selectors. See the Kubernetes docs:
+    https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations/
+
+    node_name
+        Name of the node to annotate.
+
+    annotation_name
+        Annotation key. May contain ``/`` to namespace the key.
+
+    annotation_value
+        Annotation value. Coerced to ``str``.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.node_add_annotation node_name="minikube" \
+            annotation_name="example.com/owner" annotation_value="ops"
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        api_instance = kubernetes.client.CoreV1Api()
+        try:
+            api_instance.read_node(node_name)
+        except ApiException as exc:
+            if exc.status == 404:
+                raise CommandExecutionError(f"Node {node_name} not found") from exc
+            raise
+
+        body = {"metadata": {"annotations": {annotation_name: str(annotation_value)}}}
+        api_response = api_instance.patch_node(node_name, body)
+        return ApiClient().sanitize_for_serialization(api_response)
+    except (ApiException, HTTPError) as exc:
+        raise CommandExecutionError(str(exc)) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def node_remove_annotation(node_name, annotation_name, **kwargs):
+    """
+    Remove an annotation from the named node.
+
+    .. versionadded:: 2.1.0
+
+    Removing an annotation that is not present is a no-op (no error
+    raised); the function still returns the live node object.
+
+    node_name
+        Name of the node.
+
+    annotation_name
+        Annotation key to remove.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.node_remove_annotation node_name="minikube" \
+            annotation_name="example.com/owner"
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        api_instance = kubernetes.client.CoreV1Api()
+        # JSON-merge null deletes the key.
+        body = {"metadata": {"annotations": {annotation_name: None}}}
+        api_response = api_instance.patch_node(node_name, body)
+        return ApiClient().sanitize_for_serialization(api_response)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            raise CommandExecutionError(f"Node {node_name} not found") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
 def namespaces(**kwargs):
     """
-    Return the names of the available namespaces
+    Return the names of the available namespaces.
+
+    Returns a list of namespace name strings.
 
     CLI Example:
 
@@ -4736,7 +4860,9 @@ def replace_role(
     **kwargs,
 ):
     """
-    Replace an existing Role. .. versionadded:: 2.1.0
+    Replace an existing Role.
+
+    .. versionadded:: 2.1.0
 
     CLI Example:
 
@@ -4837,7 +4963,9 @@ def replace_cluster_role(
     **kwargs,
 ):
     """
-    Replace an existing ClusterRole. .. versionadded:: 2.1.0
+    Replace an existing ClusterRole.
+
+    .. versionadded:: 2.1.0
 
     CLI Example:
 
@@ -4934,7 +5062,9 @@ def replace_service_account(
     **kwargs,
 ):
     """
-    Replace an existing ServiceAccount. .. versionadded:: 2.1.0
+    Replace an existing ServiceAccount.
+
+    .. versionadded:: 2.1.0
 
     CLI Example:
 
@@ -4995,7 +5125,9 @@ def patch_role(
     **kwargs,
 ):
     """
-    Patch a Role with a strategic-merge patch. .. versionadded:: 2.1.0
+    Patch a Role with a strategic-merge patch.
+
+    .. versionadded:: 2.1.0
 
     CLI Example:
 
@@ -5033,7 +5165,9 @@ def patch_role_binding(
     dry_run=False,
     **kwargs,
 ):
-    """Patch a RoleBinding. .. versionadded:: 2.1.0
+    """Patch a RoleBinding.
+
+    .. versionadded:: 2.1.0
 
     .. note::
         ``roleRef`` is immutable; including it in *patch* will be rejected.
@@ -5078,7 +5212,9 @@ def patch_cluster_role(
     **kwargs,
 ):
     """
-    Patch a ClusterRole. .. versionadded:: 2.1.0
+    Patch a ClusterRole.
+
+    .. versionadded:: 2.1.0
 
     CLI Example:
 
@@ -5115,7 +5251,9 @@ def patch_cluster_role_binding(
     dry_run=False,
     **kwargs,
 ):
-    """Patch a ClusterRoleBinding. .. versionadded:: 2.1.0
+    """Patch a ClusterRoleBinding.
+
+    .. versionadded:: 2.1.0
 
     .. note::
         ``roleRef`` is immutable; including it in *patch* will be rejected.
@@ -5161,7 +5299,9 @@ def patch_service_account(
     **kwargs,
 ):
     """
-    Patch a ServiceAccount. .. versionadded:: 2.1.0
+    Patch a ServiceAccount.
+
+    .. versionadded:: 2.1.0
 
     CLI Example:
 
@@ -5194,7 +5334,9 @@ def patch_service_account(
 
 def delete_role(name, namespace="default", wait=False, timeout=60, **kwargs):
     """
-    Delete a Role. .. versionadded:: 2.1.0
+    Delete a Role.
+
+    .. versionadded:: 2.1.0
 
     CLI Example:
 
@@ -5222,7 +5364,9 @@ def delete_role(name, namespace="default", wait=False, timeout=60, **kwargs):
 
 def delete_role_binding(name, namespace="default", wait=False, timeout=60, **kwargs):
     """
-    Delete a RoleBinding. .. versionadded:: 2.1.0
+    Delete a RoleBinding.
+
+    .. versionadded:: 2.1.0
 
     CLI Example:
 
@@ -5250,7 +5394,9 @@ def delete_role_binding(name, namespace="default", wait=False, timeout=60, **kwa
 
 def delete_cluster_role(name, wait=False, timeout=60, **kwargs):
     """
-    Delete a ClusterRole. .. versionadded:: 2.1.0
+    Delete a ClusterRole.
+
+    .. versionadded:: 2.1.0
 
     CLI Example:
 
@@ -5278,7 +5424,9 @@ def delete_cluster_role(name, wait=False, timeout=60, **kwargs):
 
 def delete_cluster_role_binding(name, wait=False, timeout=60, **kwargs):
     """
-    Delete a ClusterRoleBinding. .. versionadded:: 2.1.0
+    Delete a ClusterRoleBinding.
+
+    .. versionadded:: 2.1.0
 
     CLI Example:
 
@@ -5308,7 +5456,9 @@ def delete_cluster_role_binding(name, wait=False, timeout=60, **kwargs):
 
 def delete_service_account(name, namespace="default", wait=False, timeout=60, **kwargs):
     """
-    Delete a ServiceAccount. .. versionadded:: 2.1.0
+    Delete a ServiceAccount.
+
+    .. versionadded:: 2.1.0
 
     CLI Example:
 
@@ -5328,6 +5478,2739 @@ def delete_service_account(name, namespace="default", wait=False, timeout=60, **
                     f"Timeout waiting for ServiceAccount {name} to be deleted"
                 )
         return ApiClient().sanitize_for_serialization(api_response)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            return None
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+# ---------------------------------------------------------------------------
+# Batch: Job, CronJob
+#
+# Same six-verb surface as the other typed kinds. Job optionally waits
+# for completion (kubectl-create-job + kubectl-wait equivalent).
+#
+# .. versionadded:: 2.1.0
+# ---------------------------------------------------------------------------
+
+
+def _batch_api():
+    return kubernetes.client.BatchV1Api()
+
+
+def _wait_for_job_completion(api, name, namespace, timeout):
+    """Poll a Job until status.conditions has Complete or Failed."""
+
+    deadline = time.time() + max(timeout, 1)
+    while time.time() < deadline:
+        try:
+            job = api.read_namespaced_job(name, namespace)
+        except ApiException as exc:
+            if exc.status == 404:
+                return False
+            raise
+        for cond in job.status.conditions or []:
+            if cond.type == "Complete" and cond.status == "True":
+                return True
+            if cond.type == "Failed" and cond.status == "True":
+                return False
+        time.sleep(2)
+    return False
+
+
+# --- list -------------------------------------------------------------------
+
+
+def jobs(namespace="default", **kwargs):
+    """
+    Return a list of Job names in *namespace*.
+
+    .. versionadded:: 2.1.0
+
+    namespace
+        The namespace to operate in. Defaults to ``default``.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.jobs
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        resp = _batch_api().list_namespaced_job(namespace)
+        return [
+            j["metadata"]["name"]
+            for j in ApiClient().sanitize_for_serialization(resp).get("items", [])
+        ]
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            return []
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def cron_jobs(namespace="default", **kwargs):
+    """
+    Return a list of CronJob names in *namespace*.
+
+    .. versionadded:: 2.1.0
+
+    namespace
+        The namespace to operate in. Defaults to ``default``.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.cron_jobs
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        resp = _batch_api().list_namespaced_cron_job(namespace)
+        return [
+            j["metadata"]["name"]
+            for j in ApiClient().sanitize_for_serialization(resp).get("items", [])
+        ]
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            return []
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+# --- show -------------------------------------------------------------------
+
+
+def show_job(name, namespace="default", **kwargs):
+    """
+    Return the Job named *name* in *namespace*.
+
+    .. versionadded:: 2.1.0
+
+    name
+        The name of the object.
+
+    namespace
+        The namespace to operate in. Defaults to ``default``.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.show_job
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        return ApiClient().sanitize_for_serialization(
+            _batch_api().read_namespaced_job(name, namespace)
+        )
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            return None
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def show_cron_job(name, namespace="default", **kwargs):
+    """
+    Return the CronJob named *name* in *namespace*.
+
+    .. versionadded:: 2.1.0
+
+    name
+        The name of the object.
+
+    namespace
+        The namespace to operate in. Defaults to ``default``.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.show_cron_job
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        return ApiClient().sanitize_for_serialization(
+            _batch_api().read_namespaced_cron_job(name, namespace)
+        )
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            return None
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+# --- create -----------------------------------------------------------------
+
+
+def create_job(
+    name,
+    namespace="default",
+    metadata=None,
+    spec=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    dry_run=False,
+    wait_for_completion=False,
+    timeout=300,
+    **kwargs,
+):
+    """
+    Create a Job from a *spec* dict (with ``template``) or a *source* file.
+
+    .. versionadded:: 2.1.0
+
+    wait_for_completion
+        Poll the Job's status.conditions until ``Complete=True`` (return
+        the Job) or ``Failed=True`` (raise CommandExecutionError) or
+        the wall-clock *timeout* elapses (raise).
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.create_job
+    """
+    if source:
+        metadata, spec = _resolve_rbac_source(
+            source, "Job", template, saltenv, template_context, metadata, spec
+        )
+    if metadata is None:
+        metadata = {}
+    if spec is None:
+        spec = {}
+    body = V1Job(
+        metadata=__dict_to_object_meta(name, namespace, metadata),
+        spec=V1JobSpec(**__dict_to_job_spec(spec)),
+    )
+    cfg = _setup_conn(**kwargs)
+    try:
+        api = _batch_api()
+        resp = api.create_namespaced_job(namespace, body, dry_run="All" if dry_run else None)
+        if wait_for_completion and not dry_run:
+            done = _wait_for_job_completion(api, name, namespace, timeout)
+            if not done:
+                raise CommandExecutionError(f"Job {name} did not complete within {timeout}s")
+            resp = api.read_namespaced_job(name, namespace)
+        return ApiClient().sanitize_for_serialization(resp)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException):
+            if exc.status == 409:
+                raise CommandExecutionError(f"Job {name} already exists") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def create_cron_job(
+    name,
+    namespace="default",
+    metadata=None,
+    spec=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    dry_run=False,
+    **kwargs,
+):
+    """
+    Create a CronJob.
+
+    .. versionadded:: 2.1.0
+
+    name
+        The name of the object.
+
+    namespace
+        The namespace to operate in. Defaults to ``default``.
+
+    metadata
+        Object metadata dict (labels, annotations,
+        ``ownerReferences``, etc.). The function fills in ``name`` and
+        ``namespace`` itself; supply other fields here.
+
+    spec
+        Object spec dict mapped onto the typed Kubernetes
+        ``V1*Spec`` for this kind. Either supply directly or via
+        ``source``.
+
+    source
+        Salt fileserver path (``salt://...``) to a YAML
+        manifest. Mutually exclusive with ``metadata`` + ``spec``.
+
+    template
+        Template engine used to render ``source``
+        (e.g. ``"jinja"``).
+
+    saltenv
+        Salt environment from which to resolve
+        ``source``. Defaults to the minion's configured ``saltenv``
+        or ``base``.
+
+    template_context
+        Variables made available when rendering
+        ``source``.
+
+    dry_run
+        If ``True`` the API server validates and returns
+        what would be written without persisting it. Useful for
+        state-mode ``test=True`` previews.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.create_cron_job
+    """
+    if source:
+        metadata, spec = _resolve_rbac_source(
+            source, "CronJob", template, saltenv, template_context, metadata, spec
+        )
+    if metadata is None:
+        metadata = {}
+    if spec is None:
+        spec = {}
+    body = V1CronJob(
+        metadata=__dict_to_object_meta(name, namespace, metadata),
+        spec=V1CronJobSpec(**__dict_to_cron_job_spec(spec)),
+    )
+    cfg = _setup_conn(**kwargs)
+    try:
+        resp = _batch_api().create_namespaced_cron_job(
+            namespace, body, dry_run="All" if dry_run else None
+        )
+        return ApiClient().sanitize_for_serialization(resp)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 409:
+            raise CommandExecutionError(f"CronJob {name} already exists") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+# --- replace ----------------------------------------------------------------
+
+
+def replace_job(
+    name,
+    namespace="default",
+    metadata=None,
+    spec=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    **kwargs,
+):
+    """
+    Replace a Job.
+
+    .. versionadded:: 2.1.0
+
+    .. note::
+
+        Job ``spec.selector`` and most of ``spec.template`` are immutable
+        after creation. The API server will reject a replace that
+        changes them; for those cases delete and recreate.
+
+    name
+        The name of the object.
+
+    namespace
+        The namespace to operate in. Defaults to ``default``.
+
+    metadata
+        Object metadata dict (labels, annotations,
+        ``ownerReferences``, etc.). The function fills in ``name`` and
+        ``namespace`` itself; supply other fields here.
+
+    spec
+        Object spec dict mapped onto the typed Kubernetes
+        ``V1*Spec`` for this kind. Either supply directly or via
+        ``source``.
+
+    source
+        Salt fileserver path (``salt://...``) to a YAML
+        manifest. Mutually exclusive with ``metadata`` + ``spec``.
+
+    template
+        Template engine used to render ``source``
+        (e.g. ``"jinja"``).
+
+    saltenv
+        Salt environment from which to resolve
+        ``source``. Defaults to the minion's configured ``saltenv``
+        or ``base``.
+
+    template_context
+        Variables made available when rendering
+        ``source``.
+
+    dry_run
+        If ``True`` the API server validates and returns
+        what would be written without persisting it. Useful for
+        state-mode ``test=True`` previews.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.replace_job
+    """
+    if source:
+        metadata, spec = _resolve_rbac_source(
+            source, "Job", template, saltenv, template_context, metadata, spec
+        )
+    if metadata is None:
+        metadata = {}
+    if spec is None:
+        spec = {}
+    body = V1Job(
+        metadata=__dict_to_object_meta(name, namespace, metadata),
+        spec=V1JobSpec(**__dict_to_job_spec(spec)),
+    )
+    cfg = _setup_conn(**kwargs)
+    try:
+        resp = _batch_api().replace_namespaced_job(name, namespace, body)
+        return ApiClient().sanitize_for_serialization(resp)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            raise CommandExecutionError(f"Job {name} not found") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def replace_cron_job(
+    name,
+    namespace="default",
+    metadata=None,
+    spec=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    **kwargs,
+):
+    """
+    Replace a CronJob.
+
+    .. versionadded:: 2.1.0
+
+    name
+        The name of the object.
+
+    namespace
+        The namespace to operate in. Defaults to ``default``.
+
+    metadata
+        Object metadata dict (labels, annotations,
+        ``ownerReferences``, etc.). The function fills in ``name`` and
+        ``namespace`` itself; supply other fields here.
+
+    spec
+        Object spec dict mapped onto the typed Kubernetes
+        ``V1*Spec`` for this kind. Either supply directly or via
+        ``source``.
+
+    source
+        Salt fileserver path (``salt://...``) to a YAML
+        manifest. Mutually exclusive with ``metadata`` + ``spec``.
+
+    template
+        Template engine used to render ``source``
+        (e.g. ``"jinja"``).
+
+    saltenv
+        Salt environment from which to resolve
+        ``source``. Defaults to the minion's configured ``saltenv``
+        or ``base``.
+
+    template_context
+        Variables made available when rendering
+        ``source``.
+
+    dry_run
+        If ``True`` the API server validates and returns
+        what would be written without persisting it. Useful for
+        state-mode ``test=True`` previews.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.replace_cron_job
+    """
+    if source:
+        metadata, spec = _resolve_rbac_source(
+            source, "CronJob", template, saltenv, template_context, metadata, spec
+        )
+    if metadata is None:
+        metadata = {}
+    if spec is None:
+        spec = {}
+    body = V1CronJob(
+        metadata=__dict_to_object_meta(name, namespace, metadata),
+        spec=V1CronJobSpec(**__dict_to_cron_job_spec(spec)),
+    )
+    cfg = _setup_conn(**kwargs)
+    try:
+        resp = _batch_api().replace_namespaced_cron_job(name, namespace, body)
+        return ApiClient().sanitize_for_serialization(resp)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            raise CommandExecutionError(f"CronJob {name} not found") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+# --- patch ------------------------------------------------------------------
+
+
+def patch_job(
+    name,
+    namespace="default",
+    patch=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    dry_run=False,
+    **kwargs,
+):
+    """Patch a Job (e.g. to update labels or ttlSecondsAfterFinished).
+
+    .. versionadded:: 2.1.0
+
+    Unlike RBAC kinds (where the patch path flattens ``spec:`` because
+    those kinds have no real .spec field), Job/CronJob patches are
+    passed through verbatim so callers can target nested fields like
+    ``spec.suspend`` or ``spec.template.metadata.labels``.
+
+    name
+        The name of the object.
+
+    namespace
+        The namespace to operate in. Defaults to ``default``.
+
+    patch
+        Strategic-merge patch dict. Mutually exclusive
+        with ``source``.
+
+    source
+        Salt fileserver path (``salt://...``) to a YAML
+        manifest. Mutually exclusive with ``metadata`` + ``spec``.
+
+    template
+        Template engine used to render ``source``
+        (e.g. ``"jinja"``).
+
+    saltenv
+        Salt environment from which to resolve
+        ``source``. Defaults to the minion's configured ``saltenv``
+        or ``base``.
+
+    template_context
+        Variables made available when rendering
+        ``source``.
+
+    dry_run
+        If ``True`` the API server validates and returns
+        what would be written without persisting it. Useful for
+        state-mode ``test=True`` previews.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.patch_job
+    """
+    if source:
+        patch = __read_and_render_yaml_file(source, template, saltenv, template_context)
+        if isinstance(patch, dict) and patch.get("kind") == "Job":
+            patch = {k: v for k, v in patch.items() if k not in ("apiVersion", "kind")}
+    if not isinstance(patch, dict):
+        raise CommandExecutionError("Job patch must be a dictionary")
+    cfg = _setup_conn(**kwargs)
+    try:
+        resp = _batch_api().patch_namespaced_job(
+            name, namespace, patch, dry_run="All" if dry_run else None
+        )
+        return ApiClient().sanitize_for_serialization(resp)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            raise CommandExecutionError(f"Job {name} not found") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def patch_cron_job(
+    name,
+    namespace="default",
+    patch=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    dry_run=False,
+    **kwargs,
+):
+    """Patch a CronJob (e.g. toggle ``spec.suspend`` or change ``spec.schedule``).
+
+    .. versionadded:: 2.1.0
+
+    Patches are passed through verbatim — callers must include the
+    ``spec:`` wrapper for nested fields, matching kubectl-patch semantics.
+
+    name
+        The name of the object.
+
+    namespace
+        The namespace to operate in. Defaults to ``default``.
+
+    patch
+        Strategic-merge patch dict. Mutually exclusive
+        with ``source``.
+
+    source
+        Salt fileserver path (``salt://...``) to a YAML
+        manifest. Mutually exclusive with ``metadata`` + ``spec``.
+
+    template
+        Template engine used to render ``source``
+        (e.g. ``"jinja"``).
+
+    saltenv
+        Salt environment from which to resolve
+        ``source``. Defaults to the minion's configured ``saltenv``
+        or ``base``.
+
+    template_context
+        Variables made available when rendering
+        ``source``.
+
+    dry_run
+        If ``True`` the API server validates and returns
+        what would be written without persisting it. Useful for
+        state-mode ``test=True`` previews.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.patch_cron_job
+    """
+    if source:
+        patch = __read_and_render_yaml_file(source, template, saltenv, template_context)
+        if isinstance(patch, dict) and patch.get("kind") == "CronJob":
+            patch = {k: v for k, v in patch.items() if k not in ("apiVersion", "kind")}
+    if not isinstance(patch, dict):
+        raise CommandExecutionError("CronJob patch must be a dictionary")
+    cfg = _setup_conn(**kwargs)
+    try:
+        resp = _batch_api().patch_namespaced_cron_job(
+            name, namespace, patch, dry_run="All" if dry_run else None
+        )
+        return ApiClient().sanitize_for_serialization(resp)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            raise CommandExecutionError(f"CronJob {name} not found") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+# --- delete -----------------------------------------------------------------
+
+
+def delete_job(
+    name,
+    namespace="default",
+    propagation_policy="Background",
+    wait=False,
+    timeout=60,
+    **kwargs,
+):
+    """Delete a Job.
+
+    .. versionadded:: 2.1.0
+
+    Default ``propagation_policy=Background`` deletes the underlying Pods
+    too — matches kubectl. Pass ``Orphan`` to keep them.
+
+    name
+        The name of the object.
+
+    namespace
+        The namespace to operate in. Defaults to ``default``.
+
+    wait
+        Block until the resource reaches its kind-specific
+        ready predicate.
+
+    timeout
+        Seconds to wait when ``wait=True`` (default 60).
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.delete_job
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        api = _batch_api()
+        opts = kubernetes.client.V1DeleteOptions(propagation_policy=propagation_policy)
+        resp = api.delete_namespaced_job(name, namespace, body=opts)
+        if wait:
+            if not _wait_for_resource_status(api, "job", name, namespace, "deleted", timeout):
+                raise CommandExecutionError(f"Timeout waiting for Job {name} to be deleted")
+        return ApiClient().sanitize_for_serialization(resp)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            return None
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def delete_cron_job(name, namespace="default", wait=False, timeout=60, **kwargs):
+    """
+    Delete a CronJob.
+
+    .. versionadded:: 2.1.0
+
+    name
+        The name of the object.
+
+    namespace
+        The namespace to operate in. Defaults to ``default``.
+
+    wait
+        Block until the resource reaches its kind-specific
+        ready predicate.
+
+    timeout
+        Seconds to wait when ``wait=True`` (default 60).
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.delete_cron_job
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        api = _batch_api()
+        resp = api.delete_namespaced_cron_job(name, namespace)
+        if wait:
+            if not _wait_for_resource_status(api, "cron_job", name, namespace, "deleted", timeout):
+                raise CommandExecutionError(f"Timeout waiting for CronJob {name} to be deleted")
+        return ApiClient().sanitize_for_serialization(resp)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            return None
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+# ---------------------------------------------------------------------------
+# PersistentVolume + PersistentVolumeClaim
+#
+# PV is cluster-scoped. PVC is namespaced. Both are reasonably simple
+# wrappers over the V1*Spec classes — most volume-type-specific
+# validation happens server-side, so the helpers do shape checks (dict
+# vs not, required keys present) and let the API server catch the rest.
+#
+# .. versionadded:: 2.1.0
+# ---------------------------------------------------------------------------
+
+
+_PV_FIELD_MAP = {
+    "accessModes": "access_modes",
+    "claimRef": "claim_ref",
+    "persistentVolumeReclaimPolicy": "persistent_volume_reclaim_policy",
+    "storageClassName": "storage_class_name",
+    "volumeMode": "volume_mode",
+    "mountOptions": "mount_options",
+    "nodeAffinity": "node_affinity",
+}
+
+
+def __dict_to_persistent_volume_spec(spec):
+    """Validate dict, return kwargs for V1PersistentVolumeSpec."""
+    if not isinstance(spec, dict):
+        raise CommandExecutionError(f"PV spec must be a dictionary, not {type(spec).__name__}")
+    normalised = _normalise_field_map(spec, _PV_FIELD_MAP)
+    if not normalised.get("capacity"):
+        raise CommandExecutionError("PV spec must include 'capacity'")
+    if not normalised.get("access_modes"):
+        raise CommandExecutionError("PV spec must include 'accessModes'")
+    if not isinstance(normalised["access_modes"], list):
+        raise CommandExecutionError("PV accessModes must be a list")
+    try:
+        V1PersistentVolumeSpec(**normalised)
+    except (TypeError, ValueError) as exc:
+        raise CommandExecutionError(f"Invalid PV spec: {exc}") from exc
+    return normalised
+
+
+_PVC_FIELD_MAP = {
+    "accessModes": "access_modes",
+    "dataSource": "data_source",
+    "dataSourceRef": "data_source_ref",
+    "storageClassName": "storage_class_name",
+    "volumeMode": "volume_mode",
+    "volumeName": "volume_name",
+    "volumeAttributesClassName": "volume_attributes_class_name",
+}
+
+
+def __dict_to_pvc_spec(spec):
+    """Validate dict, return kwargs for V1PersistentVolumeClaimSpec."""
+    if not isinstance(spec, dict):
+        raise CommandExecutionError(f"PVC spec must be a dictionary, not {type(spec).__name__}")
+    normalised = _normalise_field_map(spec, _PVC_FIELD_MAP)
+    if not normalised.get("access_modes"):
+        raise CommandExecutionError("PVC spec must include 'accessModes'")
+    if not isinstance(normalised["access_modes"], list):
+        raise CommandExecutionError("PVC accessModes must be a list")
+    if not normalised.get("resources"):
+        raise CommandExecutionError("PVC spec must include 'resources' (with .requests.storage)")
+    if "selector" in normalised and isinstance(normalised["selector"], dict):
+        normalised["selector"] = kubernetes.client.V1LabelSelector(**normalised["selector"])
+    if "resources" in normalised and isinstance(normalised["resources"], dict):
+        normalised["resources"] = kubernetes.client.V1VolumeResourceRequirements(
+            **normalised["resources"]
+        )
+    try:
+        V1PersistentVolumeClaimSpec(**normalised)
+    except (TypeError, ValueError) as exc:
+        raise CommandExecutionError(f"Invalid PVC spec: {exc}") from exc
+    return normalised
+
+
+# --- PV (cluster-scoped) ----------------------------------------------------
+
+
+def persistent_volumes(**kwargs):
+    """
+    Return PV names.
+
+    .. versionadded:: 2.1.0
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.persistent_volumes
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        api = kubernetes.client.CoreV1Api()
+        resp = api.list_persistent_volume()
+        return [
+            p["metadata"]["name"]
+            for p in ApiClient().sanitize_for_serialization(resp).get("items", [])
+        ]
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            return []
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def show_persistent_volume(name, **kwargs):
+    """
+    Return the PV named *name*.
+
+    .. versionadded:: 2.1.0
+
+    name
+        The name of the object.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.show_persistent_volume
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        return ApiClient().sanitize_for_serialization(
+            kubernetes.client.CoreV1Api().read_persistent_volume(name)
+        )
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            return None
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def create_persistent_volume(
+    name,
+    metadata=None,
+    spec=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    dry_run=False,
+    **kwargs,
+):
+    """
+    Create a PV.
+
+    .. versionadded:: 2.1.0
+
+    name
+        The name of the object.
+
+    metadata
+        Object metadata dict (labels, annotations,
+        ``ownerReferences``, etc.). The function fills in ``name`` and
+        ``namespace`` itself; supply other fields here.
+
+    spec
+        Object spec dict mapped onto the typed Kubernetes
+        ``V1*Spec`` for this kind. Either supply directly or via
+        ``source``.
+
+    source
+        Salt fileserver path (``salt://...``) to a YAML
+        manifest. Mutually exclusive with ``metadata`` + ``spec``.
+
+    template
+        Template engine used to render ``source``
+        (e.g. ``"jinja"``).
+
+    saltenv
+        Salt environment from which to resolve
+        ``source``. Defaults to the minion's configured ``saltenv``
+        or ``base``.
+
+    template_context
+        Variables made available when rendering
+        ``source``.
+
+    dry_run
+        If ``True`` the API server validates and returns
+        what would be written without persisting it. Useful for
+        state-mode ``test=True`` previews.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.create_persistent_volume
+    """
+    if source:
+        metadata, spec = _resolve_rbac_source(
+            source, "PersistentVolume", template, saltenv, template_context, metadata, spec
+        )
+    if metadata is None:
+        metadata = {}
+    if spec is None:
+        spec = {}
+    body = V1PersistentVolume(
+        metadata=__dict_to_object_meta(name, None, metadata),
+        spec=V1PersistentVolumeSpec(**__dict_to_persistent_volume_spec(spec)),
+    )
+    cfg = _setup_conn(**kwargs)
+    try:
+        resp = kubernetes.client.CoreV1Api().create_persistent_volume(
+            body, dry_run="All" if dry_run else None
+        )
+        return ApiClient().sanitize_for_serialization(resp)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 409:
+            raise CommandExecutionError(f"PV {name} already exists") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def replace_persistent_volume(
+    name,
+    metadata=None,
+    spec=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    **kwargs,
+):
+    """Replace a PV.
+
+    .. versionadded:: 2.1.0
+
+    .. note::
+        Most PV fields are immutable after binding. The API server
+        will reject changes to the volume source, capacity, or
+        accessModes once a PVC has bound to the PV.
+
+    name
+        The name of the object.
+
+    metadata
+        Object metadata dict (labels, annotations,
+        ``ownerReferences``, etc.). The function fills in ``name`` and
+        ``namespace`` itself; supply other fields here.
+
+    spec
+        Object spec dict mapped onto the typed Kubernetes
+        ``V1*Spec`` for this kind. Either supply directly or via
+        ``source``.
+
+    source
+        Salt fileserver path (``salt://...``) to a YAML
+        manifest. Mutually exclusive with ``metadata`` + ``spec``.
+
+    template
+        Template engine used to render ``source``
+        (e.g. ``"jinja"``).
+
+    saltenv
+        Salt environment from which to resolve
+        ``source``. Defaults to the minion's configured ``saltenv``
+        or ``base``.
+
+    template_context
+        Variables made available when rendering
+        ``source``.
+
+    dry_run
+        If ``True`` the API server validates and returns
+        what would be written without persisting it. Useful for
+        state-mode ``test=True`` previews.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.replace_persistent_volume
+    """
+    if source:
+        metadata, spec = _resolve_rbac_source(
+            source, "PersistentVolume", template, saltenv, template_context, metadata, spec
+        )
+    if metadata is None:
+        metadata = {}
+    if spec is None:
+        spec = {}
+    body = V1PersistentVolume(
+        metadata=__dict_to_object_meta(name, None, metadata),
+        spec=V1PersistentVolumeSpec(**__dict_to_persistent_volume_spec(spec)),
+    )
+    cfg = _setup_conn(**kwargs)
+    try:
+        resp = kubernetes.client.CoreV1Api().replace_persistent_volume(name, body)
+        return ApiClient().sanitize_for_serialization(resp)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            raise CommandExecutionError(f"PV {name} not found") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def patch_persistent_volume(
+    name,
+    patch=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    dry_run=False,
+    **kwargs,
+):
+    """
+    Patch a PV.
+
+    .. versionadded:: 2.1.0
+
+    name
+        The name of the object.
+
+    patch
+        Strategic-merge patch dict. Mutually exclusive
+        with ``source``.
+
+    source
+        Salt fileserver path (``salt://...``) to a YAML
+        manifest. Mutually exclusive with ``metadata`` + ``spec``.
+
+    template
+        Template engine used to render ``source``
+        (e.g. ``"jinja"``).
+
+    saltenv
+        Salt environment from which to resolve
+        ``source``. Defaults to the minion's configured ``saltenv``
+        or ``base``.
+
+    template_context
+        Variables made available when rendering
+        ``source``.
+
+    dry_run
+        If ``True`` the API server validates and returns
+        what would be written without persisting it. Useful for
+        state-mode ``test=True`` previews.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.patch_persistent_volume
+    """
+    if source:
+        patch = __read_and_render_yaml_file(source, template, saltenv, template_context)
+        if isinstance(patch, dict) and patch.get("kind") == "PersistentVolume":
+            patch = {k: v for k, v in patch.items() if k not in ("apiVersion", "kind")}
+    if not isinstance(patch, dict):
+        raise CommandExecutionError("PV patch must be a dictionary")
+    cfg = _setup_conn(**kwargs)
+    try:
+        resp = kubernetes.client.CoreV1Api().patch_persistent_volume(
+            name, patch, dry_run="All" if dry_run else None
+        )
+        return ApiClient().sanitize_for_serialization(resp)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            raise CommandExecutionError(f"PV {name} not found") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def delete_persistent_volume(name, wait=False, timeout=60, **kwargs):
+    """
+    Delete a PV.
+
+    .. versionadded:: 2.1.0
+
+    name
+        The name of the object.
+
+    wait
+        Block until the resource reaches its kind-specific
+        ready predicate.
+
+    timeout
+        Seconds to wait when ``wait=True`` (default 60).
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.delete_persistent_volume
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        api = kubernetes.client.CoreV1Api()
+        resp = api.delete_persistent_volume(name)
+        if wait:
+            if not _wait_for_resource_status(
+                api, "persistent_volume", name, None, "deleted", timeout
+            ):
+                raise CommandExecutionError(f"Timeout waiting for PV {name} to be deleted")
+        return ApiClient().sanitize_for_serialization(resp)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            return None
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+# --- PVC (namespaced) ------------------------------------------------------
+
+
+def persistent_volume_claims(namespace="default", **kwargs):
+    """
+    Return PVC names in *namespace*.
+
+    .. versionadded:: 2.1.0
+
+    namespace
+        The namespace to operate in. Defaults to ``default``.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.persistent_volume_claims
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        api = kubernetes.client.CoreV1Api()
+        resp = api.list_namespaced_persistent_volume_claim(namespace)
+        return [
+            p["metadata"]["name"]
+            for p in ApiClient().sanitize_for_serialization(resp).get("items", [])
+        ]
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            return []
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def show_persistent_volume_claim(name, namespace="default", **kwargs):
+    """
+    Return the PVC *name* in *namespace*.
+
+    .. versionadded:: 2.1.0
+
+    name
+        The name of the object.
+
+    namespace
+        The namespace to operate in. Defaults to ``default``.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.show_persistent_volume_claim
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        return ApiClient().sanitize_for_serialization(
+            kubernetes.client.CoreV1Api().read_namespaced_persistent_volume_claim(name, namespace)
+        )
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            return None
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def create_persistent_volume_claim(
+    name,
+    namespace="default",
+    metadata=None,
+    spec=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    dry_run=False,
+    **kwargs,
+):
+    """
+    Create a PVC.
+
+    .. versionadded:: 2.1.0
+
+    name
+        The name of the object.
+
+    namespace
+        The namespace to operate in. Defaults to ``default``.
+
+    metadata
+        Object metadata dict (labels, annotations,
+        ``ownerReferences``, etc.). The function fills in ``name`` and
+        ``namespace`` itself; supply other fields here.
+
+    spec
+        Object spec dict mapped onto the typed Kubernetes
+        ``V1*Spec`` for this kind. Either supply directly or via
+        ``source``.
+
+    source
+        Salt fileserver path (``salt://...``) to a YAML
+        manifest. Mutually exclusive with ``metadata`` + ``spec``.
+
+    template
+        Template engine used to render ``source``
+        (e.g. ``"jinja"``).
+
+    saltenv
+        Salt environment from which to resolve
+        ``source``. Defaults to the minion's configured ``saltenv``
+        or ``base``.
+
+    template_context
+        Variables made available when rendering
+        ``source``.
+
+    dry_run
+        If ``True`` the API server validates and returns
+        what would be written without persisting it. Useful for
+        state-mode ``test=True`` previews.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.create_persistent_volume_claim
+    """
+    if source:
+        metadata, spec = _resolve_rbac_source(
+            source, "PersistentVolumeClaim", template, saltenv, template_context, metadata, spec
+        )
+    if metadata is None:
+        metadata = {}
+    if spec is None:
+        spec = {}
+    body = V1PersistentVolumeClaim(
+        metadata=__dict_to_object_meta(name, namespace, metadata),
+        spec=V1PersistentVolumeClaimSpec(**__dict_to_pvc_spec(spec)),
+    )
+    cfg = _setup_conn(**kwargs)
+    try:
+        resp = kubernetes.client.CoreV1Api().create_namespaced_persistent_volume_claim(
+            namespace, body, dry_run="All" if dry_run else None
+        )
+        return ApiClient().sanitize_for_serialization(resp)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 409:
+            raise CommandExecutionError(f"PVC {name} already exists") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def replace_persistent_volume_claim(
+    name,
+    namespace="default",
+    metadata=None,
+    spec=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    **kwargs,
+):
+    """Replace a PVC.
+
+    .. versionadded:: 2.1.0
+
+    .. note::
+
+        After binding, ``accessModes``, ``selector``, ``volumeName``,
+        and ``storageClassName`` are immutable. ``resources.requests
+        .storage`` can be expanded (only) on storage classes with
+        ``allowVolumeExpansion: true``. The API server will reject
+        invalid changes — :py:func:`replace_persistent_volume_claim`
+        does not silently no-op on immutable-field violations; the
+        rejection surfaces as a clear error.
+
+    name
+        The name of the object.
+
+    namespace
+        The namespace to operate in. Defaults to ``default``.
+
+    metadata
+        Object metadata dict (labels, annotations,
+        ``ownerReferences``, etc.). The function fills in ``name`` and
+        ``namespace`` itself; supply other fields here.
+
+    spec
+        Object spec dict mapped onto the typed Kubernetes
+        ``V1*Spec`` for this kind. Either supply directly or via
+        ``source``.
+
+    source
+        Salt fileserver path (``salt://...``) to a YAML
+        manifest. Mutually exclusive with ``metadata`` + ``spec``.
+
+    template
+        Template engine used to render ``source``
+        (e.g. ``"jinja"``).
+
+    saltenv
+        Salt environment from which to resolve
+        ``source``. Defaults to the minion's configured ``saltenv``
+        or ``base``.
+
+    template_context
+        Variables made available when rendering
+        ``source``.
+
+    dry_run
+        If ``True`` the API server validates and returns
+        what would be written without persisting it. Useful for
+        state-mode ``test=True`` previews.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.replace_persistent_volume_claim
+    """
+    if source:
+        metadata, spec = _resolve_rbac_source(
+            source, "PersistentVolumeClaim", template, saltenv, template_context, metadata, spec
+        )
+    if metadata is None:
+        metadata = {}
+    if spec is None:
+        spec = {}
+    body = V1PersistentVolumeClaim(
+        metadata=__dict_to_object_meta(name, namespace, metadata),
+        spec=V1PersistentVolumeClaimSpec(**__dict_to_pvc_spec(spec)),
+    )
+    cfg = _setup_conn(**kwargs)
+    try:
+        resp = kubernetes.client.CoreV1Api().replace_namespaced_persistent_volume_claim(
+            name, namespace, body
+        )
+        return ApiClient().sanitize_for_serialization(resp)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            raise CommandExecutionError(f"PVC {name} not found") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def patch_persistent_volume_claim(
+    name,
+    namespace="default",
+    patch=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    dry_run=False,
+    **kwargs,
+):
+    """
+    Patch a PVC.
+
+    .. versionadded:: 2.1.0
+
+    name
+        The name of the object.
+
+    namespace
+        The namespace to operate in. Defaults to ``default``.
+
+    patch
+        Strategic-merge patch dict. Mutually exclusive
+        with ``source``.
+
+    source
+        Salt fileserver path (``salt://...``) to a YAML
+        manifest. Mutually exclusive with ``metadata`` + ``spec``.
+
+    template
+        Template engine used to render ``source``
+        (e.g. ``"jinja"``).
+
+    saltenv
+        Salt environment from which to resolve
+        ``source``. Defaults to the minion's configured ``saltenv``
+        or ``base``.
+
+    template_context
+        Variables made available when rendering
+        ``source``.
+
+    dry_run
+        If ``True`` the API server validates and returns
+        what would be written without persisting it. Useful for
+        state-mode ``test=True`` previews.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.patch_persistent_volume_claim
+    """
+    if source:
+        patch = __read_and_render_yaml_file(source, template, saltenv, template_context)
+        if isinstance(patch, dict) and patch.get("kind") == "PersistentVolumeClaim":
+            patch = {k: v for k, v in patch.items() if k not in ("apiVersion", "kind")}
+    if not isinstance(patch, dict):
+        raise CommandExecutionError("PVC patch must be a dictionary")
+    cfg = _setup_conn(**kwargs)
+    try:
+        resp = kubernetes.client.CoreV1Api().patch_namespaced_persistent_volume_claim(
+            name, namespace, patch, dry_run="All" if dry_run else None
+        )
+        return ApiClient().sanitize_for_serialization(resp)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            raise CommandExecutionError(f"PVC {name} not found") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def delete_persistent_volume_claim(name, namespace="default", wait=False, timeout=60, **kwargs):
+    """
+    Delete a PVC.
+
+    .. versionadded:: 2.1.0
+
+    name
+        The name of the object.
+
+    namespace
+        The namespace to operate in. Defaults to ``default``.
+
+    wait
+        Block until the resource reaches its kind-specific
+        ready predicate.
+
+    timeout
+        Seconds to wait when ``wait=True`` (default 60).
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.delete_persistent_volume_claim
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        api = kubernetes.client.CoreV1Api()
+        resp = api.delete_namespaced_persistent_volume_claim(name, namespace)
+        if wait:
+            if not _wait_for_resource_status(
+                api, "persistent_volume_claim", name, namespace, "deleted", timeout
+            ):
+                raise CommandExecutionError(f"Timeout waiting for PVC {name} to be deleted")
+        return ApiClient().sanitize_for_serialization(resp)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            return None
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+# ---------------------------------------------------------------------------
+# Networking / Autoscaling / Policy: Ingress, HorizontalPodAutoscaler,
+# PodDisruptionBudget
+#
+# Same six-verb surface as the other typed kinds.
+#
+# .. versionadded:: 2.1.0
+# ---------------------------------------------------------------------------
+
+
+# --- spec helpers ----------------------------------------------------------
+
+
+_CAMEL_TO_SNAKE_RE = None
+
+
+def _camel_to_snake(name):
+    """Convert ``camelCase`` to ``snake_case`` for unmapped keys.
+
+    The kubernetes-client OpenAPI generator's wire→python translation is
+    ``camelCase → snake_case`` for almost every field. Where the
+    auto-generated translation differs from the obvious one (e.g.
+    ``nonResourceURLs → non_resource_ur_ls``) we override via the
+    per-kind ``mapping`` dict in :py:func:`_normalise_field_map`. For
+    everything else, falling back to a regex split on capital letters
+    works.
+    """
+    global _CAMEL_TO_SNAKE_RE  # pylint: disable=global-statement
+    if _CAMEL_TO_SNAKE_RE is None:
+
+        _CAMEL_TO_SNAKE_RE = re.compile(r"(?<!^)(?=[A-Z])")
+    return _CAMEL_TO_SNAKE_RE.sub("_", name).lower()
+
+
+def _normalise_field_map(spec, mapping):
+    """
+    Translate camelCase keys to snake_case.
+
+    *mapping* takes precedence (so per-kind overrides for fields with
+    awkward auto-translations win); unmapped camelCase keys fall back
+    to a generic camel→snake conversion. Keys already in snake_case
+    pass through unchanged.
+    """
+    out = {}
+    for k, v in spec.items():
+        if k in mapping:
+            out[mapping[k]] = v
+        elif any(c.isupper() for c in k):
+            out[_camel_to_snake(k)] = v
+        else:
+            out[k] = v
+    return out
+
+
+_INGRESS_FIELD_MAP = {
+    "ingressClassName": "ingress_class_name",
+    "defaultBackend": "default_backend",
+}
+
+
+def __dict_to_ingress_spec(spec):
+    """Validate dict, return kwargs for V1IngressSpec."""
+    if not isinstance(spec, dict):
+        raise CommandExecutionError(f"Ingress spec must be a dictionary, not {type(spec).__name__}")
+    normalised = _normalise_field_map(spec, _INGRESS_FIELD_MAP)
+    rules = normalised.get("rules")
+    if rules is not None and not isinstance(rules, list):
+        raise CommandExecutionError("Ingress rules must be a list")
+    tls = normalised.get("tls")
+    if tls is not None and not isinstance(tls, list):
+        raise CommandExecutionError("Ingress tls must be a list")
+    try:
+        V1IngressSpec(**normalised)
+    except (TypeError, ValueError) as exc:
+        raise CommandExecutionError(f"Invalid ingress spec: {exc}") from exc
+    return normalised
+
+
+_HPA_FIELD_MAP = {
+    "scaleTargetRef": "scale_target_ref",
+    "minReplicas": "min_replicas",
+    "maxReplicas": "max_replicas",
+}
+
+
+def __dict_to_hpa_spec(spec):
+    """Validate dict, return kwargs for V2HorizontalPodAutoscalerSpec."""
+    if not isinstance(spec, dict):
+        raise CommandExecutionError(f"HPA spec must be a dictionary, not {type(spec).__name__}")
+    normalised = _normalise_field_map(spec, _HPA_FIELD_MAP)
+    if "scale_target_ref" not in normalised:
+        raise CommandExecutionError("HPA spec must include 'scaleTargetRef'")
+    if "max_replicas" not in normalised:
+        raise CommandExecutionError("HPA spec must include 'maxReplicas'")
+    target = normalised["scale_target_ref"]
+    if not isinstance(target, dict):
+        raise CommandExecutionError("scaleTargetRef must be a dict")
+    # The CrossVersionObjectReference accepts api_version/kind/name; translate
+    # camelCase apiVersion if present.
+    if "apiVersion" in target:
+        target = {k: v for k, v in target.items() if k != "apiVersion"}
+        target["api_version"] = normalised["scale_target_ref"]["apiVersion"]
+    normalised["scale_target_ref"] = kubernetes.client.V2CrossVersionObjectReference(**target)
+    try:
+        V2HorizontalPodAutoscalerSpec(**normalised)
+    except (TypeError, ValueError) as exc:
+        raise CommandExecutionError(f"Invalid HPA spec: {exc}") from exc
+    return normalised
+
+
+_PDB_FIELD_MAP = {
+    "minAvailable": "min_available",
+    "maxUnavailable": "max_unavailable",
+    "unhealthyPodEvictionPolicy": "unhealthy_pod_eviction_policy",
+}
+
+
+def __dict_to_pdb_spec(spec):
+    """Validate dict, return kwargs for V1PodDisruptionBudgetSpec."""
+    if not isinstance(spec, dict):
+        raise CommandExecutionError(f"PDB spec must be a dictionary, not {type(spec).__name__}")
+    normalised = _normalise_field_map(spec, _PDB_FIELD_MAP)
+    if normalised.get("min_available") is None and normalised.get("max_unavailable") is None:
+        raise CommandExecutionError(
+            "PDB spec must include exactly one of 'minAvailable' or 'maxUnavailable'"
+        )
+    if (
+        normalised.get("min_available") is not None
+        and normalised.get("max_unavailable") is not None
+    ):
+        raise CommandExecutionError(
+            "PDB spec cannot include both 'minAvailable' and 'maxUnavailable'"
+        )
+    if not isinstance(normalised.get("selector"), dict):
+        raise CommandExecutionError("PDB spec must include 'selector' (a label-selector dict)")
+    normalised["selector"] = kubernetes.client.V1LabelSelector(**normalised["selector"])
+    try:
+        V1PodDisruptionBudgetSpec(**normalised)
+    except (TypeError, ValueError) as exc:
+        raise CommandExecutionError(f"Invalid PDB spec: {exc}") from exc
+    return normalised
+
+
+# --- API instance helpers --------------------------------------------------
+
+
+def _networking_api():
+    return kubernetes.client.NetworkingV1Api()
+
+
+def _autoscaling_api():
+    return kubernetes.client.AutoscalingV2Api()
+
+
+def _policy_api():
+    return kubernetes.client.PolicyV1Api()
+
+
+# --- Ingress ---------------------------------------------------------------
+
+
+def ingresses(namespace="default", **kwargs):
+    """
+    Return Ingress names in *namespace*.
+
+    .. versionadded:: 2.1.0
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.ingresses
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        resp = _networking_api().list_namespaced_ingress(namespace)
+        return [
+            i["metadata"]["name"]
+            for i in ApiClient().sanitize_for_serialization(resp).get("items", [])
+        ]
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            return []
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def show_ingress(name, namespace="default", **kwargs):
+    """
+    Return the Ingress *name* in *namespace*.
+
+    .. versionadded:: 2.1.0
+
+    name
+        The name of the object.
+
+    namespace
+        The namespace to operate in. Defaults to ``default``.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.show_ingress
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        return ApiClient().sanitize_for_serialization(
+            _networking_api().read_namespaced_ingress(name, namespace)
+        )
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            return None
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def create_ingress(
+    name,
+    namespace="default",
+    metadata=None,
+    spec=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    dry_run=False,
+    **kwargs,
+):
+    """
+    Create an Ingress.
+
+    .. versionadded:: 2.1.0
+
+    name
+        The name of the object.
+
+    namespace
+        The namespace to operate in. Defaults to ``default``.
+
+    metadata
+        Object metadata dict (labels, annotations,
+        ``ownerReferences``, etc.). The function fills in ``name`` and
+        ``namespace`` itself; supply other fields here.
+
+    spec
+        Object spec dict mapped onto the typed Kubernetes
+        ``V1*Spec`` for this kind. Either supply directly or via
+        ``source``.
+
+    source
+        Salt fileserver path (``salt://...``) to a YAML
+        manifest. Mutually exclusive with ``metadata`` + ``spec``.
+
+    template
+        Template engine used to render ``source``
+        (e.g. ``"jinja"``).
+
+    saltenv
+        Salt environment from which to resolve
+        ``source``. Defaults to the minion's configured ``saltenv``
+        or ``base``.
+
+    template_context
+        Variables made available when rendering
+        ``source``.
+
+    dry_run
+        If ``True`` the API server validates and returns
+        what would be written without persisting it. Useful for
+        state-mode ``test=True`` previews.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.create_ingress
+    """
+    if source:
+        metadata, spec = _resolve_rbac_source(
+            source, "Ingress", template, saltenv, template_context, metadata, spec
+        )
+    if metadata is None:
+        metadata = {}
+    if spec is None:
+        spec = {}
+    body = V1Ingress(
+        metadata=__dict_to_object_meta(name, namespace, metadata),
+        spec=V1IngressSpec(**__dict_to_ingress_spec(spec)),
+    )
+    cfg = _setup_conn(**kwargs)
+    try:
+        resp = _networking_api().create_namespaced_ingress(
+            namespace, body, dry_run="All" if dry_run else None
+        )
+        return ApiClient().sanitize_for_serialization(resp)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 409:
+            raise CommandExecutionError(f"Ingress {name} already exists") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def replace_ingress(
+    name,
+    namespace="default",
+    metadata=None,
+    spec=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    **kwargs,
+):
+    """
+    Replace an Ingress.
+
+    .. versionadded:: 2.1.0
+
+    name
+        The name of the object.
+
+    namespace
+        The namespace to operate in. Defaults to ``default``.
+
+    metadata
+        Object metadata dict (labels, annotations,
+        ``ownerReferences``, etc.). The function fills in ``name`` and
+        ``namespace`` itself; supply other fields here.
+
+    spec
+        Object spec dict mapped onto the typed Kubernetes
+        ``V1*Spec`` for this kind. Either supply directly or via
+        ``source``.
+
+    source
+        Salt fileserver path (``salt://...``) to a YAML
+        manifest. Mutually exclusive with ``metadata`` + ``spec``.
+
+    template
+        Template engine used to render ``source``
+        (e.g. ``"jinja"``).
+
+    saltenv
+        Salt environment from which to resolve
+        ``source``. Defaults to the minion's configured ``saltenv``
+        or ``base``.
+
+    template_context
+        Variables made available when rendering
+        ``source``.
+
+    dry_run
+        If ``True`` the API server validates and returns
+        what would be written without persisting it. Useful for
+        state-mode ``test=True`` previews.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.replace_ingress
+    """
+    if source:
+        metadata, spec = _resolve_rbac_source(
+            source, "Ingress", template, saltenv, template_context, metadata, spec
+        )
+    if metadata is None:
+        metadata = {}
+    if spec is None:
+        spec = {}
+    body = V1Ingress(
+        metadata=__dict_to_object_meta(name, namespace, metadata),
+        spec=V1IngressSpec(**__dict_to_ingress_spec(spec)),
+    )
+    cfg = _setup_conn(**kwargs)
+    try:
+        resp = _networking_api().replace_namespaced_ingress(name, namespace, body)
+        return ApiClient().sanitize_for_serialization(resp)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            raise CommandExecutionError(f"Ingress {name} not found") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def patch_ingress(
+    name,
+    namespace="default",
+    patch=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    dry_run=False,
+    **kwargs,
+):
+    """
+    Patch an Ingress.
+
+    .. versionadded:: 2.1.0
+
+    name
+        The name of the object.
+
+    namespace
+        The namespace to operate in. Defaults to ``default``.
+
+    patch
+        Strategic-merge patch dict. Mutually exclusive
+        with ``source``.
+
+    source
+        Salt fileserver path (``salt://...``) to a YAML
+        manifest. Mutually exclusive with ``metadata`` + ``spec``.
+
+    template
+        Template engine used to render ``source``
+        (e.g. ``"jinja"``).
+
+    saltenv
+        Salt environment from which to resolve
+        ``source``. Defaults to the minion's configured ``saltenv``
+        or ``base``.
+
+    template_context
+        Variables made available when rendering
+        ``source``.
+
+    dry_run
+        If ``True`` the API server validates and returns
+        what would be written without persisting it. Useful for
+        state-mode ``test=True`` previews.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.patch_ingress
+    """
+    if source:
+        patch = __read_and_render_yaml_file(source, template, saltenv, template_context)
+        if isinstance(patch, dict) and patch.get("kind") == "Ingress":
+            patch = {k: v for k, v in patch.items() if k not in ("apiVersion", "kind")}
+    if not isinstance(patch, dict):
+        raise CommandExecutionError("Ingress patch must be a dictionary")
+    cfg = _setup_conn(**kwargs)
+    try:
+        resp = _networking_api().patch_namespaced_ingress(
+            name, namespace, patch, dry_run="All" if dry_run else None
+        )
+        return ApiClient().sanitize_for_serialization(resp)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            raise CommandExecutionError(f"Ingress {name} not found") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def delete_ingress(name, namespace="default", wait=False, timeout=60, **kwargs):
+    """
+    Delete an Ingress.
+
+    .. versionadded:: 2.1.0
+
+    name
+        The name of the object.
+
+    namespace
+        The namespace to operate in. Defaults to ``default``.
+
+    wait
+        Block until the resource reaches its kind-specific
+        ready predicate.
+
+    timeout
+        Seconds to wait when ``wait=True`` (default 60).
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.delete_ingress
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        api = _networking_api()
+        resp = api.delete_namespaced_ingress(name, namespace)
+        if wait:
+            if not _wait_for_resource_status(api, "ingress", name, namespace, "deleted", timeout):
+                raise CommandExecutionError(f"Timeout waiting for Ingress {name} to be deleted")
+        return ApiClient().sanitize_for_serialization(resp)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            return None
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+# --- HorizontalPodAutoscaler -----------------------------------------------
+
+
+def horizontal_pod_autoscalers(namespace="default", **kwargs):
+    """
+    Return HPA names in *namespace*.
+
+    .. versionadded:: 2.1.0
+
+    namespace
+        The namespace to operate in. Defaults to ``default``.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.horizontal_pod_autoscalers
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        resp = _autoscaling_api().list_namespaced_horizontal_pod_autoscaler(namespace)
+        return [
+            h["metadata"]["name"]
+            for h in ApiClient().sanitize_for_serialization(resp).get("items", [])
+        ]
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            return []
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def show_horizontal_pod_autoscaler(name, namespace="default", **kwargs):
+    """
+    Return the HPA *name* in *namespace*.
+
+    .. versionadded:: 2.1.0
+
+    name
+        The name of the object.
+
+    namespace
+        The namespace to operate in. Defaults to ``default``.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.show_horizontal_pod_autoscaler
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        return ApiClient().sanitize_for_serialization(
+            _autoscaling_api().read_namespaced_horizontal_pod_autoscaler(name, namespace)
+        )
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            return None
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def create_horizontal_pod_autoscaler(
+    name,
+    namespace="default",
+    metadata=None,
+    spec=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    dry_run=False,
+    **kwargs,
+):
+    """
+    Create an HPA (autoscaling/v2).
+
+    .. versionadded:: 2.1.0
+
+    name
+        The name of the object.
+
+    namespace
+        The namespace to operate in. Defaults to ``default``.
+
+    metadata
+        Object metadata dict (labels, annotations,
+        ``ownerReferences``, etc.). The function fills in ``name`` and
+        ``namespace`` itself; supply other fields here.
+
+    spec
+        Object spec dict mapped onto the typed Kubernetes
+        ``V1*Spec`` for this kind. Either supply directly or via
+        ``source``.
+
+    source
+        Salt fileserver path (``salt://...``) to a YAML
+        manifest. Mutually exclusive with ``metadata`` + ``spec``.
+
+    template
+        Template engine used to render ``source``
+        (e.g. ``"jinja"``).
+
+    saltenv
+        Salt environment from which to resolve
+        ``source``. Defaults to the minion's configured ``saltenv``
+        or ``base``.
+
+    template_context
+        Variables made available when rendering
+        ``source``.
+
+    dry_run
+        If ``True`` the API server validates and returns
+        what would be written without persisting it. Useful for
+        state-mode ``test=True`` previews.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.create_horizontal_pod_autoscaler
+    """
+    if source:
+        metadata, spec = _resolve_rbac_source(
+            source, "HorizontalPodAutoscaler", template, saltenv, template_context, metadata, spec
+        )
+    if metadata is None:
+        metadata = {}
+    if spec is None:
+        spec = {}
+    body = V2HorizontalPodAutoscaler(
+        metadata=__dict_to_object_meta(name, namespace, metadata),
+        spec=V2HorizontalPodAutoscalerSpec(**__dict_to_hpa_spec(spec)),
+    )
+    cfg = _setup_conn(**kwargs)
+    try:
+        resp = _autoscaling_api().create_namespaced_horizontal_pod_autoscaler(
+            namespace, body, dry_run="All" if dry_run else None
+        )
+        return ApiClient().sanitize_for_serialization(resp)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 409:
+            raise CommandExecutionError(f"HPA {name} already exists") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def replace_horizontal_pod_autoscaler(
+    name,
+    namespace="default",
+    metadata=None,
+    spec=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    **kwargs,
+):
+    """
+    Replace an HPA.
+
+    .. versionadded:: 2.1.0
+
+    name
+        The name of the object.
+
+    namespace
+        The namespace to operate in. Defaults to ``default``.
+
+    metadata
+        Object metadata dict (labels, annotations,
+        ``ownerReferences``, etc.). The function fills in ``name`` and
+        ``namespace`` itself; supply other fields here.
+
+    spec
+        Object spec dict mapped onto the typed Kubernetes
+        ``V1*Spec`` for this kind. Either supply directly or via
+        ``source``.
+
+    source
+        Salt fileserver path (``salt://...``) to a YAML
+        manifest. Mutually exclusive with ``metadata`` + ``spec``.
+
+    template
+        Template engine used to render ``source``
+        (e.g. ``"jinja"``).
+
+    saltenv
+        Salt environment from which to resolve
+        ``source``. Defaults to the minion's configured ``saltenv``
+        or ``base``.
+
+    template_context
+        Variables made available when rendering
+        ``source``.
+
+    dry_run
+        If ``True`` the API server validates and returns
+        what would be written without persisting it. Useful for
+        state-mode ``test=True`` previews.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.replace_horizontal_pod_autoscaler
+    """
+    if source:
+        metadata, spec = _resolve_rbac_source(
+            source, "HorizontalPodAutoscaler", template, saltenv, template_context, metadata, spec
+        )
+    if metadata is None:
+        metadata = {}
+    if spec is None:
+        spec = {}
+    body = V2HorizontalPodAutoscaler(
+        metadata=__dict_to_object_meta(name, namespace, metadata),
+        spec=V2HorizontalPodAutoscalerSpec(**__dict_to_hpa_spec(spec)),
+    )
+    cfg = _setup_conn(**kwargs)
+    try:
+        resp = _autoscaling_api().replace_namespaced_horizontal_pod_autoscaler(
+            name, namespace, body
+        )
+        return ApiClient().sanitize_for_serialization(resp)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            raise CommandExecutionError(f"HPA {name} not found") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def patch_horizontal_pod_autoscaler(
+    name,
+    namespace="default",
+    patch=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    dry_run=False,
+    **kwargs,
+):
+    """
+    Patch an HPA.
+
+    .. versionadded:: 2.1.0
+
+    name
+        The name of the object.
+
+    namespace
+        The namespace to operate in. Defaults to ``default``.
+
+    patch
+        Strategic-merge patch dict. Mutually exclusive
+        with ``source``.
+
+    source
+        Salt fileserver path (``salt://...``) to a YAML
+        manifest. Mutually exclusive with ``metadata`` + ``spec``.
+
+    template
+        Template engine used to render ``source``
+        (e.g. ``"jinja"``).
+
+    saltenv
+        Salt environment from which to resolve
+        ``source``. Defaults to the minion's configured ``saltenv``
+        or ``base``.
+
+    template_context
+        Variables made available when rendering
+        ``source``.
+
+    dry_run
+        If ``True`` the API server validates and returns
+        what would be written without persisting it. Useful for
+        state-mode ``test=True`` previews.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.patch_horizontal_pod_autoscaler
+    """
+    if source:
+        patch = __read_and_render_yaml_file(source, template, saltenv, template_context)
+        if isinstance(patch, dict) and patch.get("kind") == "HorizontalPodAutoscaler":
+            patch = {k: v for k, v in patch.items() if k not in ("apiVersion", "kind")}
+    if not isinstance(patch, dict):
+        raise CommandExecutionError("HPA patch must be a dictionary")
+    cfg = _setup_conn(**kwargs)
+    try:
+        resp = _autoscaling_api().patch_namespaced_horizontal_pod_autoscaler(
+            name, namespace, patch, dry_run="All" if dry_run else None
+        )
+        return ApiClient().sanitize_for_serialization(resp)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            raise CommandExecutionError(f"HPA {name} not found") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def delete_horizontal_pod_autoscaler(name, namespace="default", wait=False, timeout=60, **kwargs):
+    """
+    Delete an HPA.
+
+    .. versionadded:: 2.1.0
+
+    name
+        The name of the object.
+
+    namespace
+        The namespace to operate in. Defaults to ``default``.
+
+    wait
+        Block until the resource reaches its kind-specific
+        ready predicate.
+
+    timeout
+        Seconds to wait when ``wait=True`` (default 60).
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.delete_horizontal_pod_autoscaler
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        api = _autoscaling_api()
+        resp = api.delete_namespaced_horizontal_pod_autoscaler(name, namespace)
+        if wait:
+            if not _wait_for_resource_status(
+                api, "horizontal_pod_autoscaler", name, namespace, "deleted", timeout
+            ):
+                raise CommandExecutionError(f"Timeout waiting for HPA {name} to be deleted")
+        return ApiClient().sanitize_for_serialization(resp)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            return None
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+# --- PodDisruptionBudget ---------------------------------------------------
+
+
+def pod_disruption_budgets(namespace="default", **kwargs):
+    """
+    Return PDB names in *namespace*.
+
+    .. versionadded:: 2.1.0
+
+    namespace
+        The namespace to operate in. Defaults to ``default``.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.pod_disruption_budgets
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        resp = _policy_api().list_namespaced_pod_disruption_budget(namespace)
+        return [
+            p["metadata"]["name"]
+            for p in ApiClient().sanitize_for_serialization(resp).get("items", [])
+        ]
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            return []
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def show_pod_disruption_budget(name, namespace="default", **kwargs):
+    """
+    Return the PDB *name* in *namespace*.
+
+    .. versionadded:: 2.1.0
+
+    name
+        The name of the object.
+
+    namespace
+        The namespace to operate in. Defaults to ``default``.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.show_pod_disruption_budget
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        return ApiClient().sanitize_for_serialization(
+            _policy_api().read_namespaced_pod_disruption_budget(name, namespace)
+        )
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            return None
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def create_pod_disruption_budget(
+    name,
+    namespace="default",
+    metadata=None,
+    spec=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    dry_run=False,
+    **kwargs,
+):
+    """
+    Create a PDB.
+
+    .. versionadded:: 2.1.0
+
+    name
+        The name of the object.
+
+    namespace
+        The namespace to operate in. Defaults to ``default``.
+
+    metadata
+        Object metadata dict (labels, annotations,
+        ``ownerReferences``, etc.). The function fills in ``name`` and
+        ``namespace`` itself; supply other fields here.
+
+    spec
+        Object spec dict mapped onto the typed Kubernetes
+        ``V1*Spec`` for this kind. Either supply directly or via
+        ``source``.
+
+    source
+        Salt fileserver path (``salt://...``) to a YAML
+        manifest. Mutually exclusive with ``metadata`` + ``spec``.
+
+    template
+        Template engine used to render ``source``
+        (e.g. ``"jinja"``).
+
+    saltenv
+        Salt environment from which to resolve
+        ``source``. Defaults to the minion's configured ``saltenv``
+        or ``base``.
+
+    template_context
+        Variables made available when rendering
+        ``source``.
+
+    dry_run
+        If ``True`` the API server validates and returns
+        what would be written without persisting it. Useful for
+        state-mode ``test=True`` previews.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.create_pod_disruption_budget
+    """
+    if source:
+        metadata, spec = _resolve_rbac_source(
+            source, "PodDisruptionBudget", template, saltenv, template_context, metadata, spec
+        )
+    if metadata is None:
+        metadata = {}
+    if spec is None:
+        spec = {}
+    body = V1PodDisruptionBudget(
+        metadata=__dict_to_object_meta(name, namespace, metadata),
+        spec=V1PodDisruptionBudgetSpec(**__dict_to_pdb_spec(spec)),
+    )
+    cfg = _setup_conn(**kwargs)
+    try:
+        resp = _policy_api().create_namespaced_pod_disruption_budget(
+            namespace, body, dry_run="All" if dry_run else None
+        )
+        return ApiClient().sanitize_for_serialization(resp)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 409:
+            raise CommandExecutionError(f"PDB {name} already exists") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def replace_pod_disruption_budget(
+    name,
+    namespace="default",
+    metadata=None,
+    spec=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    **kwargs,
+):
+    """
+    Replace a PDB.
+
+    .. versionadded:: 2.1.0
+
+    .. note::
+        PDB ``spec.selector`` is immutable. Replacing with a different
+        selector will be rejected by the API server.
+
+    name
+        The name of the object.
+
+    namespace
+        The namespace to operate in. Defaults to ``default``.
+
+    metadata
+        Object metadata dict (labels, annotations,
+        ``ownerReferences``, etc.). The function fills in ``name`` and
+        ``namespace`` itself; supply other fields here.
+
+    spec
+        Object spec dict mapped onto the typed Kubernetes
+        ``V1*Spec`` for this kind. Either supply directly or via
+        ``source``.
+
+    source
+        Salt fileserver path (``salt://...``) to a YAML
+        manifest. Mutually exclusive with ``metadata`` + ``spec``.
+
+    template
+        Template engine used to render ``source``
+        (e.g. ``"jinja"``).
+
+    saltenv
+        Salt environment from which to resolve
+        ``source``. Defaults to the minion's configured ``saltenv``
+        or ``base``.
+
+    template_context
+        Variables made available when rendering
+        ``source``.
+
+    dry_run
+        If ``True`` the API server validates and returns
+        what would be written without persisting it. Useful for
+        state-mode ``test=True`` previews.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.replace_pod_disruption_budget
+    """
+    if source:
+        metadata, spec = _resolve_rbac_source(
+            source, "PodDisruptionBudget", template, saltenv, template_context, metadata, spec
+        )
+    if metadata is None:
+        metadata = {}
+    if spec is None:
+        spec = {}
+    body = V1PodDisruptionBudget(
+        metadata=__dict_to_object_meta(name, namespace, metadata),
+        spec=V1PodDisruptionBudgetSpec(**__dict_to_pdb_spec(spec)),
+    )
+    cfg = _setup_conn(**kwargs)
+    try:
+        resp = _policy_api().replace_namespaced_pod_disruption_budget(name, namespace, body)
+        return ApiClient().sanitize_for_serialization(resp)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            raise CommandExecutionError(f"PDB {name} not found") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def patch_pod_disruption_budget(
+    name,
+    namespace="default",
+    patch=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    dry_run=False,
+    **kwargs,
+):
+    """
+    Patch a PDB.
+
+    .. versionadded:: 2.1.0
+
+    name
+        The name of the object.
+
+    namespace
+        The namespace to operate in. Defaults to ``default``.
+
+    patch
+        Strategic-merge patch dict. Mutually exclusive
+        with ``source``.
+
+    source
+        Salt fileserver path (``salt://...``) to a YAML
+        manifest. Mutually exclusive with ``metadata`` + ``spec``.
+
+    template
+        Template engine used to render ``source``
+        (e.g. ``"jinja"``).
+
+    saltenv
+        Salt environment from which to resolve
+        ``source``. Defaults to the minion's configured ``saltenv``
+        or ``base``.
+
+    template_context
+        Variables made available when rendering
+        ``source``.
+
+    dry_run
+        If ``True`` the API server validates and returns
+        what would be written without persisting it. Useful for
+        state-mode ``test=True`` previews.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.patch_pod_disruption_budget
+    """
+    if source:
+        patch = __read_and_render_yaml_file(source, template, saltenv, template_context)
+        if isinstance(patch, dict) and patch.get("kind") == "PodDisruptionBudget":
+            patch = {k: v for k, v in patch.items() if k not in ("apiVersion", "kind")}
+    if not isinstance(patch, dict):
+        raise CommandExecutionError("PDB patch must be a dictionary")
+    cfg = _setup_conn(**kwargs)
+    try:
+        resp = _policy_api().patch_namespaced_pod_disruption_budget(
+            name, namespace, patch, dry_run="All" if dry_run else None
+        )
+        return ApiClient().sanitize_for_serialization(resp)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            raise CommandExecutionError(f"PDB {name} not found") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def delete_pod_disruption_budget(name, namespace="default", wait=False, timeout=60, **kwargs):
+    """
+    Delete a PDB.
+
+    .. versionadded:: 2.1.0
+
+    name
+        The name of the object.
+
+    namespace
+        The namespace to operate in. Defaults to ``default``.
+
+    wait
+        Block until the resource reaches its kind-specific
+        ready predicate.
+
+    timeout
+        Seconds to wait when ``wait=True`` (default 60).
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.delete_pod_disruption_budget
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        api = _policy_api()
+        resp = api.delete_namespaced_pod_disruption_budget(name, namespace)
+        if wait:
+            if not _wait_for_resource_status(
+                api, "pod_disruption_budget", name, namespace, "deleted", timeout
+            ):
+                raise CommandExecutionError(f"Timeout waiting for PDB {name} to be deleted")
+        return ApiClient().sanitize_for_serialization(resp)
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
             return None
@@ -7654,6 +10537,105 @@ def __dict_to_service_account_spec(spec):
             raise CommandExecutionError("secrets must be a list of object reference dicts")
         out["secrets"] = [kubernetes.client.V1ObjectReference(**s) for s in secrets]
     return out
+
+
+# ---------------------------------------------------------------------------
+# Batch (Job, CronJob) spec builders.
+#
+# Both kinds wrap a Pod template. We accept the template as a plain dict
+# (which __dict_to_pod_spec already validates) and let the caller supply
+# either snake_case or camelCase top-level keys for the Job/CronJob spec
+# fields themselves.
+# ---------------------------------------------------------------------------
+
+
+_JOB_FIELD_MAP = {
+    "activeDeadlineSeconds": "active_deadline_seconds",
+    "backoffLimit": "backoff_limit",
+    "completionMode": "completion_mode",
+    "ttlSecondsAfterFinished": "ttl_seconds_after_finished",
+    "podFailurePolicy": "pod_failure_policy",
+    "manualSelector": "manual_selector",
+}
+
+
+_CRONJOB_FIELD_MAP = {
+    "concurrencyPolicy": "concurrency_policy",
+    "failedJobsHistoryLimit": "failed_jobs_history_limit",
+    "jobTemplate": "job_template",
+    "startingDeadlineSeconds": "starting_deadline_seconds",
+    "successfulJobsHistoryLimit": "successful_jobs_history_limit",
+    "timeZone": "time_zone",
+}
+
+
+_VALID_CRONJOB_CONCURRENCY = {"Allow", "Forbid", "Replace"}
+
+
+def __dict_to_job_spec(spec):
+    """Validate and build kwargs for V1JobSpec from a dict."""
+    if not isinstance(spec, dict):
+        raise CommandExecutionError(f"Job spec must be a dictionary, not {type(spec).__name__}")
+    normalised = {_JOB_FIELD_MAP.get(k, k): v for k, v in spec.items()}
+    template = normalised.get("template")
+    if not isinstance(template, dict):
+        raise CommandExecutionError("Job spec must include 'template' (a pod-template dict)")
+    pod_meta = template.get("metadata", {}) or {}
+    pod_spec_dict = template.get("spec")
+    if not isinstance(pod_spec_dict, dict):
+        raise CommandExecutionError("Job template must include 'spec'")
+    pod_spec_dict = pod_spec_dict.copy()
+    # Job pods must have a restartPolicy of OnFailure or Never; default
+    # to Never if the user didn't specify, matching kubectl's behaviour
+    # for ``kubectl create job``.
+    pod_spec_dict.setdefault("restart_policy", pod_spec_dict.pop("restartPolicy", "Never"))
+    if pod_spec_dict["restart_policy"] not in ("OnFailure", "Never"):
+        raise CommandExecutionError("Job pod template restartPolicy must be 'OnFailure' or 'Never'")
+    # __dict_to_pod_spec returns a V1PodSpec instance, not a dict.
+    pod_spec = __dict_to_pod_spec(pod_spec_dict)
+    normalised["template"] = kubernetes.client.V1PodTemplateSpec(
+        metadata=kubernetes.client.V1ObjectMeta(**pod_meta) if pod_meta else None,
+        spec=pod_spec,
+    )
+    try:
+        V1JobSpec(**normalised)
+    except (TypeError, ValueError) as exc:
+        raise CommandExecutionError(f"Invalid job spec: {exc}") from exc
+    return normalised
+
+
+def __dict_to_cron_job_spec(spec):
+    """Validate and build kwargs for V1CronJobSpec from a dict."""
+    if not isinstance(spec, dict):
+        raise CommandExecutionError(f"CronJob spec must be a dictionary, not {type(spec).__name__}")
+    normalised = {_CRONJOB_FIELD_MAP.get(k, k): v for k, v in spec.items()}
+    if not normalised.get("schedule"):
+        raise CommandExecutionError("CronJob spec must include 'schedule'")
+    cp = normalised.get("concurrency_policy")
+    if cp is not None and cp not in _VALID_CRONJOB_CONCURRENCY:
+        raise CommandExecutionError(
+            f"Invalid concurrency_policy '{cp}'. Must be one of: "
+            + ", ".join(sorted(_VALID_CRONJOB_CONCURRENCY))
+        )
+    job_template_dict = normalised.get("job_template")
+    if not isinstance(job_template_dict, dict):
+        raise CommandExecutionError(
+            "CronJob spec must include 'job_template' (a {metadata, spec} dict)"
+        )
+    job_meta = job_template_dict.get("metadata", {}) or {}
+    job_spec_dict = job_template_dict.get("spec")
+    if not isinstance(job_spec_dict, dict):
+        raise CommandExecutionError("CronJob job_template must include 'spec' (a job-spec dict)")
+    inner_job_spec_kwargs = __dict_to_job_spec(job_spec_dict)
+    normalised["job_template"] = V1JobTemplateSpec(
+        metadata=kubernetes.client.V1ObjectMeta(**job_meta) if job_meta else None,
+        spec=V1JobSpec(**inner_job_spec_kwargs),
+    )
+    try:
+        V1CronJobSpec(**normalised)
+    except (TypeError, ValueError) as exc:
+        raise CommandExecutionError(f"Invalid cronjob spec: {exc}") from exc
+    return normalised
 
 
 def __enforce_only_strings_dict(dictionary):

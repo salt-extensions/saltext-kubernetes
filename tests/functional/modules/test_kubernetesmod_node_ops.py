@@ -15,6 +15,7 @@ import time
 
 import pytest
 from salt.exceptions import CommandExecutionError
+from saltfactories.utils import random_string
 
 pytestmark = [pytest.mark.skip_unless_on_linux(reason="kind cluster fixture requires Linux")]
 
@@ -108,6 +109,58 @@ def test_taint_invalid_effect_raises(kubernetes_exe, worker_node_name):
 
 
 # ---------------------------------------------------------------------------
+# annotations
+# ---------------------------------------------------------------------------
+
+
+def test_node_annotation_add_and_remove(kubernetes_exe, worker_node_name):
+    """Adding then removing a node annotation round-trips cleanly."""
+    key = "saltext-test/owner"
+    try:
+        # Snapshot original annotation set so we don't disturb anything else.
+        before = kubernetes_exe.node_annotations(name=worker_node_name)
+        assert key not in before
+
+        kubernetes_exe.node_add_annotation(
+            node_name=worker_node_name,
+            annotation_name=key,
+            annotation_value="platform",
+        )
+        after_add = kubernetes_exe.node_annotations(name=worker_node_name)
+        assert after_add.get(key) == "platform"
+    finally:
+        kubernetes_exe.node_remove_annotation(node_name=worker_node_name, annotation_name=key)
+
+    final = kubernetes_exe.node_annotations(name=worker_node_name)
+    assert key not in final
+
+
+def test_node_annotation_update_replaces_value(kubernetes_exe, worker_node_name):
+    """Re-adding with a different value updates instead of duplicating."""
+    key = "saltext-test/replace"
+    try:
+        kubernetes_exe.node_add_annotation(
+            node_name=worker_node_name, annotation_name=key, annotation_value="v1"
+        )
+        kubernetes_exe.node_add_annotation(
+            node_name=worker_node_name, annotation_name=key, annotation_value="v2"
+        )
+        live = kubernetes_exe.node_annotations(name=worker_node_name)
+        assert live.get(key) == "v2"
+    finally:
+        kubernetes_exe.node_remove_annotation(node_name=worker_node_name, annotation_name=key)
+
+
+def test_node_add_annotation_missing_node_raises(kubernetes_exe):
+    with pytest.raises(CommandExecutionError, match="not found"):
+        kubernetes_exe.node_add_annotation(
+            node_name="does-not-exist-1234",
+            annotation_name="k",
+            annotation_value="v",
+        )
+
+
+# ---------------------------------------------------------------------------
 # drain
 # ---------------------------------------------------------------------------
 
@@ -118,7 +171,6 @@ def test_drain_evicts_managed_pod_skips_daemonsets(kubernetes_exe, worker_node_n
     the pod is reported in ``evicted`` and the kind/kube-proxy DaemonSet
     pods are reported in ``skipped``. Always uncordon the node afterwards.
     """
-    from saltfactories.utils import random_string  # pylint: disable=import-outside-toplevel
 
     name = random_string("drain-test-", uppercase=False)
     deployment_spec = {

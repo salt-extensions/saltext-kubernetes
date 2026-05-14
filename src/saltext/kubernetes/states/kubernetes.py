@@ -3246,3 +3246,431 @@ def manifest_absent(
         ret["comment"] = str(err)
         ret["changes"] = {}
     return ret
+
+
+# ---------------------------------------------------------------------------
+# Batch states (job, cron_job)
+#
+# Reuses the RBAC present/absent helpers — same pattern: show, create-if-
+# absent, patch otherwise; delete on absent. Both kinds are namespaced.
+#
+# .. versionadded:: 2.1.0
+# ---------------------------------------------------------------------------
+
+
+def job_absent(name, namespace="default", wait=False, timeout=60, **kwargs):
+    """Ensure the named Job is absent. .. versionadded:: 2.1.0"""
+    return _rbac_absent_impl(name, "job", "Job", True, namespace, wait, timeout, kwargs)
+
+
+def job_present(
+    name,
+    namespace="default",
+    metadata=None,
+    spec=None,
+    source="",
+    template="",
+    template_context=None,
+    **kwargs,
+):
+    """
+    Ensure the named Job exists with the given pod template.
+
+    .. versionadded:: 2.1.0
+
+    .. note::
+        Job ``selector`` and most of ``spec.template`` are immutable
+        after creation; if your manifest changes them, the patch will
+        be rejected. For mutable changes (labels, ttlSecondsAfterFinished),
+        the state behaves normally.
+
+    .. code-block:: yaml
+
+        my-job:
+          kubernetes.job_present:
+            - namespace: default
+            - spec:
+                template:
+                  spec:
+                    restartPolicy: Never
+                    containers:
+                      - name: hello
+                        image: busybox
+                        command: ["echo", "hi"]
+    """
+    return _rbac_present_impl(
+        name,
+        "job",
+        "Job",
+        True,
+        namespace,
+        metadata,
+        spec,
+        source,
+        template,
+        template_context,
+        kwargs,
+    )
+
+
+def cron_job_absent(name, namespace="default", wait=False, timeout=60, **kwargs):
+    """Ensure the named CronJob is absent. .. versionadded:: 2.1.0"""
+    return _rbac_absent_impl(name, "cron_job", "CronJob", True, namespace, wait, timeout, kwargs)
+
+
+def cron_job_present(
+    name,
+    namespace="default",
+    metadata=None,
+    spec=None,
+    source="",
+    template="",
+    template_context=None,
+    **kwargs,
+):
+    """
+    Ensure the named CronJob exists.
+
+    .. versionadded:: 2.1.0
+
+    .. code-block:: yaml
+
+        my-cron:
+          kubernetes.cron_job_present:
+            - namespace: default
+            - spec:
+                schedule: "*/5 * * * *"
+                concurrencyPolicy: Forbid
+                jobTemplate:
+                  spec:
+                    template:
+                      spec:
+                        restartPolicy: OnFailure
+                        containers:
+                          - name: tick
+                            image: busybox
+                            command: ["echo", "tick"]
+    """
+    return _rbac_present_impl(
+        name,
+        "cron_job",
+        "CronJob",
+        True,
+        namespace,
+        metadata,
+        spec,
+        source,
+        template,
+        template_context,
+        kwargs,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Networking / Autoscaling / Policy states.
+# .. versionadded:: 2.1.0
+# ---------------------------------------------------------------------------
+
+
+def ingress_absent(name, namespace="default", wait=False, timeout=60, **kwargs):
+    """Ensure the named Ingress is absent. .. versionadded:: 2.1.0"""
+    return _rbac_absent_impl(name, "ingress", "Ingress", True, namespace, wait, timeout, kwargs)
+
+
+def ingress_present(
+    name,
+    namespace="default",
+    metadata=None,
+    spec=None,
+    source="",
+    template="",
+    template_context=None,
+    **kwargs,
+):
+    """Ensure the named Ingress is present.
+
+    .. versionadded:: 2.1.0
+
+    .. code-block:: yaml
+
+        my-ingress:
+          kubernetes.ingress_present:
+            - namespace: default
+            - spec:
+                ingressClassName: nginx
+                rules:
+                  - host: example.com
+                    http:
+                      paths:
+                        - path: /
+                          pathType: Prefix
+                          backend:
+                            service:
+                              name: my-svc
+                              port:
+                                number: 80
+    """
+    return _rbac_present_impl(
+        name,
+        "ingress",
+        "Ingress",
+        True,
+        namespace,
+        metadata,
+        spec,
+        source,
+        template,
+        template_context,
+        kwargs,
+    )
+
+
+def horizontal_pod_autoscaler_absent(name, namespace="default", wait=False, timeout=60, **kwargs):
+    """Ensure the named HPA is absent. .. versionadded:: 2.1.0"""
+    return _rbac_absent_impl(
+        name,
+        "horizontal_pod_autoscaler",
+        "HorizontalPodAutoscaler",
+        True,
+        namespace,
+        wait,
+        timeout,
+        kwargs,
+    )
+
+
+def horizontal_pod_autoscaler_present(
+    name,
+    namespace="default",
+    metadata=None,
+    spec=None,
+    source="",
+    template="",
+    template_context=None,
+    **kwargs,
+):
+    """Ensure the named HPA is present.
+
+    .. versionadded:: 2.1.0
+
+    .. code-block:: yaml
+
+        my-hpa:
+          kubernetes.horizontal_pod_autoscaler_present:
+            - namespace: default
+            - spec:
+                scaleTargetRef:
+                  apiVersion: apps/v1
+                  kind: Deployment
+                  name: my-app
+                minReplicas: 2
+                maxReplicas: 10
+                metrics:
+                  - type: Resource
+                    resource:
+                      name: cpu
+                      target:
+                        type: Utilization
+                        averageUtilization: 70
+    """
+    return _rbac_present_impl(
+        name,
+        "horizontal_pod_autoscaler",
+        "HorizontalPodAutoscaler",
+        True,
+        namespace,
+        metadata,
+        spec,
+        source,
+        template,
+        template_context,
+        kwargs,
+    )
+
+
+def pod_disruption_budget_absent(name, namespace="default", wait=False, timeout=60, **kwargs):
+    """Ensure the named PDB is absent. .. versionadded:: 2.1.0"""
+    return _rbac_absent_impl(
+        name,
+        "pod_disruption_budget",
+        "PodDisruptionBudget",
+        True,
+        namespace,
+        wait,
+        timeout,
+        kwargs,
+    )
+
+
+def pod_disruption_budget_present(
+    name,
+    namespace="default",
+    metadata=None,
+    spec=None,
+    source="",
+    template="",
+    template_context=None,
+    **kwargs,
+):
+    """Ensure the named PDB is present.
+
+    .. versionadded:: 2.1.0
+
+    .. note::
+        PDB ``spec.selector`` is immutable. Changing it will be rejected
+        by the API; declare the PDB absent first if you need a different
+        selector.
+
+    .. code-block:: yaml
+
+        my-pdb:
+          kubernetes.pod_disruption_budget_present:
+            - namespace: default
+            - spec:
+                minAvailable: 2
+                selector:
+                  match_labels:
+                    app: my-app
+    """
+    return _rbac_present_impl(
+        name,
+        "pod_disruption_budget",
+        "PodDisruptionBudget",
+        True,
+        namespace,
+        metadata,
+        spec,
+        source,
+        template,
+        template_context,
+        kwargs,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Persistent volume states (PV, PVC).
+# .. versionadded:: 2.1.0
+# ---------------------------------------------------------------------------
+
+
+def persistent_volume_absent(name, wait=False, timeout=60, **kwargs):
+    """Ensure the named PV is absent. .. versionadded:: 2.1.0"""
+    return _rbac_absent_impl(
+        name,
+        "persistent_volume",
+        "PersistentVolume",
+        False,
+        None,
+        wait,
+        timeout,
+        kwargs,
+    )
+
+
+def persistent_volume_present(
+    name,
+    metadata=None,
+    spec=None,
+    source="",
+    template="",
+    template_context=None,
+    **kwargs,
+):
+    """
+    Ensure the named PV is present.
+
+    .. versionadded:: 2.1.0
+
+    .. note::
+        Most PV fields are immutable after binding (volume source,
+        capacity, accessModes). For an unmanaged-volume migration,
+        declare the PV absent first.
+
+    .. code-block:: yaml
+
+        my-pv:
+          kubernetes.persistent_volume_present:
+            - spec:
+                capacity:
+                  storage: 10Gi
+                accessModes:
+                  - ReadWriteOnce
+                hostPath:
+                  path: /var/data/my-pv
+    """
+    return _rbac_present_impl(
+        name,
+        "persistent_volume",
+        "PersistentVolume",
+        False,
+        None,
+        metadata,
+        spec,
+        source,
+        template,
+        template_context,
+        kwargs,
+    )
+
+
+def persistent_volume_claim_absent(name, namespace="default", wait=False, timeout=60, **kwargs):
+    """Ensure the named PVC is absent. .. versionadded:: 2.1.0"""
+    return _rbac_absent_impl(
+        name,
+        "persistent_volume_claim",
+        "PersistentVolumeClaim",
+        True,
+        namespace,
+        wait,
+        timeout,
+        kwargs,
+    )
+
+
+def persistent_volume_claim_present(
+    name,
+    namespace="default",
+    metadata=None,
+    spec=None,
+    source="",
+    template="",
+    template_context=None,
+    **kwargs,
+):
+    """
+    Ensure the named PVC is present.
+
+    .. versionadded:: 2.1.0
+
+    .. note::
+        After binding, ``accessModes``, ``selector``, ``volumeName``,
+        and ``storageClassName`` are immutable. ``resources.requests
+        .storage`` can be expanded (only grown) on storage classes
+        with ``allowVolumeExpansion: true``.
+
+    .. code-block:: yaml
+
+        my-pvc:
+          kubernetes.persistent_volume_claim_present:
+            - namespace: default
+            - spec:
+                accessModes:
+                  - ReadWriteOnce
+                resources:
+                  requests:
+                    storage: 1Gi
+                storageClassName: standard
+    """
+    return _rbac_present_impl(
+        name,
+        "persistent_volume_claim",
+        "PersistentVolumeClaim",
+        True,
+        namespace,
+        metadata,
+        spec,
+        source,
+        template,
+        template_context,
+        kwargs,
+    )
