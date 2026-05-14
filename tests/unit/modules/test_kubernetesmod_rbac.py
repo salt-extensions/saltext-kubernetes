@@ -186,6 +186,7 @@ class _FakeApiException(Exception):
 
 def test_immutable_role_ref_recognised_in_real_k8s_message():
     """Match the actual phrasing observed from K8s 1.28 / 1.35 API servers."""
+
     exc = ApiException(status=422, reason="Invalid")
     exc.body = (
         '{"kind":"Status","message":"RoleBinding.rbac.authorization.k8s.io '
@@ -197,12 +198,14 @@ def test_immutable_role_ref_recognised_in_real_k8s_message():
 
 def test_immutable_role_ref_recognised_in_immutable_phrasing():
     """Older K8s versions used 'is immutable' / 'cannot be modified'."""
+
     exc = ApiException(status=422, reason="Invalid")
     exc.body = '{"message":"RoleBinding ... roleRef: Invalid value: cannot be modified"}'
     assert kubernetesmod._is_immutable_role_ref_error(exc) is True
 
 
 def test_immutable_role_ref_not_a_match_for_other_errors():
+
     exc = ApiException(status=403, reason="Forbidden")
     exc.body = "forbidden: user does not have permission"
     assert kubernetesmod._is_immutable_role_ref_error(exc) is False

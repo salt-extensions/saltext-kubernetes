@@ -1,7 +1,14 @@
 """
-Salt module to manage Kubernetes cluster
+Salt module to manage Kubernetes cluster (legacy, deprecated).
 
 .. versionadded:: 2016.3.0
+
+.. deprecated:: 2.1.0
+    This module is the original Kubernetes module that predates the official
+    ``kubernetes`` Python client. It is superseded by
+    :py:mod:`saltext.kubernetes.modules.kubernetesmod` and is scheduled for
+    removal in saltext-kubernetes 3.0.0. New code should use
+    ``kubernetesmod`` (loader name ``kubernetes``) instead.
 
 Roadmap:
 
@@ -18,6 +25,7 @@ import logging
 import os
 import re
 import urllib.parse
+import warnings
 
 import salt.utils.files
 import salt.utils.json
@@ -27,6 +35,14 @@ __virtualname__ = "k8s"
 
 # Setup the logger
 log = logging.getLogger(__name__)
+
+warnings.warn(
+    "saltext.kubernetes.modules.k8s is deprecated and will be removed in "
+    "saltext-kubernetes 3.0.0. Use saltext.kubernetes.modules.kubernetesmod "
+    "(loader name 'kubernetes') instead.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 
 def __virtual__():

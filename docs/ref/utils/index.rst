@@ -12,3 +12,4 @@ _________
     _connection
     _dynamic
     _kinds
+    _kuberesource

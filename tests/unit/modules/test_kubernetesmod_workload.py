@@ -8,6 +8,7 @@ without touching the kubernetes API. Functional tests against a real
 cluster live alongside the other functional tests.
 """
 
+import kubernetes.client
 import pytest
 from salt.exceptions import CommandExecutionError
 
@@ -91,7 +92,6 @@ def test_restart_rejects_unknown_kind():
 @pytest.mark.parametrize("kind_name", sorted(kubernetesmod._SCALABLE_KINDS))
 def test_scalable_kinds_resolve_real_api_methods(kind_name):
     """Every entry in _SCALABLE_KINDS points at real kubernetes-client methods."""
-    import kubernetes.client  # pylint: disable=import-outside-toplevel
 
     api_attr, patch_scale, (read, patch) = kubernetesmod._SCALABLE_KINDS[kind_name]
     api_class = getattr(kubernetes.client, api_attr)
@@ -101,7 +101,6 @@ def test_scalable_kinds_resolve_real_api_methods(kind_name):
 
 @pytest.mark.parametrize("kind_name", sorted(kubernetesmod._RESTARTABLE_ONLY_KINDS))
 def test_restartable_only_kinds_resolve_real_api_methods(kind_name):
-    import kubernetes.client  # pylint: disable=import-outside-toplevel
 
     api_attr, (read, patch) = kubernetesmod._RESTARTABLE_ONLY_KINDS[kind_name]
     api_class = getattr(kubernetes.client, api_attr)

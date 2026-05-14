@@ -39,6 +39,17 @@ EXPECTED_KINDS = {
     "cluster_role",
     "cluster_role_binding",
     "service_account",
+    "job",
+    "cron_job",
+    "ingress",
+    "horizontal_pod_autoscaler",
+    "pod_disruption_budget",
+    "persistent_volume",
+    "persistent_volume_claim",
+    "network_policy",
+    "resource_quota",
+    "limit_range",
+    "priority_class",
 }
 
 
@@ -62,6 +73,7 @@ def test_api_methods_exist(kind_name):
 
 def test_get_kind_unknown_raises_command_execution_error():
     """Unknown kinds raise the legacy CommandExecutionError shape."""
+
     with pytest.raises(CommandExecutionError, match="Unsupported resource type"):
         _kinds.get_kind("frobozz")
 
