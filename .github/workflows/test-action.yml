@@ -13,7 +13,7 @@ jobs:
     # land in the 28-31 minute range; 3006 was hitting 29:58 right at the
     # cap. Submit the same bump upstream to salt-extension-copier so the
     # next ``copier update`` doesn't revert it.
-    timeout-minutes: 45
+    timeout-minutes: 60
 
     strategy:
       fail-fast: false
