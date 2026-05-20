@@ -3,13 +3,17 @@ Kubernetes resource type for Salt's resources subsystem.
 
 .. versionadded:: 2.1.0
 
-This module is the Kubernetes-side companion to the in-flight Salt
-``resources`` feature (still on a feature branch as of this writing;
-the upstream PR has not yet been opened). When that
-branch lands, every minion declaring a ``kubernetes`` resources block
-in its pillar will publish each cluster's pods, deployments, nodes,
-etc. up to the master's resource registry, where they become
-first-class targets:
+.. note::
+    Requires **Salt 3008.0 or newer** — the resources subsystem
+    (``salt.utils.resources`` / ``salt.utils.resource_registry``) is
+    only present from 3008. On 3006 or 3007 this module's
+    ``__virtual__`` returns ``False`` and the loader skips it.
+
+This module is the Kubernetes-side companion to Salt's resources
+subsystem. Every minion declaring a ``kubernetes`` resources block in
+its pillar publishes each cluster's pods, deployments, nodes, etc. up
+to the master's resource registry, where they become first-class
+targets:
 
 .. code-block:: bash
 
@@ -20,22 +24,23 @@ first-class targets:
     # Drain a node by bare resource ID:
     salt 'node:gke-prod-pool-1-abc' kubernetes.drain
 
-The plugin is intentionally **dormant** on stock Salt: its
-``__virtual__`` returns ``False`` unless ``salt.loader.resource`` is a
-callable, which is only true on a Salt build that includes the
-resources subsystem. On stock Salt the module is a no-op — present
-on the loader path, but never loaded.
+The plugin is intentionally **dormant on Salt versions earlier than
+3008**: its ``__virtual__`` returns ``False`` unless
+``salt.utils.resources`` is importable, which is only true on Salt
+3008+. On older Salt the module is a no-op — present on the loader
+path, but never loaded.
 
-Pillar shape:
+Pillar shape — discovery mode (filters apply, API enumerates):
 
 .. code-block:: yaml
 
     resources:
       kubernetes:
-        # By default discovers from whatever ``_setup_conn`` resolves —
-        # the same auth path the typed kubernetes execution module uses.
-        # Multi-cluster discovery is a future enhancement; for the v1
-        # plug-in we discover from the active default Configuration.
+        # discovery mode is selected when ``resources:`` is absent (or
+        # ``mode: discover`` is set explicitly). The plug-in connects via
+        # ``_setup_conn`` (same auth path the typed kubernetes execution
+        # module uses) and lists every matching API object.
+        mode: discover                          # optional; the default
         kinds:
           - pod
           - deployment
@@ -43,6 +48,37 @@ Pillar shape:
           - namespace
         namespaces: ["default", "production"]   # optional scope
         label_selector: "managed-by=salt"       # optional filter
+
+Pillar shape — pillar-only mode (no API call):
+
+.. code-block:: yaml
+
+    resources:
+      kubernetes:
+        # When ``resources:`` is present the plug-in returns exactly the
+        # objects listed there and skips API discovery. Useful for air-
+        # gapped clusters, strict RBAC, bootstrap (declare resources
+        # before they exist), or to avoid paying the discovery cost on
+        # busy clusters. ``kinds:`` / ``namespaces:`` / ``label_selector:``
+        # are ignored in this mode.
+        mode: pillar                            # optional; inferred from ``resources:``
+        resources:
+          - {kind: deployment, namespace: prod, name: web}
+          - {kind: deployment, namespace: prod, name: api}
+          - {kind: namespace, name: prod}
+          - {kind: node, name: gke-prod-pool-1-abc}
+
+Pillar shape — merge mode (declared + discovered, union):
+
+.. code-block:: yaml
+
+    resources:
+      kubernetes:
+        mode: merge
+        resources:
+          - {kind: namespace, name: bootstrap-only}
+        kinds: [deployment, namespace]
+        namespaces: [prod]
 
 When the resources subsystem is not loaded, importing this module is
 a no-op — the public functions are defined but ``__virtual__``
@@ -79,22 +115,48 @@ __virtualname__ = "kubernetes"
 
 
 # Default kinds to discover when the user gives no explicit list.
-# Conservative — workload controllers and cluster-scoped infrastructure,
-# NOT individual Pods (too many, too short-lived) by default. Users opt
-# in to Pod discovery via pillar ``kinds: [..., pod]``.
-_DEFAULT_KINDS = ("deployment", "stateful_set", "daemon_set", "node", "namespace")
+# Every name must be a valid key in ``_kinds._KIND_REGISTRY`` — the
+# resource subsystem skips unknown kinds with a warning, so a typo here
+# silently disables discovery for that kind. Conservative — workload
+# controllers and cluster-scoped infrastructure, NOT individual Pods
+# (too many, too short-lived) by default. Users opt in to Pods (or
+# anything else not listed) via pillar ``kinds: [..., pod]``.
+_DEFAULT_KINDS = (
+    "deployment",
+    "statefulset",
+    "daemonset",
+    "replicaset",
+    "node",
+    "namespace",
+    "service",
+    "configmap",
+    "secret",
+    "persistent_volume",
+    "persistent_volume_claim",
+    "ingress",
+    "network_policy",
+    "resource_quota",
+    "priority_class",
+    "custom_resource_definition",
+)
+
+
+# Recognised values for the pillar ``mode:`` key. Inferred when the
+# caller omits it: ``pillar`` if ``resources:`` is present, otherwise
+# ``discover``.
+_VALID_MODES = ("discover", "pillar", "merge")
 
 
 def __virtual__():
     """
     Available only when Salt's resources subsystem is loadable.
 
-    On stock Salt the loader has no ``salt.loader.resource`` (or the
-    ``salt.utils.resources`` helper); on a build that ships the
-    resources branch, both are present. We probe ``salt.utils.resources``
-    rather than ``salt.loader.resource`` because the loader function is
-    a Python callable that may be present in unrelated forks; the
-    utils module is more uniquely diagnostic.
+    The resources subsystem ships in **Salt 3008.0** and newer; on
+    earlier versions ``salt.utils.resources`` does not exist and the
+    loader skips this module. We probe ``salt.utils.resources`` rather
+    than ``salt.loader.resource`` because the loader function is a
+    Python callable that may be present in unrelated forks; the utils
+    module is more uniquely diagnostic of the resources feature.
     """
     try:
         # Imported lazily so the import cost is only paid when the
@@ -106,9 +168,9 @@ def __virtual__():
     except ImportError:
         return (
             False,
-            "saltext.kubernetes resource plugin requires the Salt "
-            "'resources' subsystem (not yet merged to mainline as of "
-            "saltext-kubernetes 2.1.0).",
+            "saltext.kubernetes resource plugin requires Salt 3008.0 or "
+            "newer (the 'resources' subsystem under salt.utils.resources "
+            "is not available on this Salt build).",
         )
     return __virtualname__
 
@@ -134,19 +196,39 @@ def init(opts):
     kinds = list(config.get("kinds") or _DEFAULT_KINDS)
     namespaces = config.get("namespaces") or []
     label_selector = config.get("label_selector") or None
+    declared = config.get("resources") or []
+    mode = (config.get("mode") or "").lower() or None
+    if mode is None:
+        # Infer: explicit ``resources:`` list → pillar-only; otherwise discover.
+        mode = "pillar" if declared else "discover"
+    if mode not in _VALID_MODES:
+        raise CommandExecutionError(
+            f"kubernetes resource pillar 'mode' must be one of {list(_VALID_MODES)}, "
+            f"not {mode!r}"
+        )
+    if mode in ("pillar", "merge") and not isinstance(declared, list):
+        raise CommandExecutionError(
+            "kubernetes resource pillar 'resources' must be a list of "
+            "{kind, namespace?, name} dicts"
+        )
 
     __context__["kubernetes_resource"] = {
         "initialized": True,
+        "mode": mode,
         "kinds": kinds,
         "namespaces": namespaces,
         "label_selector": label_selector,
+        "declared": declared,
         "config": config,
     }
     log.debug(
-        "kubernetes resource init(): kinds=%s namespaces=%s label_selector=%s",
+        "kubernetes resource init(): mode=%s kinds=%s namespaces=%s "
+        "label_selector=%s declared=%d entries",
+        mode,
         kinds,
         namespaces,
         label_selector,
+        len(declared),
     )
 
 
@@ -196,15 +278,72 @@ def _parse_id(resource_id: str) -> tuple[str, str | None, str]:
     return kind, None, rest
 
 
+def _ids_from_declared(declared):
+    """Translate the pillar ``resources:`` list into bare IDs.
+
+    Each entry is a ``{kind, namespace?, name}`` dict. ``kind`` and
+    ``name`` are required; ``namespace`` is omitted for cluster-scoped
+    kinds. Unknown kinds raise — the user spelt one wrong and silently
+    dropping it would surface as a "resource not found" later.
+    """
+    out = []
+    for i, entry in enumerate(declared):
+        if not isinstance(entry, dict):
+            raise CommandExecutionError(
+                f"kubernetes resource pillar 'resources[{i}]' must be a dict, "
+                f"not {type(entry).__name__}"
+            )
+        kind = entry.get("kind")
+        name = entry.get("name")
+        namespace = entry.get("namespace")
+        if not kind or not name:
+            raise CommandExecutionError(
+                f"kubernetes resource pillar 'resources[{i}]' missing 'kind' or 'name'"
+            )
+        try:
+            kind_ops = _kinds.get_kind(kind)
+        except CommandExecutionError as exc:
+            raise CommandExecutionError(
+                f"kubernetes resource pillar 'resources[{i}]' has unknown kind {kind!r}: {exc}"
+            ) from exc
+        if kind_ops.namespaced and not namespace:
+            raise CommandExecutionError(
+                f"kubernetes resource pillar 'resources[{i}]' kind={kind!r} is "
+                "namespaced and requires 'namespace'"
+            )
+        if not kind_ops.namespaced and namespace:
+            log.warning(
+                "kubernetes resource pillar 'resources[%d]' kind=%r is cluster-scoped; "
+                "ignoring namespace=%r",
+                i,
+                kind,
+                namespace,
+            )
+            namespace = None
+        out.append(_make_id(kind, namespace, name))
+    return out
+
+
 def discover(opts):  # pylint: disable=unused-argument
     """
     Return the list of bare Kubernetes resource IDs this minion manages.
 
-    Reads the kinds + namespace filters configured in pillar (set up by
-    :py:func:`init`), connects via the same auth path the typed
-    kubernetes module uses, and lists every matching resource. The
-    return value is a flat list of bare IDs (not SRNs); the resource
-    subsystem prefixes ``kubernetes:`` automatically.
+    Behaviour is controlled by the pillar ``mode`` key (or the inferred
+    mode when omitted — see :py:func:`init`):
+
+    * ``mode: discover`` — connect to the cluster and enumerate every
+      object whose kind / namespace / label matches the configured
+      filters. The historical default.
+    * ``mode: pillar`` — return exactly the IDs derived from the pillar
+      ``resources:`` list. **No API call is made.** Useful for air-
+      gapped clusters, strict RBAC where the discovery user lacks
+      ``list`` permission, bootstrap (declare resources before they
+      exist), and to avoid discovery cost on busy clusters.
+    * ``mode: merge`` — union of the two: declared IDs first, then
+      discovered IDs not already in the declared set.
+
+    The return value is a flat list of bare IDs (not SRNs); the
+    resource subsystem prefixes ``kubernetes:`` automatically.
     """
     if not initialized():
         log.debug("kubernetes resource.discover() called before init(); returning []")
@@ -214,13 +353,27 @@ def discover(opts):  # pylint: disable=unused-argument
     kinds = cfg_ctx["kinds"]
     namespaces = cfg_ctx["namespaces"]
     label_selector = cfg_ctx["label_selector"]
+    # ``mode`` / ``declared`` default to the discover-no-pillar-overrides
+    # shape so test harnesses (and any older code paths that pre-date the
+    # mode key) keep working without explicit init() context injection.
+    mode = cfg_ctx.get("mode", "discover")
+    declared = cfg_ctx.get("declared") or []
+
+    declared_ids = _ids_from_declared(declared) if declared else []
+    if mode == "pillar":
+        log.debug(
+            "kubernetes resource.discover() pillar-mode returning %d declared ids",
+            len(declared_ids),
+        )
+        return declared_ids
 
     # The resource layer is loaded by the same minion that has the
     # kubernetes execution module on its loader path; reuse that
     # module's auth seam.
     cfg = _connection._setup_conn(__salt__["config.option"])
     try:
-        out = []
+        out = list(declared_ids)  # 'merge' starts with declared IDs
+        declared_set = set(declared_ids)
         for kind in kinds:
             try:
                 kind_ops = _kinds.get_kind(kind)
@@ -261,8 +414,19 @@ def discover(opts):  # pylint: disable=unused-argument
                 for obj in items.items or []:
                     name = obj.metadata.name
                     namespace = getattr(obj.metadata, "namespace", None)
-                    out.append(_make_id(kind, namespace, name))
-        log.debug("kubernetes resource.discover() returning %d ids", len(out))
+                    rid = _make_id(kind, namespace, name)
+                    if rid in declared_set:
+                        # In 'merge' mode we already added the declared
+                        # form; don't duplicate.
+                        continue
+                    out.append(rid)
+        log.debug(
+            "kubernetes resource.discover() mode=%s returning %d ids (%d declared, %d from API)",
+            mode,
+            len(out),
+            len(declared_ids),
+            len(out) - len(declared_ids),
+        )
         return out
     finally:
         _connection._cleanup(**cfg)
