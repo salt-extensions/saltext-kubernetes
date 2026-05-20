@@ -50,6 +50,8 @@ EXPECTED_KINDS = {
     "resource_quota",
     "limit_range",
     "priority_class",
+    "node",
+    "custom_resource_definition",
 }
 
 

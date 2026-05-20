@@ -11,6 +11,7 @@ Salt Extension for interacting with Kubernetes
   topics/installation
   topics/auth
   topics/apply-only-kinds
+  topics/resources
 
 .. toctree::
   :maxdepth: 2

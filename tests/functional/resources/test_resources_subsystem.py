@@ -22,6 +22,7 @@ from saltfactories.utils import random_string
 
 from saltext.kubernetes.modules import kuberesource_cmd
 from saltext.kubernetes.resources import kubernetes as resource_mod
+from saltext.kubernetes.utils import _connection
 
 pytestmark = [pytest.mark.skip_unless_on_linux(reason="Only run on Linux platforms")]
 
@@ -120,6 +121,78 @@ def test_grains_projects_labels_and_phase(kubernetes_exe):
         assert "annotation" in grain_dict
     finally:
         kubernetes_exe.delete_namespace(name=ns, wait=True)
+
+
+def test_discover_pillar_only_mode_skips_cluster(kubernetes_exe):
+    """``mode: pillar`` returns the declared inventory without contacting
+    the cluster — proves the API isn't queried even when reachable.
+
+    This is the air-gapped / strict-RBAC / bootstrap path: a user
+    declares the set of resources they manage in pillar and gets the
+    same SRN registration as discovery mode, with no cluster round-trip.
+    """
+    # Hand-build a __context__ matching what init() produces in pillar mode.
+    resource_mod.__context__ = {
+        "kubernetes_resource": {
+            "initialized": True,
+            "mode": "pillar",
+            "kinds": [],
+            "namespaces": [],
+            "label_selector": None,
+            "declared": [
+                {"kind": "deployment", "namespace": "phantom-ns", "name": "phantom-dep"},
+                {"kind": "namespace", "name": "phantom-ns"},
+            ],
+            "config": {},
+        }
+    }
+    # Bomb _setup_conn so any accidental API contact fails loudly.
+    original_setup = _connection._setup_conn
+
+    def _boom(*args, **kwargs):  # pragma: no cover - assert-never path
+        raise AssertionError(
+            f"pillar mode must not call _setup_conn; got args={args} kwargs={kwargs}"
+        )
+
+    _connection._setup_conn = _boom
+    try:
+        ids = resource_mod.discover({})
+    finally:
+        _connection._setup_conn = original_setup
+
+    # The phantom objects don't exist in the cluster, but pillar mode
+    # returns them regardless — proving no API call was made.
+    assert "deployment:phantom-ns/phantom-dep" in ids
+    assert "namespace:phantom-ns" in ids
+
+
+def test_default_kinds_resolve_in_registry():
+    """A typo in ``_DEFAULT_KINDS`` would silently disable that kind for
+    every minion running without an explicit ``kinds:`` override. This
+    regression guard catches such typos at the live-cluster boundary."""
+    from saltext.kubernetes.utils import _kinds  # pylint: disable=import-outside-toplevel
+
+    for kind in resource_mod._DEFAULT_KINDS:
+        assert kind in _kinds._KIND_REGISTRY, f"_DEFAULT_KINDS has unknown kind {kind!r}"
+
+
+def test_node_kind_discoverable(kubernetes_exe):
+    """The ``node`` kind enumerates against a real cluster."""
+    resource_mod.__context__ = {
+        "kubernetes_resource": {
+            "initialized": True,
+            "mode": "discover",
+            "kinds": ["node"],
+            "namespaces": [],
+            "label_selector": None,
+            "declared": [],
+            "config": {},
+        }
+    }
+    resource_mod.__salt__ = {"config.option": lambda k, default="": default}  # noqa: F821
+    ids = resource_mod.discover({})
+    # kind always provisions at least one control-plane node.
+    assert any(rid.startswith("node:") for rid in ids), f"no node IDs in {ids}"
 
 
 def test_make_id_round_trips_with_parse_id():

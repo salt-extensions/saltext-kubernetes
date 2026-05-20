@@ -429,6 +429,25 @@ _KIND_REGISTRY: dict[str, KindOps] = {
         namespaced=False,
         ready_predicate=_always_ready,
     ),
+    # Cluster-scoped kinds the resources subsystem needs to enumerate
+    # but that don't have a typed CRUD wrapper (and don't need one —
+    # ``Node`` is read/labelled/tainted via dedicated execution-module
+    # surface; CustomResourceDefinitions are created via the typed
+    # ``create_custom_resource_definition`` wrapper added in PR #36).
+    "node": KindOps(
+        api_class_attr="CoreV1Api",
+        list_method="list_node",
+        read_method="read_node",
+        namespaced=False,
+        ready_predicate=_always_ready,
+    ),
+    "custom_resource_definition": KindOps(
+        api_class_attr="ApiextensionsV1Api",
+        list_method="list_custom_resource_definition",
+        read_method="read_custom_resource_definition",
+        namespaced=False,
+        ready_predicate=_always_ready,
+    ),
 }
 
 
