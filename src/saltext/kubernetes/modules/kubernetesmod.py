@@ -162,6 +162,76 @@ except ImportError:
     HAS_LIBS = False
 # pylint: enable=import-error,no-name-in-module
 
+
+# ---------------------------------------------------------------------------
+# kubernetes-client version-compat shims.
+#
+# Between kubernetes-client 35.x and 36.0.0 the OpenAPI generator was
+# updated, changing several attribute and kwarg names. We support both
+# the old and new spellings so a single saltext-kubernetes release works
+# against any kubernetes-client >= 24.2.0 (our floor).
+#
+# The known renames we handle here:
+#
+# * ``V1PolicyRule.non_resource_ur_ls``  →  ``non_resource_urls``
+# * ``ApiClient.call_api(response_type=)``  →  ``response_types_map=``
+#
+# We detect by inspecting the live class / method, so the same wheel
+# works against either spelling without runtime configuration.
+# ---------------------------------------------------------------------------
+
+
+def _v1_policy_rule_kwargs(kwargs):
+    """Translate ``non_resource_urls`` ↔ ``non_resource_ur_ls`` for V1PolicyRule.
+
+    Caller-supplied kwargs use the new (kubernetes 36+) spelling
+    ``non_resource_urls``. Older clients (24-35) expect the awkward
+    ``non_resource_ur_ls`` produced by the naive snake-case generator.
+    Inspect the class signature once and translate if needed.
+    """
+    if not HAS_LIBS:
+        return kwargs
+    new_name = "non_resource_urls"
+    legacy_name = "non_resource_ur_ls"
+    # Use class attributes — V1PolicyRule defines ``openapi_types`` /
+    # ``attribute_map``; ``openapi_types`` is the cheapest probe.
+    types_map = getattr(V1PolicyRule, "openapi_types", None) or {}
+    accepts_new = new_name in types_map
+    accepts_legacy = legacy_name in types_map
+    out = dict(kwargs)
+    if new_name in out and not accepts_new and accepts_legacy:
+        out[legacy_name] = out.pop(new_name)
+    elif legacy_name in out and not accepts_legacy and accepts_new:
+        out[new_name] = out.pop(legacy_name)
+    return out
+
+
+def _v1_policy_rule_non_resource_urls(rule):
+    """Return a V1PolicyRule's non-resource-URLs list under either spelling."""
+    if hasattr(rule, "non_resource_urls"):
+        return rule.non_resource_urls
+    return getattr(rule, "non_resource_ur_ls", None)
+
+
+def _api_client_call_api(api_client, *args, response_type=None, **kwargs):
+    """Call ``ApiClient.call_api`` with the kwarg name the installed client expects.
+
+    kubernetes 36 renamed ``response_type`` → ``response_types_map``.
+    Inspect the signature once and route through whichever the active
+    client supports.
+    """
+    import inspect  # pylint: disable=import-outside-toplevel
+
+    sig = inspect.signature(api_client.call_api)
+    if response_type is not None:
+        if "response_types_map" in sig.parameters and "response_type" not in sig.parameters:
+            # kubernetes >= 36: dict form, keyed by HTTP status code.
+            kwargs["response_types_map"] = {"*": response_type}
+        else:
+            kwargs["response_type"] = response_type
+    return api_client.call_api(*args, **kwargs)
+
+
 log = logging.getLogger(__name__)
 
 __virtualname__ = "kubernetes"
@@ -10886,7 +10956,8 @@ def cluster_info(**kwargs):
         # generic api_client. Most clusters return a plain "ok".
         api_client = kubernetes.client.ApiClient()
         try:
-            resp = api_client.call_api(
+            resp = _api_client_call_api(
+                api_client,
                 "/healthz",
                 "GET",
                 response_type="str",
@@ -12412,18 +12483,20 @@ _STORAGECLASS_FIELD_MAP = {
 # ---------------------------------------------------------------------------
 
 
-# The kubernetes-client OpenAPI generator maps ``nonResourceURLs`` to the
-# awkward ``non_resource_ur_ls`` (the trailing capital sequence becomes its
-# own underscore-separated token). We accept both ``non_resource_urls`` and
-# ``nonResourceURLs`` from callers and translate to the actual constructor
-# kwarg name.
+# The kubernetes-client OpenAPI generator translates ``nonResourceURLs``
+# differently across versions: 24-35 produces the awkward
+# ``non_resource_ur_ls`` (the trailing capital sequence becomes its own
+# token); 36+ produces the clean ``non_resource_urls``. We translate the
+# caller-supplied camelCase / snake_case forms to the **new** spelling
+# and let :py:func:`_v1_policy_rule_kwargs` route to whichever the
+# installed client actually accepts.
 _RULES_FIELD_MAP = {
     "apiGroups": "api_groups",
     "resources": "resources",
     "verbs": "verbs",
     "resourceNames": "resource_names",
-    "nonResourceURLs": "non_resource_ur_ls",
-    "non_resource_urls": "non_resource_ur_ls",
+    "nonResourceURLs": "non_resource_urls",
+    "non_resource_ur_ls": "non_resource_urls",
 }
 
 
@@ -12441,7 +12514,7 @@ def __dict_to_policy_rule_list(rules):
         if "verbs" not in normalised or not normalised["verbs"]:
             raise CommandExecutionError("Each rule must include a non-empty 'verbs' list")
         try:
-            out.append(V1PolicyRule(**normalised))
+            out.append(V1PolicyRule(**_v1_policy_rule_kwargs(normalised)))
         except (TypeError, ValueError) as exc:
             raise CommandExecutionError(f"Invalid rule {rule}: {exc}") from exc
     return out
