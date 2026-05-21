@@ -13,11 +13,17 @@ logging.root.setLevel(logging.WARNING)
 
 log = logging.getLogger(__name__)
 
-# Supported Kubernetes versions for testing based on
-# standard support versions across kubernetes deployments
-# Some clouds may have different supported versions
+# Kubernetes API server versions exercised by the functional tier. The
+# floor is the oldest ``kindest/node`` image the current ``kind``
+# release ships; the ceiling is its default. Bracketing these catches
+# K8s API surface drift independently of the kubernetes-client Python
+# package version range (24+ through 36+) the extension supports via
+# the version-compat shims in :py:mod:`saltext.kubernetes.modules.kubernetesmod`.
+#
+# Bump this list as ``kind`` rolls in newer ``kindest/node`` images
+# (kind v0.32.x is expected to add a v1.36 image once K8s 1.36 GAs).
 K8S_VERSIONS = [
-    "v1.28.15",
+    "v1.30.13",
     "v1.35.0",
 ]  # pragma: no cover
 
@@ -125,6 +131,40 @@ def kind_cluster(request):  # pragma: no cover
                     capture_output=True,
                     text=True,
                 )
+
+                # Install cert-manager so the Ingress+TLS scenario tests
+                # (and any future CRD-driven cert-manager tests) have the
+                # controllers available. Pinned to a known-good release;
+                # bump alongside ``cert-manager`` upstream as needed.
+                log.info("Installing cert-manager in kind cluster")
+                subprocess.run(
+                    kubectl_cmd
+                    + [
+                        "apply",
+                        "-f",
+                        "https://github.com/cert-manager/cert-manager/releases/download"
+                        "/v1.20.2/cert-manager.yaml",
+                    ],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+                subprocess.run(
+                    kubectl_cmd
+                    + [
+                        "wait",
+                        "--for=condition=Ready",
+                        "pods",
+                        "--all",
+                        "-n",
+                        "cert-manager",
+                        "--timeout=180s",
+                    ],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+                log.info("cert-manager ready")
                 break
             except subprocess.CalledProcessError as exc:  # pylint: disable=try-except-raise
                 retries -= 1
