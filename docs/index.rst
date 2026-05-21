@@ -12,6 +12,7 @@ Salt Extension for interacting with Kubernetes
   topics/auth
   topics/apply-only-kinds
   topics/resources
+  topics/examples-terraform-equivalents
 
 .. toctree::
   :maxdepth: 2
