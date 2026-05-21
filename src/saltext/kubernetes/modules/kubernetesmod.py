@@ -9949,6 +9949,20 @@ def exec_(
     cfg = _setup_conn(**kwargs)
     try:
         api = kubernetes.client.CoreV1Api()
+        # Pre-flight existence check. kubernetes-client 36.0.0 has a bug
+        # on the websocket-upgrade path: when the API server returns 404
+        # the client's error handler calls ``e.body.decode('utf-8')``
+        # but ``e.body`` is ``None`` for the websocket protocol, so the
+        # caller sees an ``AttributeError`` instead of a proper
+        # ``ApiException(status=404)``. Reading the pod first turns the
+        # ``not found`` case into the typed 404 we expect.
+        try:
+            api.read_namespaced_pod(name, namespace)
+        except (ApiException, HTTPError) as exc:
+            if isinstance(exc, ApiException) and exc.status == 404:
+                raise CommandExecutionError(f"Pod {name} not found in {namespace}") from exc
+            raise CommandExecutionError(exc) from exc
+
         cmd = _wrap_command(command)
         exec_kwargs = {
             "name": name,
