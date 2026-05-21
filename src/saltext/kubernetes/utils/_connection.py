@@ -425,12 +425,24 @@ def _apply_exec_auth(config, exec_cfg):
         result = provider.run()
         token = result.get("token") if isinstance(result, dict) else None
         if token:
+            # kubernetes-client 24-35 indexes the api_key dict by the
+            # lowercase header name ``"authorization"`` and expects the
+            # value to be the full ``"Bearer <token>"`` string (the
+            # auth_settings() shape).
             cfg.api_key["authorization"] = f"Bearer {token}"
+            # kubernetes-client 36+ indexes by the auth-scheme name
+            # ``"BearerToken"`` and applies the prefix from
+            # ``api_key_prefix["BearerToken"]`` to the bare token. Set
+            # both so the same hook works on either client without
+            # version-detection at refresh time.
+            cfg.api_key["BearerToken"] = token
         return cfg.api_key.get("authorization", "")
 
     config.api_key = config.api_key or {}
     config.api_key["authorization"] = ""
+    config.api_key["BearerToken"] = ""
     config.api_key_prefix = config.api_key_prefix or {}
+    config.api_key_prefix["BearerToken"] = "Bearer"
     config.refresh_api_key_hook = _refresh_token
 
 

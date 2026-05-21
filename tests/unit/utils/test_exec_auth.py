@@ -117,6 +117,25 @@ def test_exec_auth_wires_refresh_hook(config):
     assert config.api_key["authorization"] == "Bearer tok-123"
 
 
+def test_exec_auth_refresh_hook_sets_both_legacy_and_modern_keys(config):
+    """The refresh hook writes both API key shapes so either client works.
+
+    kubernetes-client 24-35 keys ``Configuration.api_key`` by the header
+    name ``"authorization"`` with the value ``"Bearer <tok>"``;
+    kubernetes-client 36+ keys by the auth-scheme name ``"BearerToken"``
+    with the bare ``<tok>`` and a separate ``"Bearer"`` prefix in
+    ``api_key_prefix``. The hook must write both so we don't have to
+    branch on the runtime client version at every refresh.
+    """
+    with patch("kubernetes.config.kube_config.ExecProvider") as mock_provider_cls:
+        mock_provider_cls.return_value.run.return_value = {"token": "abc-token"}
+        _connection._apply_exec_auth(config, {"command": "sh"})
+    config.refresh_api_key_hook(config)
+    assert config.api_key["authorization"] == "Bearer abc-token"
+    assert config.api_key["BearerToken"] == "abc-token"
+    assert config.api_key_prefix["BearerToken"] == "Bearer"
+
+
 def test_exec_auth_setup_via_setup_conn(tmp_path):
     """End-to-end: ``_setup_conn`` with a ``kubernetes.exec`` block wires correctly."""
     plugin = tmp_path / "fake-auth"

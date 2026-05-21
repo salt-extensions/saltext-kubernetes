@@ -23,7 +23,15 @@ from saltext.kubernetes.modules import kubernetesmod
 
 def test_role_spec_accepts_camelcase_rule_keys():
     """camelCase fields in rule dicts are translated to the snake_case
-    constructor kwargs the kubernetes-client expects."""
+    constructor kwargs the kubernetes-client expects.
+
+    The ``nonResourceURLs`` field's snake-case name differs between
+    kubernetes-client versions: 24-35 produces ``non_resource_ur_ls``
+    (naive split on the URL acronym); 36+ produces the clean
+    ``non_resource_urls``. The :py:func:`_v1_policy_rule_non_resource_urls`
+    helper reads whichever attribute the installed client uses, so this
+    test asserts via the helper rather than against a fixed name.
+    """
     spec = {
         "rules": [
             {
@@ -40,12 +48,7 @@ def test_role_spec_accepts_camelcase_rule_keys():
     rule = result["rules"][0]
     assert rule.api_groups == [""]
     assert rule.resource_names == ["foo"]
-    # The kubernetes-client OpenAPI generator names this attribute
-    # ``non_resource_ur_ls`` (note the awkward second underscore — an
-    # artefact of how the all-caps URL token is split). Both
-    # ``nonResourceURLs`` and ``non_resource_urls`` from the caller map
-    # to it.
-    assert rule.non_resource_ur_ls == ["/healthz"]
+    assert kubernetesmod._v1_policy_rule_non_resource_urls(rule) == ["/healthz"]
 
 
 def test_role_spec_rejects_non_dict():
