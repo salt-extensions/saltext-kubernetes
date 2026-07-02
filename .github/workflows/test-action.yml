@@ -20,15 +20,9 @@ jobs:
       max-parallel: 3
       matrix:
         include:
-<<<<<<< before updating
-          - {salt-version: "3006.23", python-version: "3.10"}
-          - {salt-version: "3007.13", python-version: "3.10"}
-          - {salt-version: "3008.0rc2", python-version: "3.10"}
-=======
           - {salt-version: "3006.27", python-version: "3.10"}
           - {salt-version: "3006.27", python-version: "3.11"}
           - {salt-version: "3008.2", python-version: "3.14"}
->>>>>>> after updating
 
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
@@ -111,14 +105,8 @@ jobs:
       max-parallel: 2
       matrix:
         include:
-<<<<<<< before updating
-          - {salt-version: "3006.23", python-version: "3.10"}
-          - {salt-version: "3007.13", python-version: "3.10"}
-          - {salt-version: "3008.0rc2", python-version: "3.10"}
-=======
           - {salt-version: "3006.27", python-version: "3.11"}
           - {salt-version: "3008.2", python-version: "3.14"}
->>>>>>> after updating
 
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
@@ -206,14 +194,8 @@ jobs:
       max-parallel: 2
       matrix:
         include:
-<<<<<<< before updating
-          - {salt-version: "3006.23", python-version: "3.10"}
-          - {salt-version: "3007.13", python-version: "3.10"}
-          - {salt-version: "3008.0rc2", python-version: "3.10"}
-=======
           - {salt-version: "3006.27", python-version: "3.11"}
           - {salt-version: "3008.2", python-version: "3.14"}
->>>>>>> after updating
 
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
