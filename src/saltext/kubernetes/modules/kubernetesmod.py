@@ -10109,7 +10109,17 @@ def logs(
             log_kwargs["since_seconds"] = since_seconds
         if tail_lines is not None:
             log_kwargs["tail_lines"] = tail_lines
-        return api.read_namespaced_pod_log(**log_kwargs)
+        # _preload_content=False bypasses this client version's
+        # auto-deserialization for this endpoint, which -- despite the
+        # OpenAPI spec declaring a plain str response -- detects
+        # JSON-shaped log bodies (e.g. `kube-bench ... --json` output) and
+        # round-trips them through json.loads() then str(), corrupting
+        # valid double-quoted JSON into Python repr's single-quoted
+        # syntax (observed directly against a real cluster). Reading the
+        # raw response ourselves sidesteps that entirely.
+        log_kwargs["_preload_content"] = False
+        resp = api.read_namespaced_pod_log(**log_kwargs)
+        return resp.data.decode("utf-8")
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
             raise CommandExecutionError(f"Pod {name} not found in {namespace}") from exc
@@ -12048,6 +12058,19 @@ def __dict_to_deployment_spec(spec):
         raise CommandExecutionError(f"Invalid deployment spec: {exc}") from exc
 
 
+_POD_SPEC_FIELD_MAP = {
+    # The generic camel->snake fallback splits before every capital letter,
+    # so back-to-back acronym letters get mangled one at a time --
+    # hostIPC -> host_i_p_c, hostPID -> host_p_i_d -- rather than treated
+    # as a single acronym word. Observed directly: a Job spec templated
+    # from a CronJob with hostPID/hostIPC set (kube-bench's privileged
+    # host-inspection pods) failed with "V1PodSpec.__init__() got an
+    # unexpected keyword argument 'host_i_p_c'".
+    "hostIPC": "host_ipc",
+    "hostPID": "host_pid",
+}
+
+
 def __dict_to_pod_spec(spec):
     """
     Converts a dictionary into kubernetes V1PodSpec instance.
@@ -12136,7 +12159,7 @@ def __dict_to_pod_spec(spec):
     # Translate kubectl/YAML-native camelCase fields (restartPolicy,
     # serviceAccountName, terminationGracePeriodSeconds, etc.) to the
     # snake_case attribute names V1PodSpec expects.
-    processed_spec = _snake_caseify_keys(processed_spec)
+    processed_spec = _normalise_field_map(processed_spec, _POD_SPEC_FIELD_MAP)
     try:
         return kubernetes.client.V1PodSpec(**processed_spec)
     except (TypeError, ValueError) as exc:
