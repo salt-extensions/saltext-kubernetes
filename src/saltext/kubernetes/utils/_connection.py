@@ -343,9 +343,40 @@ def _resolve_explicit(host, get_config_option, env, kwargs):
 def _resolve_in_cluster(get_config_option, env, kwargs):
     config = kubernetes.client.Configuration()
     kubernetes.config.load_incluster_config(client_configuration=config)
+    _normalize_bearer_token(config)
     _apply_post_hooks(config, get_config_option, env, kwargs)
     kubernetes.client.Configuration.set_default(config)
     return {"in_cluster": True}
+
+
+def _normalize_bearer_token(config):
+    """
+    Kubernetes' apiserver requires a case-sensitive ``Bearer `` prefix (RFC
+    6750) on the ``Authorization`` header. Some ``kubernetes-client``
+    versions' ``load_incluster_config()`` populate
+    ``config.api_key["authorization"]`` with a lowercase ``bearer ``
+    prefix instead (observed directly against a real cluster) -- the
+    apiserver then doesn't recognize the header as carrying a bearer token
+    at all, and falls through to unauthenticated/``system:anonymous``
+    rather than raising an auth error, since an unrecognized auth scheme
+    reads as "no credentials of this kind," not "invalid credentials."
+
+    Re-derive the bare token and set both known ``api_key`` conventions
+    (see ``_apply_exec_auth`` for the client 24-35 vs 36+ split) with the
+    correct casing, so in-cluster auth works regardless of the installed
+    client version's own quirks here.
+    """
+    api_key = config.api_key or {}
+    token = api_key.get("BearerToken")
+    if not token and api_key.get("authorization"):
+        token = api_key["authorization"].split(" ", 1)[-1]
+    if not token:
+        return
+    config.api_key = api_key
+    config.api_key["authorization"] = f"Bearer {token}"
+    config.api_key["BearerToken"] = token
+    config.api_key_prefix = config.api_key_prefix or {}
+    config.api_key_prefix["BearerToken"] = "Bearer"
 
 
 def _apply_post_hooks(config, get_config_option, env, kwargs):

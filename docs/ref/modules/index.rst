@@ -10,6 +10,7 @@ _________________
     :toctree:
 
     k8s
+    kube_bench_cache
     kubeadm
     kuberesource_cmd
     kuberesource_cp
