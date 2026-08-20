@@ -16,6 +16,7 @@ gated behind the worktree-existence check in
 ``tests/integration/test_resource_plugin_against_worktree.py``.
 """
 
+import importlib.util
 import sys
 import types
 
@@ -23,11 +24,17 @@ import pytest
 
 from saltext.kubernetes.resources import kubernetes as resource_mod
 
+HAS_RESOURCES = importlib.util.find_spec("salt.utils.resources") is not None
+
 # ---------------------------------------------------------------------------
 # __virtual__ — dormant on stock Salt
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.skipif(
+    HAS_RESOURCES,
+    reason="salt.utils.resources is present (Salt 3008+); dormancy tests only apply to Salt < 3008",
+)
 def test_virtual_returns_false_when_resources_subsystem_absent():
     """
     On Salt < 3008 (no salt.utils.resources), ``__virtual__`` returns

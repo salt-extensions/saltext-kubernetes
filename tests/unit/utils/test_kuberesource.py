@@ -3,6 +3,7 @@ Unit tests for ``saltext.kubernetes.utils._kuberesource`` — the shared
 helpers used by every ``kuberesource_*`` companion module.
 """
 
+import importlib.util
 import sys
 import types
 
@@ -11,7 +12,13 @@ from salt.exceptions import CommandExecutionError
 
 from saltext.kubernetes.utils import _kuberesource
 
+HAS_RESOURCES = importlib.util.find_spec("salt.utils.resources") is not None
 
+
+@pytest.mark.skipif(
+    HAS_RESOURCES,
+    reason="salt.utils.resources is present (Salt 3008+); dormancy tests only apply to Salt < 3008",
+)
 def test_virtual_or_dormant_returns_false_on_stock_salt():
     result = _kuberesource.virtual_or_dormant()
     assert isinstance(result, tuple)
