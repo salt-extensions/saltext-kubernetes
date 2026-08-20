@@ -14,10 +14,13 @@ end-to-end tests; what we're proving here is that:
     kind via :py:func:`_kuberesource.require_kind`.
 """
 
+import importlib.util
 from unittest.mock import MagicMock
 
 import pytest
 from salt.exceptions import CommandExecutionError
+
+HAS_RESOURCES = importlib.util.find_spec("salt.utils.resources") is not None
 
 from saltext.kubernetes.modules import kuberesource_cmd
 from saltext.kubernetes.modules import kuberesource_cp
@@ -41,6 +44,10 @@ from saltext.kubernetes.modules import kuberesource_workload
         kuberesource_workload,
         kuberesource_state,
     ],
+)
+@pytest.mark.skipif(
+    HAS_RESOURCES,
+    reason="salt.utils.resources is present (Salt 3008+); dormancy tests only apply to Salt < 3008",
 )
 def test_companion_modules_dormant_on_stock_salt(mod):
     """Every companion module reports the dormant sentinel."""
