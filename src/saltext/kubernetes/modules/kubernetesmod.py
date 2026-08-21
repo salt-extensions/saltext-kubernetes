@@ -236,6 +236,11 @@ log = logging.getLogger(__name__)
 
 __virtualname__ = "kubernetes"
 
+# ``exec`` is a Python builtin so the function is named ``exec_`` to avoid
+# shadowing it. This alias exposes it as ``kubernetes.exec`` on the Salt CLI
+# and in __salt__ dicts, which is the natural name users expect.
+__func_alias__ = {"exec_": "exec"}
+
 
 def __virtual__():
     """

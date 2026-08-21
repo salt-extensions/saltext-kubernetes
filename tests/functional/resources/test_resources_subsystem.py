@@ -53,7 +53,29 @@ def resource_plugin(loaders):
     return loaders.modules.get("kubernetes_resource") or loaders.modules.kubernetes
 
 
-def test_discover_returns_default_kinds(resource_plugin, kubernetes_exe):
+@pytest.fixture
+def kube_config_option(kind_cluster):
+    """
+    Return a ``config.option``-shaped callable wired to the live kind cluster.
+
+    Tests that manually inject ``__salt__`` into the resource module must use
+    this so that ``_connection._setup_conn`` can resolve the kubeconfig and
+    context rather than raising "Invalid kubernetes configuration".
+    """
+    kubeconfig = str(kind_cluster.kubeconfig_path)
+    context = "kind-salt-test"
+    _config = {
+        "kubernetes.kubeconfig": kubeconfig,
+        "kubernetes.context": context,
+    }
+
+    def _get(key, default=""):
+        return _config.get(key, default)
+
+    return _get
+
+
+def test_discover_returns_default_kinds(resource_plugin, kubernetes_exe, kube_config_option):
     """``discover`` returns bare IDs for the kinds configured in pillar."""
     # Create one of each default kind so discover has something to find.
     ns = random_string("disc-", uppercase=False)
@@ -76,19 +98,20 @@ def test_discover_returns_default_kinds(resource_plugin, kubernetes_exe):
             },
             wait=True,
         )
-        # discover takes opts; we pass the minion opts directly.
         # Manually initialise the resource plug-in's __context__ for the test.
         resource_mod.__context__ = {
             "kubernetes_resource": {
                 "initialized": True,
+                "mode": "discover",
                 "kinds": ["deployment", "namespace"],
                 "namespaces": [ns],
                 "label_selector": None,
+                "declared": [],
                 "config": {},
             }
         }
-        # The plug-in reads from __salt__ via _connection; loaders provides it.
-        resource_mod.__salt__ = {"config.option": lambda k, default="": default}  # noqa: F821
+        # Wire in the real kubeconfig so _connection._setup_conn can authenticate.
+        resource_mod.__salt__ = {"config.option": kube_config_option}
         ids = resource_mod.discover({})
         assert isinstance(ids, list)
         # We don't assert exact contents (kind cluster has system namespaces)
@@ -98,7 +121,7 @@ def test_discover_returns_default_kinds(resource_plugin, kubernetes_exe):
         kubernetes_exe.delete_namespace(name=ns, wait=True)
 
 
-def test_grains_projects_labels_and_phase(kubernetes_exe):
+def test_grains_projects_labels_and_phase(kubernetes_exe, kube_config_option):
     """``grains()`` reads ``__resource__["id"]`` and projects label/phase."""
     ns = random_string("grains-", uppercase=False)
     try:
@@ -109,9 +132,9 @@ def test_grains_projects_labels_and_phase(kubernetes_exe):
             data={"k": "v"},
             wait=True,
         )
-        # Inject the resource ID and verify grains() returns the right shape.
+        # Inject the resource ID and wire in the real kubeconfig.
         resource_mod.__resource__ = {"id": f"configmap:{ns}/conf"}
-        resource_mod.__salt__ = {"config.option": lambda k, default="": default}
+        resource_mod.__salt__ = {"config.option": kube_config_option}
         grain_dict = resource_mod.grains()
         assert grain_dict["kind"] == "configmap"
         assert grain_dict["namespace"] == ns
@@ -176,7 +199,7 @@ def test_default_kinds_resolve_in_registry():
         assert kind in _kinds._KIND_REGISTRY, f"_DEFAULT_KINDS has unknown kind {kind!r}"
 
 
-def test_node_kind_discoverable(kubernetes_exe):
+def test_node_kind_discoverable(kubernetes_exe, kube_config_option):
     """The ``node`` kind enumerates against a real cluster."""
     resource_mod.__context__ = {
         "kubernetes_resource": {
@@ -189,7 +212,8 @@ def test_node_kind_discoverable(kubernetes_exe):
             "config": {},
         }
     }
-    resource_mod.__salt__ = {"config.option": lambda k, default="": default}  # noqa: F821
+    # Wire in the real kubeconfig so _connection._setup_conn can authenticate.
+    resource_mod.__salt__ = {"config.option": kube_config_option}
     ids = resource_mod.discover({})
     # kind always provisions at least one control-plane node.
     assert any(rid.startswith("node:") for rid in ids), f"no node IDs in {ids}"
@@ -209,7 +233,7 @@ def test_make_id_round_trips_with_parse_id():
     assert parsed == ("node", None, "worker-1")
 
 
-def test_kuberesource_cmd_dispatches_to_exec(kubernetes_exe):
+def test_kuberesource_cmd_dispatches_to_exec(kubernetes_exe, kube_config_option):
     """``kuberesource_cmd.run`` resolves __resource__ and forwards to exec."""
     pod = random_string("krsrc-", uppercase=False)
     try:
@@ -228,7 +252,7 @@ def test_kuberesource_cmd_dispatches_to_exec(kubernetes_exe):
         kuberesource_cmd.__resource__ = {"id": f"pod:default/{pod}"}
         kuberesource_cmd.__salt__ = {
             "kubernetes.exec": kubernetes_exe.exec,
-            "config.option": lambda k, default="": default,
+            "config.option": kube_config_option,
         }
         result = kuberesource_cmd.run(["/bin/echo", "hello"])
         assert "hello" in str(result)
