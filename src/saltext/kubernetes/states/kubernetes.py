@@ -373,7 +373,7 @@ def deployment_present(
             )
             return ret
 
-        if res == deployment:
+        if _strip_server_metadata(res) == _strip_server_metadata(deployment):
             ret["result"] = True
             ret["comment"] = "The deployment is already in the desired state"
             return ret
@@ -616,7 +616,7 @@ def statefulset_present(
             )
             return ret
 
-        if res == statefulset:
+        if _strip_server_metadata(res) == _strip_server_metadata(statefulset):
             ret["result"] = True
             ret["comment"] = "The statefulset is already in the desired state"
             return ret
@@ -846,7 +846,7 @@ def replicaset_present(
             )
             return ret
 
-        if res == replicaset:
+        if _strip_server_metadata(res) == _strip_server_metadata(replicaset):
             ret["result"] = True
             ret["comment"] = "The replicaset is already in the desired state"
             return ret
@@ -1076,7 +1076,7 @@ def daemonset_present(
             )
             return ret
 
-        if res == daemonset:
+        if _strip_server_metadata(res) == _strip_server_metadata(daemonset):
             ret["result"] = True
             ret["comment"] = "The daemonset is already in the desired state"
             return ret
@@ -1289,7 +1289,7 @@ def storageclass_present(
             )
             return ret
 
-        if res == storageclass:
+        if _strip_server_metadata(res) == _strip_server_metadata(storageclass):
             ret["result"] = True
             ret["comment"] = "The storageclass is already in the desired state"
             return ret
@@ -1464,7 +1464,7 @@ def service_present(
             )
             return ret
 
-        if res == service:
+        if _strip_server_metadata(res) == _strip_server_metadata(service):
             ret["result"] = True
             ret["comment"] = "The service is already in the desired state"
             return ret
@@ -1867,7 +1867,7 @@ def secret_present(
             )
             return ret
 
-        if res == secret:
+        if _strip_server_metadata(res) == _strip_server_metadata(secret):
             ret["result"] = True
             ret["comment"] = "The secret is already in the desired state"
             return ret
@@ -2096,7 +2096,7 @@ def configmap_present(
             )
             return ret
 
-        if res == configmap:
+        if _strip_server_metadata(res) == _strip_server_metadata(configmap):
             ret["result"] = True
             ret["comment"] = "The configmap is already in the desired state"
             return ret
