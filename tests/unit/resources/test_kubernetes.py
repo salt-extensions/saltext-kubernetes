@@ -119,22 +119,28 @@ def test_make_parse_id_round_trip():
 # ---------------------------------------------------------------------------
 
 
-def test_initialized_returns_false_without_context():
+def test_initialized_returns_false_without_context(monkeypatch):
     """
     ``initialized()`` is checked by the loader before per-resource
     dispatch. Outside loader context (where ``__context__`` is not
     injected), it must return False rather than NameError.
     """
-    # Module-level __context__ is not defined when imported plain.
+    # On Salt 3008+ the loader injects __context__ at import time, so we
+    # need to explicitly set it to an empty dict to simulate the
+    # pre-init state rather than relying on a NameError.
+    monkeypatch.setattr(resource_mod, "__context__", {}, raising=False)
     assert resource_mod.initialized() is False
 
 
-def test_grains_returns_empty_without_resource_dunder():
+def test_grains_returns_empty_without_resource_dunder(monkeypatch):
     """
     Calling grains() without an active resource context (no
     ``__resource__`` injected) returns an empty dict rather than
     crashing.
     """
+    # Remove __resource__ so the NameError branch is exercised — the
+    # loader injects this dunder on Salt 3008+ so we must unset it.
+    monkeypatch.delattr(resource_mod, "__resource__", raising=False)
     assert not resource_mod.grains()
 
 

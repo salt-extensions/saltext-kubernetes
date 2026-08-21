@@ -15,6 +15,7 @@ Each pair of tests exercises:
 import time
 
 import pytest
+from salt.exceptions import CommandExecutionError
 from saltfactories.utils import random_string
 
 pytestmark = [pytest.mark.skip_unless_on_linux(reason="kind cluster fixture requires Linux")]
@@ -342,7 +343,14 @@ def test_resource_quota_enforces_pod_limit(kubernetes_exe):
         kubernetes_exe.create_resource_quota(
             name="pod-quota", namespace=ns, spec={"hard": {"pods": "1"}}
         )
-        time.sleep(2)  # quota controller observes
+        # Poll until the quota controller has observed the quota (status.hard
+        # is populated) rather than relying on a fixed sleep that can race.
+        deadline = time.time() + 30
+        while time.time() < deadline:
+            quota = kubernetes_exe.show_resource_quota(name="pod-quota", namespace=ns)
+            if quota and quota.get("status", {}).get("hard"):
+                break
+            time.sleep(1)
         kubernetes_exe.create_pod(
             name="first",
             namespace=ns,
@@ -350,8 +358,6 @@ def test_resource_quota_enforces_pod_limit(kubernetes_exe):
             spec={"containers": [{"name": "pause", "image": "registry.k8s.io/pause:3.9"}]},
         )
         # Second pod must be rejected — quota exhausted.
-        from salt.exceptions import CommandExecutionError  # pylint: disable=import-outside-toplevel
-
         with pytest.raises(CommandExecutionError) as exc:
             kubernetes_exe.create_pod(
                 name="second",
