@@ -36,13 +36,15 @@ silently skip collection during every ``policy.assessment`` run (which uses
 
 from __future__ import annotations
 
-import fcntl
 import json
 import logging
 import os
 import time
+from contextlib import contextmanager
 
 from salt.exceptions import CommandExecutionError
+from salt.exceptions import FileLockError
+from salt.utils.files import wait_lock
 
 log = logging.getLogger(__name__)
 
@@ -848,34 +850,20 @@ def _write_atomic(path, sections):
         raise
 
 
-class _lock:
-    """Context manager: acquire an exclusive flock on *path*."""
+@contextmanager
+def _lock(path, timeout=_LOCK_TIMEOUT):
+    """
+    Best-effort exclusive lock on *path*.
 
-    def __init__(self, path, timeout=_LOCK_TIMEOUT):
-        self._path = path
-        self._timeout = timeout
-        self._fh = None
-
-    def __enter__(self):
-        deadline = time.monotonic() + self._timeout
-        self._fh = open(self._path, "w", encoding="utf-8")  # noqa: WPS515
-        while True:
-            try:
-                fcntl.flock(self._fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                return self
-            except BlockingIOError:
-                if time.monotonic() >= deadline:
-                    log.warning(
-                        "kube_bench_cache: lock timeout after %ss -- proceeding without lock",
-                        self._timeout,
-                    )
-                    return self
-                time.sleep(1)
-
-    def __exit__(self, *_):
-        if self._fh:
-            try:
-                fcntl.flock(self._fh, fcntl.LOCK_UN)
-                self._fh.close()
-            except OSError:
-                pass
+    Wraps ``salt.utils.files.wait_lock`` (platform-agnostic: atomic
+    ``O_CREAT | O_EXCL`` file creation, no ``fcntl``/``msvcrt`` needed) but,
+    unlike that helper, never raises on timeout -- concurrent cache renders
+    fall back to proceeding without the lock rather than failing the SLS
+    render outright.
+    """
+    try:
+        with wait_lock(path, lock_fn=path, timeout=timeout):
+            yield
+    except FileLockError:
+        log.warning("kube_bench_cache: lock timeout after %ss -- proceeding without lock", timeout)
+        yield
