@@ -89,7 +89,7 @@ def test_parse_exit_code_message_not_an_integer():
 
 
 # ---------------------------------------------------------------------------
-# exec_() pre-flight pod existence check.
+# exec() pre-flight pod existence check.
 #
 # Works around a kubernetes-client 36.0.0 regression: the websocket-upgrade
 # path used by exec returns ApiException with ``e.body=None`` on 404, and
@@ -121,7 +121,7 @@ def test_exec_pre_flight_translates_404_to_command_execution_error(monkeypatch):
     monkeypatch.setattr(kubernetesmod, "_cleanup", lambda **_: None)
 
     with pytest.raises(CommandExecutionError, match="Pod missing not found in default"):
-        kubernetesmod.exec_(name="missing", command="true", namespace="default")
+        kubernetesmod.exec(name="missing", command="true", namespace="default")
     # The websocket upgrade path was never invoked because the pre-flight
     # raised first — that's the entire point of the pre-flight.
     fake_api.connect_get_namespaced_pod_exec.assert_not_called()
@@ -143,5 +143,5 @@ def test_exec_pre_flight_non_404_propagates_as_command_execution_error(monkeypat
     monkeypatch.setattr(kubernetesmod, "_cleanup", lambda **_: None)
 
     with pytest.raises(CommandExecutionError):
-        kubernetesmod.exec_(name="x", command="true", namespace="default")
+        kubernetesmod.exec(name="x", command="true", namespace="default")
     fake_api.connect_get_namespaced_pod_exec.assert_not_called()

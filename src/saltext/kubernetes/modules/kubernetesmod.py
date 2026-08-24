@@ -236,11 +236,6 @@ log = logging.getLogger(__name__)
 
 __virtualname__ = "kubernetes"
 
-# ``exec`` is a Python builtin so the function is named ``exec_`` to avoid
-# shadowing it. This alias exposes it as ``kubernetes.exec`` on the Salt CLI
-# and in __salt__ dicts, which is the natural name users expect.
-__func_alias__ = {"exec_": "exec"}
-
 
 def __virtual__():
     """
@@ -9889,7 +9884,7 @@ def _parse_exit_code_from_error_channel(error_payload):
     return 1
 
 
-def exec_(
+def exec(
     name,
     command,
     namespace="default",
@@ -9908,6 +9903,15 @@ def exec_(
     wall-clock ``timeout`` elapses before the command exits, ``retcode``
     is ``-1`` and ``stderr`` contains a "timed out" sentinel; whatever
     was already buffered on stdout/stderr is returned.
+
+    .. versionchanged:: 3.0.0
+
+    Renamed from ``exec_`` to ``exec``. This changes the
+    Salt-facing name as well: what was previously called as
+    ``salt '*' kubernetes.exec_`` (and appeared as
+    ``kubernetes.exec_`` in ``sys.list_functions``) is now
+    ``salt '*' kubernetes.exec``. Update ``__salt__`` lookups,
+    CLI invocations, and states accordingly.
 
     name
         Pod name.
