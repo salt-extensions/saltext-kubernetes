@@ -10062,6 +10062,9 @@ def logs(
 
     .. versionadded:: 2.1.0
 
+    .. versionchanged:: 3.0.0
+        <Insert description of change here>
+
     Returns the log text as a single string.
 
     name
