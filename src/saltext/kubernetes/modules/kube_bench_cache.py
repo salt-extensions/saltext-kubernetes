@@ -1,6 +1,8 @@
 """
 Execution module: kube_bench_cache
 
+.. versionadded:: 3.0.0
+
 Collect kube-bench results and write a validated JSON array to a minion-local
 cache file.  Every control SLS calls ``kube_bench_cache.ensure_fresh`` at Jinja
 render time before reading the cache.
