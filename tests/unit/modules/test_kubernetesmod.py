@@ -328,6 +328,24 @@ def test_pod_with_invalid_spec(invalid_spec, expected_error):
         func(invalid_spec)
 
 
+def test_dict_to_pod_spec_maps_host_ipc_and_host_pid():
+    """
+    hostIPC/hostPID must translate to host_ipc/host_pid via the explicit
+    field map -- the generic camel->snake fallback splits the acronym
+    letter-by-letter (hostIPC -> host_i_p_c) and V1PodSpec rejects that
+    keyword outright.
+    """
+    func = getattr(kubernetes, "__dict_to_pod_spec")
+    spec = {
+        "containers": [{"name": "bench", "image": "kube-bench:latest"}],
+        "hostIPC": True,
+        "hostPID": True,
+    }
+    result = func(spec)
+    assert result.host_ipc is True
+    assert result.host_pid is True
+
+
 def test_deployments_handles_api_exception(mock_api):
     """
     Test that deployments() handles ApiException properly
@@ -1513,3 +1531,43 @@ def test_read_and_render_yaml_unknown_template():
                     )
     finally:
         os.unlink(tmpfile)
+
+
+def test_logs_decodes_preloaded_response(mock_api):
+    """
+    logs() must read the raw response body itself (``_preload_content=False``)
+    rather than relying on the client's default deserialization, which
+    corrupts JSON-shaped log bodies via a str()-via-json.loads() round-trip.
+    """
+    resp = Mock()
+    resp.data = b'{"json": "content"}'
+    mock_api.client.CoreV1Api().read_namespaced_pod_log.return_value = resp
+
+    result = kubernetes.logs("mypod", namespace="default", tail_lines=50)
+
+    assert result == '{"json": "content"}'
+    call_kwargs = mock_api.client.CoreV1Api().read_namespaced_pod_log.call_args.kwargs
+    assert call_kwargs["_preload_content"] is False
+    assert call_kwargs["name"] == "mypod"
+    assert call_kwargs["namespace"] == "default"
+    assert call_kwargs["tail_lines"] == 50
+
+
+def test_logs_pod_not_found(mock_api):
+    """A 404 from the API surfaces as a clear, pod-specific error message."""
+    mock_api.client.CoreV1Api().read_namespaced_pod_log.side_effect = ApiException(
+        status=404, reason="Not Found"
+    )
+
+    with pytest.raises(CommandExecutionError, match="not found"):
+        kubernetes.logs("missing-pod", namespace="default")
+
+
+def test_logs_wraps_other_api_exceptions(mock_api):
+    """Non-404 ApiExceptions are wrapped in CommandExecutionError, not swallowed."""
+    mock_api.client.CoreV1Api().read_namespaced_pod_log.side_effect = ApiException(
+        status=500, reason="Internal Server Error"
+    )
+
+    with pytest.raises(CommandExecutionError):
+        kubernetes.logs("mypod", namespace="default")
