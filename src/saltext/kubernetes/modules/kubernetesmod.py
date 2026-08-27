@@ -10063,7 +10063,10 @@ def logs(
     .. versionadded:: 2.1.0
 
     .. versionchanged:: 3.0.0
-        <Insert description of change here>
+        Log bodies are now read with ``_preload_content=False`` and decoded
+        directly, instead of going through the kubernetes-client's default
+        ``str()``-via-``json.loads()`` round-trip. This prevents JSON-shaped
+        log lines (e.g. structured application logs) from being corrupted.
 
     Returns the log text as a single string.
 

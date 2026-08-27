@@ -277,6 +277,83 @@ def test_in_cluster_below_explicit_credentials(fake_config):
     mock_k8s.config.load_incluster_config.assert_not_called()
 
 
+# ---------------------------------------------------------------------------
+# In-cluster bearer token casing normalization
+#
+# Some kubernetes-client versions' load_incluster_config() populate a
+# lowercase "bearer " prefix on the Authorization header. The apiserver
+# treats an unrecognized auth scheme as "no credentials of this kind"
+# rather than an auth error, so this silently falls through to
+# system:anonymous instead of failing loudly.
+# ---------------------------------------------------------------------------
+
+
+class _FakeConfiguration:
+    """Minimal stand-in for the auth-relevant attrs of a real Configuration."""
+
+    def __init__(self, api_key=None, api_key_prefix=None):
+        self.api_key = api_key
+        self.api_key_prefix = api_key_prefix
+
+
+def test_normalize_bearer_token_fixes_lowercase_prefix():
+    """A lowercase ``bearer `` prefix is rewritten to the RFC 6750 casing."""
+    config = _FakeConfiguration(api_key={"authorization": "bearer sometoken"})
+    _connection._normalize_bearer_token(config)
+    assert config.api_key["authorization"] == "Bearer sometoken"
+    assert config.api_key["BearerToken"] == "sometoken"
+    assert config.api_key_prefix["BearerToken"] == "Bearer"
+
+
+def test_normalize_bearer_token_leaves_correct_prefix_equivalent():
+    """An already-correct ``Bearer `` prefix round-trips to the same token."""
+    config = _FakeConfiguration(api_key={"authorization": "Bearer sometoken"})
+    _connection._normalize_bearer_token(config)
+    assert config.api_key["authorization"] == "Bearer sometoken"
+    assert config.api_key["BearerToken"] == "sometoken"
+
+
+def test_normalize_bearer_token_falls_back_to_bearertoken_field():
+    """Re-derives the token from ``BearerToken`` when ``authorization`` is absent."""
+    config = _FakeConfiguration(api_key={"BearerToken": "sometoken"})
+    _connection._normalize_bearer_token(config)
+    assert config.api_key["authorization"] == "Bearer sometoken"
+    assert config.api_key_prefix["BearerToken"] == "Bearer"
+
+
+def test_normalize_bearer_token_noop_without_any_token():
+    """No token anywhere in ``api_key``: leaves the Configuration untouched."""
+    config = _FakeConfiguration(api_key={})
+    _connection._normalize_bearer_token(config)
+    assert config.api_key == {}
+    assert config.api_key_prefix is None
+
+
+def test_normalize_bearer_token_noop_when_api_key_is_none():
+    """``api_key`` still at its ``None`` default: no AttributeError, no-op."""
+    config = _FakeConfiguration(api_key=None)
+    _connection._normalize_bearer_token(config)
+    assert config.api_key_prefix is None
+
+
+def test_resolve_in_cluster_normalizes_token_end_to_end(fake_config):
+    """``_resolve_in_cluster`` applies the casing fix after loading the config."""
+    with patch.object(_connection, "kubernetes") as mock_k8s:
+        config_obj = mock_k8s.client.Configuration.return_value
+        config_obj.api_key_prefix = None
+
+        def _fake_load_incluster_config(client_configuration=None):
+            client_configuration.api_key = {"authorization": "bearer tok"}
+
+        mock_k8s.config.load_incluster_config.side_effect = _fake_load_incluster_config
+        cfg = _connection._resolve_in_cluster(fake_config, env={}, kwargs={})
+
+    assert cfg == {"in_cluster": True}
+    assert config_obj.api_key["authorization"] == "Bearer tok"
+    assert config_obj.api_key["BearerToken"] == "tok"
+    assert config_obj.api_key_prefix["BearerToken"] == "Bearer"
+
+
 def test_coerce_bool_handles_strings():
     """``_coerce_bool`` handles env-var truthy/falsy strings."""
     for v in ("true", "TRUE", "1", "yes", "on"):
