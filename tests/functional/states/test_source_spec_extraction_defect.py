@@ -16,9 +16,7 @@ pytestmark = [
 
 @pytest.fixture
 def kubernetes(states):
-    """
-    Return kubernetes state module
-    """
+    """Return the kubernetes state module."""
     return states.kubernetes
 
 
