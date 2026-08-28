@@ -12076,6 +12076,13 @@ def __dict_to_deployment_spec(spec):
         except (TypeError, ValueError) as exc:
             raise CommandExecutionError(f"replicas must be an integer: {exc}") from exc
 
+    # Normalise the remaining camelCase keys (revisionHistoryLimit,
+    # progressDeadlineSeconds, minReadySeconds, ...) to snake_case so they
+    # survive the V1DeploymentSpec constructor, matching what
+    # __dict_to_statefulset_spec already does. Selector + template are typed
+    # objects by this point and pass through unchanged.
+    processed_spec = _normalise_field_map(processed_spec)
+
     # Create final spec
     try:
         return V1DeploymentSpec(**processed_spec)
