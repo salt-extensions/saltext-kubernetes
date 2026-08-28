@@ -12293,8 +12293,13 @@ def __dict_to_service_spec(spec):
                                     raise CommandExecutionError(
                                         f"Invalid {port_key} value at index {i}: {exc}"
                                     ) from exc
-                            if hasattr(kube_port, port_key):
-                                setattr(kube_port, port_key, port_value)
+                            # V1ServicePort attributes are snake_case, so the
+                            # camelCase keys a Kubernetes manifest actually uses
+                            # (targetPort, nodePort, appProtocol) have to be
+                            # translated or they are silently dropped.
+                            port_attr = _camel_to_snake(port_key)
+                            if hasattr(kube_port, port_attr):
+                                setattr(kube_port, port_attr, port_value)
 
                 spec_obj.ports.append(kube_port)
 
