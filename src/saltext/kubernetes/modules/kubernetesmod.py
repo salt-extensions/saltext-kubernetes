@@ -4658,6 +4658,22 @@ def show_service_account(name, namespace="default", **kwargs):
 # --- create -----------------------------------------------------------------
 
 
+# Kinds whose manifest carries its fields at the top level rather than under
+# ``spec:`` -- RBAC ``rules``/``subjects``/``roleRef``, ServiceAccount
+# ``imagePullSecrets``, PriorityClass ``value``/``description``. Everything else
+# nests them under ``spec:`` like a normal Kubernetes object.
+_TOP_LEVEL_FIELD_KINDS = frozenset(
+    {
+        "Role",
+        "ClusterRole",
+        "RoleBinding",
+        "ClusterRoleBinding",
+        "ServiceAccount",
+        "PriorityClass",
+    }
+)
+
+
 def _resolve_rbac_source(source, kind, template, saltenv, template_context, metadata, spec):
     """
     Shared source-file loading for RBAC create/replace/patch.
@@ -4671,11 +4687,14 @@ def _resolve_rbac_source(source, kind, template, saltenv, template_context, meta
     if "metadata" in src_obj:
         metadata = src_obj["metadata"]
     if spec is None:
-        spec = {
-            key: value
-            for key, value in src_obj.items()
-            if key not in ("apiVersion", "kind", "metadata")
-        }
+        if kind in _TOP_LEVEL_FIELD_KINDS:
+            spec = {
+                key: value
+                for key, value in src_obj.items()
+                if key not in ("apiVersion", "kind", "metadata")
+            }
+        else:
+            spec = src_obj.get("spec") or {}
     return metadata, spec
 
 
