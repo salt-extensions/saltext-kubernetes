@@ -919,6 +919,30 @@ def pod_disruption_budget(kubernetes_exe, pod_disruption_budget_spec, request):
         assert kubernetes_exe.show_pod_disruption_budget(name=name, namespace="default") is None
 
 
+@pytest.fixture
+def network_policy_spec():
+    return {
+        "podSelector": {"matchLabels": {"app": "guarded"}},
+        "policyTypes": ["Ingress"],
+    }
+
+
+@pytest.fixture(params=[True])
+def network_policy(kubernetes_exe, network_policy_spec, request):
+    name = random_string("netpol-", uppercase=False)
+    if request.param:
+        res = kubernetes_exe.create_network_policy(
+            name=name, namespace="default", spec=network_policy_spec
+        )
+        assert isinstance(res, dict)
+        assert res["metadata"]["name"] == name
+    try:
+        yield {"name": name, "namespace": "default", "spec": network_policy_spec}
+    finally:
+        kubernetes_exe.delete_network_policy(name=name, namespace="default")
+        assert kubernetes_exe.show_network_policy(name=name, namespace="default") is None
+
+
 # ---------------------------------------------------------------------------
 # Persistent-volume fixtures.
 #
