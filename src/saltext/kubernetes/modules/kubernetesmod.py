@@ -12290,8 +12290,10 @@ def __dict_to_service_spec(spec):
 
                 spec_obj.ports.append(kube_port)
 
-        elif hasattr(spec_obj, key):
-            setattr(spec_obj, key, value)
+        else:
+            spec_key = key if hasattr(spec_obj, key) else _camel_to_snake(key)
+            if hasattr(spec_obj, spec_key):
+                setattr(spec_obj, spec_key, value)
 
     return spec_obj
 
