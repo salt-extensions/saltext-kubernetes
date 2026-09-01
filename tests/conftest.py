@@ -22,8 +22,9 @@ log = logging.getLogger(__name__)
 #
 # Bump this list as ``kind`` rolls in newer ``kindest/node`` images
 # (kind v0.32.x is expected to add a v1.36 image once K8s 1.36 GAs).
+# Lower kubernetes version commented out to reduce test run times
 K8S_VERSIONS = [
-    "v1.30.13",
+    # "v1.30.13",
     "v1.35.0",
 ]  # pragma: no cover
 

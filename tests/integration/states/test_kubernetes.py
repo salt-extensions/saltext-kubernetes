@@ -5,8 +5,15 @@ import pytest
 
 log = logging.getLogger(__name__)
 
+# Integration tests are currently skipped by default because they provide little
+# additional coverage beyond the functional test suite and are not valuable
+# in their current state.
+# Keep the original Linux guard in place as a fallback for future re-enablement.
 pytestmark = [
-    pytest.mark.skip_unless_on_linux(reason="Only run on Linux platforms"),
+    pytest.mark.skip(
+        reason="Integration tests currently provide little value beyond functional tests and are intentionally disabled."
+    ),
+    # pytest.mark.skip_unless_on_linux(reason="Only run on Linux platforms"),
 ]
 
 

@@ -30,7 +30,9 @@ def testmode(request):
 @pytest.mark.parametrize("persistent_volume", [False], indirect=True)
 def test_persistent_volume_present(kubernetes, persistent_volume, testmode, kubernetes_exe):
     pv = persistent_volume
-    ret = kubernetes.persistent_volume_present(name=pv["name"], spec=pv["spec"], test=testmode)
+    ret = kubernetes.persistent_volume_present(
+        name=pv["name"], spec=pv["spec"], test=testmode, wait=True
+    )
     assert ret.result in (None, True)
     if not testmode:
         assert kubernetes_exe.show_persistent_volume(name=pv["name"]) is not None
@@ -38,14 +40,16 @@ def test_persistent_volume_present(kubernetes, persistent_volume, testmode, kube
 
 def test_persistent_volume_present_idempotency(kubernetes, persistent_volume, testmode):
     pv = persistent_volume
-    ret = kubernetes.persistent_volume_present(name=pv["name"], spec=pv["spec"], test=testmode)
+    ret = kubernetes.persistent_volume_present(
+        name=pv["name"], spec=pv["spec"], test=testmode, wait=True
+    )
     assert ret.result is True
     assert not ret.changes
 
 
 def test_persistent_volume_absent(kubernetes, persistent_volume, testmode, kubernetes_exe):
     pv = persistent_volume
-    ret = kubernetes.persistent_volume_absent(name=pv["name"], test=testmode)
+    ret = kubernetes.persistent_volume_absent(name=pv["name"], test=testmode, wait=True)
     assert ret.result in (None, True)
     if not testmode:
         assert kubernetes_exe.show_persistent_volume(name=pv["name"]) is None
@@ -54,7 +58,7 @@ def test_persistent_volume_absent(kubernetes, persistent_volume, testmode, kuber
 @pytest.mark.parametrize("persistent_volume", [False], indirect=True)
 def test_persistent_volume_absent_idempotency(kubernetes, persistent_volume, testmode):
     pv = persistent_volume
-    ret = kubernetes.persistent_volume_absent(name=pv["name"], test=testmode)
+    ret = kubernetes.persistent_volume_absent(name=pv["name"], test=testmode, wait=True)
     assert ret.result is True
     assert not ret.changes
 
@@ -70,7 +74,7 @@ def test_persistent_volume_claim_present(
 ):
     pvc = persistent_volume_claim
     ret = kubernetes.persistent_volume_claim_present(
-        name=pvc["name"], namespace=pvc["namespace"], spec=pvc["spec"], test=testmode
+        name=pvc["name"], namespace=pvc["namespace"], spec=pvc["spec"], test=testmode, wait=True
     )
     assert ret.result in (None, True)
     if not testmode:
@@ -85,7 +89,7 @@ def test_persistent_volume_claim_present(
 def test_persistent_volume_claim_present_idempotency(kubernetes, persistent_volume_claim, testmode):
     pvc = persistent_volume_claim
     ret = kubernetes.persistent_volume_claim_present(
-        name=pvc["name"], namespace=pvc["namespace"], spec=pvc["spec"], test=testmode
+        name=pvc["name"], namespace=pvc["namespace"], spec=pvc["spec"], test=testmode, wait=True
     )
     assert ret.result is True
     assert not ret.changes
@@ -96,7 +100,7 @@ def test_persistent_volume_claim_absent(
 ):
     pvc = persistent_volume_claim
     ret = kubernetes.persistent_volume_claim_absent(
-        name=pvc["name"], namespace=pvc["namespace"], test=testmode
+        name=pvc["name"], namespace=pvc["namespace"], test=testmode, wait=True
     )
     assert ret.result in (None, True)
     if not testmode:
