@@ -4,6 +4,18 @@ This project uses [Semantic Versioning](https://semver.org/) - MAJOR.MINOR.PATCH
 
 # Changelog
 
+## 3.0.0 (2026-09-01)
+
+
+### Breaking changes
+
+- The Kubernetes pod-exec function is now named `kubernetes.exec` instead of `kubernetes.exec_`. If you call `salt '*' kubernetes.exec_ ...`, use `__salt__['kubernetes.exec_']`, or reference `kubernetes.exec_` in states or the `kuberesource_cmd` companion module, update those call sites to `kubernetes.exec` (without the trailing underscore) — the old name no longer exists. This has always been the name documented in the module's docstrings and CLI examples; the rename brings the actual function in line with that documentation.
+
+
+### Fixed
+
+- Fixed spec resolution when creating or updating spec-based resources (such as `Ingress`, `HorizontalPodAutoscaler`, `PodDisruptionBudget`, `NetworkPolicy`, `ResourceQuota`, `LimitRange`, `CustomResourceDefinition`, `PersistentVolume`, and `PersistentVolumeClaim`) from `source` manifest files. Previously, the manifest's top-level `spec` dictionary was passed intact rather than extracting its inner specification fields. [#46](https://github.com/salt-extensions/saltext-kubernetes/issues/46)
+
 ## 2.1.0 (2026-05-22)
 
 
