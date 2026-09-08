@@ -152,6 +152,24 @@ def test_enforce_only_strings_dict():
     assert func(data) == {"unicode": "1", "2": "2"}
 
 
+def test_service_spec_preserves_kubernetes_field_names():
+    """Service specs accept Kubernetes wire names and Python attribute names."""
+    func = getattr(kubernetes, "__dict_to_service_spec")
+
+    spec = func(
+        {
+            "clusterIP": "None",
+            "externalTrafficPolicy": "Local",
+            "session_affinity": "ClientIP",
+            "ports": [{"port": 8080}],
+        }
+    )
+
+    assert spec.cluster_ip == "None"
+    assert spec.external_traffic_policy == "Local"
+    assert spec.session_affinity == "ClientIP"
+
+
 @pytest.mark.parametrize(
     "invalid_spec,expected_error",
     [

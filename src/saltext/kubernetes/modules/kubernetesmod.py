@@ -12219,6 +12219,7 @@ def __dict_to_service_spec(spec):
         )
 
     spec_obj = kubernetes.client.V1ServiceSpec()
+    wire_to_attr = {wire_name: attr_name for attr_name, wire_name in spec_obj.attribute_map.items()}
     for key, value in spec.items():
         if key == "ports":
             spec_obj.ports = []
@@ -12291,7 +12292,8 @@ def __dict_to_service_spec(spec):
                 spec_obj.ports.append(kube_port)
 
         else:
-            spec_key = key if hasattr(spec_obj, key) else _camel_to_snake(key)
+            spec_key = key if hasattr(spec_obj, key) else wire_to_attr.get(key)
+            spec_key = spec_key or _camel_to_snake(key)
             if hasattr(spec_obj, spec_key):
                 setattr(spec_obj, spec_key, value)
 
