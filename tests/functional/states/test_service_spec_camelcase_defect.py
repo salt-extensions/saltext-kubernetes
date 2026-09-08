@@ -1,38 +1,24 @@
-"""Regression test for top-level Service spec keys being silently dropped.
+"""Verify Service states preserve Kubernetes-style spec fields.
 
-DEFECT
-------
-``__dict_to_service_spec`` copies every spec key other than ``ports`` like
-this::
-
-    elif hasattr(spec_obj, key):
-        setattr(spec_obj, key, value)
-
-``V1ServiceSpec`` exposes snake_case attributes (``cluster_ip``,
-``session_affinity``, ``external_traffic_policy``, ...), so
-``hasattr(spec_obj, "clusterIP")`` is ``False`` and the value is discarded --
-the same class of bug as the ``targetPort``/``nodePort`` drop inside the ports
-loop (fixed separately), just one level up.
-
-IMPACT
-------
-Any manifest written in the documented camelCase spelling silently loses
-spec-level fields. The sharpest case is a headless Service: ``clusterIP: None``
-is the field that makes a Service headless (required for StatefulSet pod DNS).
-Dropping it produces an ordinary ClusterIP Service instead -- the resource is
-created successfully and looks plausible, but StatefulSet pod-level DNS
-resolution breaks.
-
-FIX
----
-Try the key as-is first (covers already-snake_case callers), then fall back to
-``_camel_to_snake(key)``, before the ``hasattr``/``setattr`` pair -- mirroring
-the fix already applied to the ports loop.
+These tests cover direct and source-based Service definitions, including
+acronym-bearing camelCase fields such as ``clusterIP`` and ordinary camelCase
+fields such as ``externalTrafficPolicy``. They also verify that a headless
+Service created from a source manifest converges after its first application.
 """
 
 from textwrap import dedent
 
 import pytest
+
+pytestmark = [
+    pytest.mark.skip_unless_on_linux(reason="Only run on Linux platforms"),
+]
+
+
+@pytest.fixture
+def kubernetes(states):
+    """Return the Kubernetes state module."""
+    return states.kubernetes
 
 
 @pytest.mark.parametrize("service", [False], indirect=True)
@@ -78,7 +64,7 @@ def test_service_present_preserves_external_traffic_policy(kubernetes, service, 
 def test_headless_service_from_source_is_idempotent(
     kubernetes, service, state_tree, kubernetes_exe
 ):
-    """A dropped clusterIP also means the state can never converge."""
+    """A headless Service created from a source manifest must converge."""
     sls = "k8s/service-headless-clusterip"
     contents = dedent(f"""
         apiVersion: v1

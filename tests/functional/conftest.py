@@ -477,6 +477,24 @@ def service(kubernetes_exe, service_spec, request):
         assert kubernetes_exe.show_service(name=name, namespace=namespace) is None
 
 
+@pytest.fixture
+def service_spec(request):
+    """Return a Service specification for the requested Service type."""
+    service_type = getattr(request, "param", "ClusterIP")
+
+    if service_type == "ClusterIP":
+        return {"ports": [{"port": 80}], "selector": {"app": "nginx"}, "type": service_type}
+    if service_type == "NodePort":
+        return {
+            "ports": [{"port": 80, "nodePort": 30080}],
+            "selector": {"app": "nginx"},
+            "type": service_type,
+        }
+    if service_type == "LoadBalancer":
+        return {"ports": [{"port": 80}], "selector": {"app": "nginx"}, "type": service_type}
+    raise ValueError(f"Unknown service type: {service_type}")
+
+
 @pytest.fixture(params=[True])
 def configmap(kubernetes_exe, configmap_data, request):
     """

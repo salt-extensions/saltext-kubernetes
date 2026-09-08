@@ -1550,26 +1550,6 @@ def test_delete_nonexistent_storageclass(kubernetes, storageclass):
     assert res is None
 
 
-@pytest.fixture
-def service_spec(request):
-    """
-    Fixture providing service data based on type
-    """
-    typ = getattr(request, "param", "ClusterIP")
-
-    if typ == "ClusterIP":
-        return {"ports": [{"port": 80}], "selector": {"app": "nginx"}, "type": "ClusterIP"}
-    if typ == "NodePort":
-        return {
-            "ports": [{"port": 80, "nodePort": 30080}],
-            "selector": {"app": "nginx"},
-            "type": "NodePort",
-        }
-    if typ == "LoadBalancer":
-        return {"ports": [{"port": 80}], "selector": {"app": "nginx"}, "type": "LoadBalancer"}
-    raise ValueError(f"Unknown service type: {typ}")
-
-
 def test_services(kubernetes, service):
     """
     Test that the services function returns a list of services in the specified namespace

@@ -1,21 +1,8 @@
-"""Regression tests for sourced manifests of spec-based kinds.
+"""Verify source manifests use each Kubernetes kind's expected field layout.
 
-DEFECT
-------
-``_resolve_rbac_source`` (``modules/kubernetesmod.py``) derived the object spec
-from every top-level key except ``apiVersion``/``kind``/``metadata``::
-
-    spec = {k: v for k, v in src_obj.items()
-            if k not in ("apiVersion", "kind", "metadata")}
-
-That is correct for the RBAC kinds it was written for, whose fields genuinely sit
-at the top level (``rules`` for Role/ClusterRole, ``subjects``/``roleRef`` for the
-bindings), and for ServiceAccount and PriorityClass.
-
-It is wrong for every kind that nests its fields under ``spec:``. For those, a
-normal Kubernetes manifest yields ``{"spec": {...}}`` -- a dict whose only key is
-``spec`` -- instead of the spec contents, so the typed ``__dict_to_*_spec``
-validator sees none of the fields it requires.
+Spec-based resources such as PersistentVolumeClaim and NetworkPolicy extract
+their fields from the manifest's nested ``spec`` mapping. RBAC resources retain
+their native top-level fields, such as ``rules`` on a Role.
 """
 
 from textwrap import dedent
@@ -80,7 +67,7 @@ def test_persistent_volume_claim_present_from_source_manifest(
 def test_network_policy_present_from_source_manifest(
     kubernetes, network_policy, state_tree, kubernetes_exe
 ):
-    """The same defect, on a second spec-based kind."""
+    """A NetworkPolicy source manifest reads fields from its nested spec."""
     sls = "k8s/netpol-source"
     contents = dedent(f"""
         apiVersion: networking.k8s.io/v1
@@ -114,7 +101,7 @@ def test_network_policy_present_from_source_manifest(
 def test_role_present_from_source_manifest_still_works(
     kubernetes, role, state_tree, kubernetes_exe
 ):
-    """Guards the other half of the fix: RBAC kinds keep top-level extraction."""
+    """A Role source manifest retains its top-level RBAC fields."""
     sls = "k8s/role-source"
     contents = dedent(f"""
         apiVersion: rbac.authorization.k8s.io/v1
