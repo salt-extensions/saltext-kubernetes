@@ -3370,33 +3370,39 @@ def manifest_present(
     }
 
     try:
-        if __opts__["test"]:
-            # Real change-detection: run a server-side dry-run apply for
-            # every doc, fetch the current live object, and diff them
-            # against each other (stripping server-set metadata). If
-            # nothing would change, we report ``result=True`` so callers
-            # can rely on state-runs for idempotency. Without this, every
-            # ``test=True`` invocation would always claim a pending
-            # change — defeating the point of idempotency checks.
+        # Use the API server's dry-run result as the desired object, including
+        # defaults and admission changes, before deciding whether to mutate.
+        try:
             applied = __salt__["kubernetes.apply"](dry_run=True, **apply_kwargs, **kwargs)
-            applied_list = applied if isinstance(applied, list) else [applied]
-            changes = {}
-            for desired in applied_list:
-                live = __salt__["kubernetes.get_object"](
-                    api_version=desired.get("apiVersion"),
-                    kind=desired.get("kind"),
-                    name=(desired.get("metadata") or {}).get("name"),
-                    namespace=(desired.get("metadata") or {}).get("namespace"),
-                )
-                obj_key = _manifest_key(desired)
-                if live is None:
-                    changes[obj_key] = {"old": None, "new": "would create"}
-                elif _strip_server_metadata(desired) != _strip_server_metadata(live):
-                    changes[obj_key] = {"old": "present", "new": "would update"}
-            if not changes:
-                ret["result"] = True
-                ret["comment"] = "Manifests already match desired state"
-                return ret
+        except CommandExecutionError:
+            if __opts__["test"]:
+                raise
+            res = __salt__["kubernetes.apply"](**apply_kwargs, **kwargs)
+            ret["result"] = True
+            ret["comment"] = "Manifests applied via server-side apply"
+            ret["changes"] = {"applied": res}
+            return ret
+        applied_list = applied if isinstance(applied, list) else [applied]
+        changes = {}
+        for desired in applied_list:
+            live = __salt__["kubernetes.get_object"](
+                api_version=desired.get("apiVersion"),
+                kind=desired.get("kind"),
+                name=(desired.get("metadata") or {}).get("name"),
+                namespace=(desired.get("metadata") or {}).get("namespace"),
+            )
+            obj_key = _manifest_key(desired)
+            if live is None:
+                changes[obj_key] = {"old": None, "new": "would create"}
+            elif _strip_server_metadata(desired) != _strip_server_metadata(live):
+                changes[obj_key] = {"old": "present", "new": "would update"}
+
+        if not changes:
+            ret["result"] = True
+            ret["comment"] = "Manifests already match desired state"
+            return ret
+
+        if __opts__["test"]:
             ret["result"] = None
             ret["comment"] = "Manifests would be applied (server-side dry run)"
             ret["changes"] = changes

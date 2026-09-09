@@ -59,8 +59,86 @@ def test_manifest_present_idempotency(kubernetes, cm_manifest, testmode, kuberne
         ret = kubernetes.manifest_present(name="apply-inline", manifest=doc, test=testmode)
         # Server-side apply on an unchanged manifest is a no-op.
         assert ret.result is True
+        assert not ret.changes
     finally:
         kubernetes_exe.delete_configmap(name=name, namespace="default", wait=True)
+
+
+@pytest.mark.parametrize(
+    "kind,api_version,spec",
+    [
+        (
+            "Service",
+            "v1",
+            {"selector": {"app": "manifest-idempotency"}, "ports": [{"port": 80}]},
+        ),
+        (
+            "Deployment",
+            "apps/v1",
+            {
+                "replicas": 1,
+                "selector": {"matchLabels": {"app": "manifest-idempotency"}},
+                "template": {
+                    "metadata": {"labels": {"app": "manifest-idempotency"}},
+                    "spec": {
+                        "containers": [{"name": "pause", "image": "registry.k8s.io/pause:3.10"}]
+                    },
+                },
+            },
+        ),
+        (
+            "ReplicaSet",
+            "apps/v1",
+            {
+                "replicas": 1,
+                "selector": {"matchLabels": {"app": "manifest-idempotency"}},
+                "template": {
+                    "metadata": {"labels": {"app": "manifest-idempotency"}},
+                    "spec": {
+                        "containers": [{"name": "pause", "image": "registry.k8s.io/pause:3.10"}]
+                    },
+                },
+            },
+        ),
+        (
+            "StatefulSet",
+            "apps/v1",
+            {
+                "serviceName": "manifest-idempotency",
+                "replicas": 1,
+                "selector": {"matchLabels": {"app": "manifest-idempotency"}},
+                "template": {
+                    "metadata": {"labels": {"app": "manifest-idempotency"}},
+                    "spec": {
+                        "containers": [{"name": "pause", "image": "registry.k8s.io/pause:3.10"}]
+                    },
+                },
+            },
+        ),
+    ],
+)
+def test_manifest_present_live_run_is_idempotent(
+    kubernetes, kubernetes_exe, kind, api_version, spec
+):
+    """An unchanged live manifest reports no changes for typed resources."""
+    name = random_string(f"manifest-{kind.lower()}-", uppercase=False)
+    manifest = {
+        "apiVersion": api_version,
+        "kind": kind,
+        "metadata": {"name": name, "namespace": "default"},
+        "spec": spec,
+    }
+
+    try:
+        first = kubernetes.manifest_present(name=f"apply-{name}", manifest=manifest)
+        second = kubernetes.manifest_present(name=f"apply-{name}", manifest=manifest)
+
+        assert first.result is True
+        assert first.changes
+        assert second.result is True
+        assert not second.changes
+    finally:
+        kubernetes_exe.delete_manifest(manifest=manifest)
 
 
 def test_manifest_absent_inline_dict(kubernetes, cm_manifest, testmode, kubernetes_exe):
@@ -156,3 +234,34 @@ def test_manifest_present_template_context(kubernetes, templated_source, kuberne
         assert live["data"]["env"] == "prod"
     finally:
         kubernetes_exe.delete_configmap(name=src["name"], namespace="default", wait=True)
+
+
+def test_manifest_present_source_is_idempotent(kubernetes, state_tree, kubernetes_exe):
+    """Reapplying an unchanged source manifest reports no changes."""
+    name = random_string("manifest-source-idempotent-", uppercase=False)
+    sls = "k8s/manifest-idempotent"
+    contents = dedent(f"""
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: {name}
+          namespace: default
+        data:
+          greeting: hello
+        """).strip()
+
+    try:
+        with pytest.helpers.temp_file(f"{sls}.yml", contents, state_tree):
+            first = kubernetes.manifest_present(
+                name="manifest-idempotent", source=f"salt://{sls}.yml"
+            )
+            second = kubernetes.manifest_present(
+                name="manifest-idempotent", source=f"salt://{sls}.yml"
+            )
+
+        assert first.result is True
+        assert first.changes
+        assert second.result is True
+        assert not second.changes
+    finally:
+        kubernetes_exe.delete_configmap(name=name, namespace="default", wait=True)

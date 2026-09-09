@@ -193,6 +193,27 @@ def test_cr_create_via_apply(kubernetes_exe, installed_crd):
         kubernetes_exe.delete_manifest(manifest=doc)
 
 
+def test_cr_manifest_present_is_idempotent(states, kubernetes_exe, installed_crd):
+    """An unchanged custom resource reports no changes on reapplication."""
+    name = random_string("widget-state-", uppercase=False)
+    doc = {
+        "apiVersion": f"{CRD_GROUP}/v1",
+        "kind": CRD_KIND,
+        "metadata": {"name": name, "namespace": "default"},
+        "spec": {"color": "green", "count": 2},
+    }
+    try:
+        first = states.kubernetes.manifest_present(name=f"apply-{name}", manifest=doc)
+        second = states.kubernetes.manifest_present(name=f"apply-{name}", manifest=doc)
+
+        assert first.result is True
+        assert first.changes
+        assert second.result is True
+        assert not second.changes
+    finally:
+        kubernetes_exe.delete_manifest(manifest=doc)
+
+
 def test_cr_patch_json_merge(kubernetes_exe, installed_crd):
     """``patch_object`` with ``patch_type='json-merge'`` updates a CR."""
     name = random_string("widget-merge-", uppercase=False)
