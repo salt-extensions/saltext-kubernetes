@@ -38,9 +38,7 @@ import pytest
 
 
 @pytest.mark.parametrize("deployment", [False], indirect=True)
-def test_deployment_present_accepts_camelcase_spec_fields(
-    kubernetes, deployment, kubernetes_exe
-):
+def test_deployment_present_accepts_camelcase_spec_fields(kubernetes, deployment, kubernetes_exe):
     """revisionHistoryLimit is valid manifest YAML and must be accepted."""
     ret = kubernetes.deployment_present(
         name=deployment["name"],
