@@ -1604,12 +1604,35 @@ def namespace_absent(name, wait=False, timeout=60, **kwargs):
     return ret
 
 
-def namespace_present(name, **kwargs):
+def namespace_present(
+    name,
+    metadata=None,
+    source="",
+    template="",
+    template_context=None,
+    **kwargs,
+):
     """
     Ensures that the named namespace is present.
 
+    .. versionchanged:: 3.0.0
+        Added metadata reconciliation and support for source manifests,
+        templates, and template context.
+
     name
         The name of the namespace.
+
+    metadata
+        Namespace metadata, including labels and annotations.
+
+    source
+        File containing a Namespace manifest.
+
+    template
+        Template engine used to render ``source``.
+
+    template_context
+        Variables made available when rendering ``source``.
 
     Example:
 
@@ -1621,22 +1644,72 @@ def namespace_present(name, **kwargs):
     """
     ret = {"name": name, "changes": {}, "result": False, "comment": ""}
 
+    if metadata and source:
+        return _error(ret, "'source' cannot be used in combination with 'metadata'")
+    if not source and metadata is None:
+        metadata = {}
+
     try:
         namespace = __salt__["kubernetes.show_namespace"](name, **kwargs)
 
         if namespace is None:
-            if __opts__["test"]:
+            if __opts__["test"] and not source and not metadata:
                 ret["result"] = None
                 ret["comment"] = "The namespace is going to be created"
                 ret["changes"] = {"old": {}, "new": {"metadata": {"name": name}}}
                 return ret
 
-            res = __salt__["kubernetes.create_namespace"](name, **kwargs)
-            ret["result"] = True
+            res = __salt__["kubernetes.create_namespace"](
+                name=name,
+                metadata=metadata,
+                source=source,
+                template=template,
+                saltenv=__env__,
+                template_context=template_context,
+                dry_run=bool(__opts__["test"]),
+                **kwargs,
+            )
             ret["changes"] = {"old": {}, "new": res}
+            if __opts__["test"]:
+                ret["result"] = None
+                ret["comment"] = "The namespace is going to be created"
+            else:
+                ret["result"] = True
+                ret["comment"] = "Namespace created"
         else:
-            ret["result"] = True
-            ret["comment"] = "The namespace already exists"
+            if not source and not metadata:
+                ret["result"] = True
+                ret["comment"] = "The namespace already exists"
+                return ret
+
+            if source:
+                patch_kwargs = {
+                    "source": source,
+                    "template": template,
+                    "template_context": template_context,
+                }
+            else:
+                patch_kwargs = {"patch": {"metadata": metadata}}
+
+            res = __salt__["kubernetes.patch_namespace"](
+                name=name,
+                saltenv=__env__,
+                dry_run=bool(__opts__["test"]),
+                **patch_kwargs,
+                **kwargs,
+            )
+            if _strip_server_metadata(res) == _strip_server_metadata(namespace):
+                ret["result"] = True
+                ret["comment"] = "The namespace is already in the desired state"
+                return ret
+
+            ret["changes"] = _changes(namespace, res)
+            if __opts__["test"]:
+                ret["result"] = None
+                ret["comment"] = "The namespace is going to be updated"
+            else:
+                ret["result"] = True
+                ret["comment"] = "Namespace updated"
 
     except CommandExecutionError as err:
         log.error(str(err), exc_info_on_loglevel=logging.DEBUG)

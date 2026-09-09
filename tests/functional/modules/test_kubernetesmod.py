@@ -1,4 +1,5 @@
 import logging
+from textwrap import dedent
 
 import pytest
 from salt.exceptions import CommandExecutionError
@@ -38,12 +39,106 @@ def test_create_namespace(kubernetes, namespace):
     assert res["metadata"]["name"] == namespace
 
 
+@pytest.mark.parametrize("namespace", [False], indirect=True)
+def test_create_namespace_with_metadata(kubernetes, namespace):
+    """Create a namespace with declared labels and annotations."""
+    metadata = {
+        "labels": {"team": "platform"},
+        "annotations": {"example.com/owner": "salt"},
+    }
+
+    res = kubernetes.create_namespace(namespace, metadata=metadata)
+
+    assert res["metadata"]["labels"]["team"] == "platform"
+    assert res["metadata"]["annotations"]["example.com/owner"] == "salt"
+
+
+@pytest.mark.parametrize("namespace", [False], indirect=True)
+def test_create_namespace_dry_run(kubernetes, namespace):
+    """Dry-run namespace creation validates without persisting."""
+    res = kubernetes.create_namespace(
+        namespace, metadata={"labels": {"team": "platform"}}, dry_run=True
+    )
+
+    assert res["metadata"]["labels"]["team"] == "platform"
+    assert kubernetes.show_namespace(namespace) is None
+
+
+@pytest.mark.parametrize("namespace", [False], indirect=True)
+def test_create_namespace_from_template(kubernetes, namespace, state_tree):
+    """Create a namespace from a templated source manifest."""
+    sls = "k8s/namespace-module-create"
+    contents = dedent("""
+        apiVersion: v1
+        kind: Namespace
+        metadata:
+          name: {{ name }}
+          labels:
+            team: {{ team }}
+        """).strip()
+
+    with pytest.helpers.temp_file(f"{sls}.yml.jinja", contents, state_tree):
+        res = kubernetes.create_namespace(
+            namespace,
+            source=f"salt://{sls}.yml.jinja",
+            template="jinja",
+            template_context={"name": namespace, "team": "platform"},
+        )
+
+    assert res["metadata"]["labels"]["team"] == "platform"
+
+
 def test_create_existing_namespace(kubernetes, namespace):
     """
     Test creating a namespace that already exists raises appropriate error
     """
     with pytest.raises(CommandExecutionError, match=".*already exists.*"):
         kubernetes.create_namespace(namespace)
+
+
+def test_patch_namespace_metadata(kubernetes, namespace):
+    """Patch namespace labels through the execution module."""
+    res = kubernetes.patch_namespace(
+        namespace, patch={"metadata": {"labels": {"stage": "production"}}}
+    )
+
+    assert res["metadata"]["labels"]["stage"] == "production"
+
+
+def test_patch_namespace_dry_run(kubernetes, namespace):
+    """Dry-run namespace patches validate without persisting metadata."""
+    res = kubernetes.patch_namespace(
+        namespace,
+        patch={"metadata": {"labels": {"stage": "preview"}}},
+        dry_run=True,
+    )
+
+    assert res["metadata"]["labels"]["stage"] == "preview"
+    live = kubernetes.show_namespace(namespace)
+    assert "stage" not in (live["metadata"].get("labels") or {})
+
+
+def test_patch_namespace_from_template(kubernetes, namespace, state_tree):
+    """Patch namespace metadata from a templated source manifest."""
+    sls = "k8s/namespace-module-patch"
+    contents = dedent("""
+        apiVersion: v1
+        kind: Namespace
+        metadata:
+          name: {{ name }}
+          labels:
+            source: {{ source }}
+        """).strip()
+
+    with pytest.helpers.temp_file(f"{sls}.yml.jinja", contents, state_tree):
+        res = kubernetes.patch_namespace(
+            namespace,
+            source=f"salt://{sls}.yml.jinja",
+            template="jinja",
+            template_context={"name": namespace, "source": "template"},
+        )
+
+    assert res["metadata"]["labels"]["source"] == "template"
 
 
 def test_delete_existing_namespace(kubernetes, namespace):

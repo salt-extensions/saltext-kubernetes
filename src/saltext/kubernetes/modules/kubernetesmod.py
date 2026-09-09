@@ -2304,12 +2304,43 @@ def create_configmap(
         _cleanup(**cfg)
 
 
-def create_namespace(name, **kwargs):
+def create_namespace(
+    name,
+    metadata=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    dry_run=False,
+    **kwargs,
+):
     """
     Creates a namespace with the specified name.
 
+    .. versionchanged:: 3.0.0
+        Added ``metadata``, ``source``, ``template``, ``saltenv``,
+        ``template_context``, and ``dry_run`` arguments.
+
     name
         The name of the namespace to create
+
+    metadata
+        Namespace metadata, including labels and annotations.
+
+    source
+        File path to a Namespace manifest.
+
+    template
+        Template engine used to render ``source``.
+
+    saltenv
+        Salt environment from which to resolve ``source``.
+
+    template_context
+        Variables made available when rendering ``source``.
+
+    dry_run
+        If True, validate creation without persisting the namespace.
 
     CLI Example:
 
@@ -2318,15 +2349,20 @@ def create_namespace(name, **kwargs):
         salt '*' kubernetes.create_namespace salt
         salt '*' kubernetes.create_namespace name=salt
     """
-    meta_obj = kubernetes.client.V1ObjectMeta(name=name)
+    if source:
+        rendered = __read_and_render_yaml_file(source, template, saltenv, template_context)
+        if not isinstance(rendered, dict) or rendered.get("kind") != "Namespace":
+            raise CommandExecutionError("The source file must define a Namespace")
+        metadata = rendered.get("metadata") or {}
+
+    meta_obj = __dict_to_object_meta(name, None, metadata)
     body = kubernetes.client.V1Namespace(metadata=meta_obj)
-    body.metadata.name = name
 
     cfg = _setup_conn(**kwargs)
 
     try:
         api_instance = kubernetes.client.CoreV1Api()
-        api_response = api_instance.create_namespace(body)
+        api_response = api_instance.create_namespace(body, dry_run="All" if dry_run else None)
         return ApiClient().sanitize_for_serialization(api_response)
     except ApiException as exc:
         if exc.status == 409:
@@ -2335,6 +2371,70 @@ def create_namespace(name, **kwargs):
             raise CommandExecutionError(f"Invalid namespace name {name}: {exc.reason}") from exc
         raise CommandExecutionError(exc) from exc
     except HTTPError as exc:
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def patch_namespace(
+    name,
+    patch=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    dry_run=False,
+    **kwargs,
+):
+    """Patch a namespace's metadata.
+
+    .. versionadded:: 3.0.0
+
+    name
+        Name of the namespace to patch.
+
+    patch
+        Patch dictionary, typically containing ``metadata``.
+
+    source
+        File path to a Namespace manifest used as the patch.
+
+    template
+        Template engine used to render ``source``.
+
+    saltenv
+        Salt environment from which to resolve ``source``.
+
+    template_context
+        Variables made available when rendering ``source``.
+
+    dry_run
+        If True, validate the patch without persisting it.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.patch_namespace name=my-namespace patch='{"metadata": {"labels": {"stage": "two"}}}'
+    """
+    if source:
+        patch = __read_and_render_yaml_file(source, template, saltenv, template_context)
+        if not isinstance(patch, dict) or patch.get("kind") != "Namespace":
+            raise CommandExecutionError("The source file must define a Namespace")
+    if not isinstance(patch, dict):
+        raise CommandExecutionError("Patch must be a dictionary")
+
+    cfg = _setup_conn(**kwargs)
+    try:
+        api_response = kubernetes.client.CoreV1Api().patch_namespace(
+            name, patch, dry_run="All" if dry_run else None
+        )
+        return ApiClient().sanitize_for_serialization(api_response)
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            raise CommandExecutionError(f"Namespace {name} not found") from exc
+        if isinstance(exc, ApiException) and exc.status == 409:
+            raise CommandExecutionError(f"Conflict when patching namespace {name}") from exc
         raise CommandExecutionError(exc) from exc
     finally:
         _cleanup(**cfg)
