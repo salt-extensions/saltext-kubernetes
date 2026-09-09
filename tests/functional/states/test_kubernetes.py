@@ -58,6 +58,31 @@ def test_namespace_present_idempotency(kubernetes, namespace, testmode):
     assert "already exists" in ret.comment
 
 
+@pytest.mark.parametrize("namespace", [False], indirect=True)
+def test_namespace_present_applies_metadata(kubernetes, namespace, kubernetes_exe):
+    """Namespace states apply declared labels."""
+    ret = kubernetes.namespace_present(
+        name=namespace,
+        metadata={"labels": {"pod-security.kubernetes.io/enforce": "restricted"}},
+    )
+
+    assert ret.result is True
+    namespace_state = kubernetes_exe.show_namespace(name=namespace)
+    labels = namespace_state["metadata"].get("labels") or {}
+    assert labels["pod-security.kubernetes.io/enforce"] == "restricted"
+
+
+def test_namespace_present_reconciles_metadata(kubernetes, namespace, kubernetes_exe):
+    """Namespace states patch metadata that differs from the declaration."""
+    kubernetes.namespace_present(name=namespace, metadata={"labels": {"stage": "one"}})
+    ret = kubernetes.namespace_present(name=namespace, metadata={"labels": {"stage": "two"}})
+
+    assert ret.result is True
+    assert ret.changes
+    namespace_state = kubernetes_exe.show_namespace(name=namespace)
+    assert (namespace_state["metadata"].get("labels") or {})["stage"] == "two"
+
+
 @pytest.fixture
 def namespace_template(state_tree):
     sls = "k8s/namespace-template"
@@ -98,6 +123,7 @@ def test_namespace_present_template_context(
     # Verify namespace is created
     namespace_state = kubernetes_exe.show_namespace(name=namespace)
     assert namespace_state["metadata"]["name"] == namespace
+    assert namespace_state["metadata"]["labels"]["app"] == "test"
 
 
 def test_namespace_absent(kubernetes, namespace, testmode, kubernetes_exe):

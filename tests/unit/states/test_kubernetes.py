@@ -324,6 +324,50 @@ def test_namespace_present__noop():
         }
 
 
+def test_namespace_present_creates_with_metadata():
+    created = make_namespace(name="saltstack")
+    created["metadata"]["labels"] = {"team": "platform"}
+    create_mock = MagicMock(return_value=created)
+    with patch.dict(
+        kubernetes.__salt__,
+        {
+            "kubernetes.show_namespace": MagicMock(return_value=None),
+            "kubernetes.create_namespace": create_mock,
+        },
+    ):
+        with patch.dict(kubernetes.__opts__, {"test": False}):
+            actual = kubernetes.namespace_present(
+                name="saltstack", metadata={"labels": {"team": "platform"}}
+            )
+
+    assert actual["result"] is True
+    assert actual["changes"] == {"old": {}, "new": created}
+    assert create_mock.call_args.kwargs["metadata"] == {"labels": {"team": "platform"}}
+
+
+def test_namespace_present_patches_metadata_drift():
+    existing = make_namespace(name="saltstack")
+    existing["metadata"]["labels"] = {"stage": "one"}
+    updated = make_namespace(name="saltstack")
+    updated["metadata"]["labels"] = {"stage": "two"}
+    patch_mock = MagicMock(return_value=updated)
+    with patch.dict(
+        kubernetes.__salt__,
+        {
+            "kubernetes.show_namespace": MagicMock(return_value=existing),
+            "kubernetes.patch_namespace": patch_mock,
+        },
+    ):
+        with patch.dict(kubernetes.__opts__, {"test": False}):
+            actual = kubernetes.namespace_present(
+                name="saltstack", metadata={"labels": {"stage": "two"}}
+            )
+
+    assert actual["result"] is True
+    assert actual["changes"]
+    assert patch_mock.call_args.kwargs["patch"] == {"metadata": {"labels": {"stage": "two"}}}
+
+
 def test_namespace_absent__noop_test_true():
     with mock_func("show_namespace", return_value=None, test=True):
         actual = kubernetes.namespace_absent(name="salt")

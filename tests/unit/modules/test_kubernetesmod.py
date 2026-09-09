@@ -1151,6 +1151,26 @@ def test_create_namespace_handles_invalid_name(mock_api):
         kubernetes.create_namespace("INVALID!")
 
 
+def test_create_namespace_applies_metadata(mock_api):
+    """Namespace creation passes declared metadata to the Kubernetes client."""
+    kubernetes.create_namespace("test", metadata={"labels": {"team": "platform"}})
+
+    metadata = mock_api.client.V1ObjectMeta.return_value
+    assert metadata.name == "test"
+    assert metadata.labels == {"team": "platform"}
+
+
+def test_patch_namespace_applies_metadata(mock_api):
+    """Namespace patching forwards metadata and dry-run mode."""
+    patch = {"metadata": {"labels": {"team": "platform"}}}
+
+    kubernetes.patch_namespace("test", patch=patch, dry_run=True)
+
+    mock_api.client.CoreV1Api().patch_namespace.assert_called_once_with(
+        "test", patch, dry_run="All"
+    )
+
+
 def test_delete_namespace_handles_forbidden(mock_api):
     """
     Test delete_namespace raises for 403 (RBAC forbidden)
