@@ -1926,7 +1926,10 @@ def create_service(
         Service metadata dict
 
     spec
-        Service spec dict that follows kubernetes API conventions
+        Service spec dict that follows kubernetes API conventions. Kubernetes
+        camelCase keys such as ``targetPort``, ``nodePort`` and ``appProtocol``
+        are accepted on each ``ports[]`` entry and preserved when the request is
+        submitted to the API.
 
     source
         File path to service definition
@@ -12201,6 +12204,11 @@ def __dict_to_pod_spec(spec):
 def __dict_to_service_spec(spec):
     """
     Converts a dictionary into kubernetes V1ServiceSpec instance.
+
+    Kubernetes-style field names are accepted on both the Service itself and each
+    ``ports[]`` entry, including ``targetPort``, ``nodePort`` and
+    ``appProtocol``. These are translated to the snake_case attributes expected
+    by the Kubernetes Python client before the object is returned.
 
     Args:
         spec: Service specification dictionary following kubernetes API conventions

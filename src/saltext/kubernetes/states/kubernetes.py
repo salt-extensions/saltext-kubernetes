@@ -1339,7 +1339,9 @@ def service_present(
         The metadata of the service object.
 
     spec
-        The spec of the service object.
+        The spec of the service object. Kubernetes-style camelCase keys such as
+        ``targetPort``, ``nodePort`` and ``appProtocol`` are accepted on each
+        ``ports[]`` entry and preserved in the resulting Service.
 
     source
         A file containing the definition of the service (metadata and

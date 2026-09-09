@@ -1,40 +1,14 @@
-"""Regression test for Service targetPort / nodePort being silently dropped.
+"""Regression coverage for Service port fields being silently dropped.
 
-DEFECT
-------
-``__dict_to_service_spec`` copies the remaining port attributes like this::
+These tests guard against a subtle bug in ``__dict_to_service_spec`` where
+``targetPort`` and ``nodePort`` were validated but then lost when copied onto the
+underlying ``V1ServicePort`` object. Kubernetes exposes the port attributes as
+snake_case names, so the check must translate camelCase keys before setting the
+attribute.
 
-    for port_key, port_value in port.items():
-        if port_key != "port":
-            if port_key in ["nodePort", "targetPort"]:
-                ...validate and coerce port_value...
-            if hasattr(kube_port, port_key):
-                setattr(kube_port, port_key, port_value)
-
-``V1ServicePort`` exposes snake_case attributes (``target_port``, ``node_port``,
-``app_protocol``), so ``hasattr(kube_port, "targetPort")`` is ``False`` and the
-value is discarded -- immediately after the code went to the trouble of
-validating and coercing it.
-
-IMPACT
-------
-This fails silently and destructively. Kubernetes defaults ``targetPort`` to
-``port`` when it is absent, so the Service is created successfully and looks
-plausible, but sends traffic to the wrong container port. A Service declaring
-``port: 3389, targetPort: 22`` lands as ``3389 -> 3389``.
-
-The state then never converges: each run re-sends ``targetPort`` and the cluster
-keeps reporting the defaulted value, so the resource shows changes on every
-single run.
-
-Only manifests using the documented camelCase spelling are affected, which is
-every manifest written to the Kubernetes API reference -- so the bug looks like
-"the typed Service state is broken" and pushes users to ``manifest_present``.
-
-FIX
----
-Translate the key to snake_case with ``_camel_to_snake`` before the
-``hasattr``/``setattr`` pair.
+Without this regression, a Service can be created successfully while sending
+traffic to the wrong backend port because Kubernetes defaults missing
+``targetPort`` values to the Service ``port``.
 """
 
 from textwrap import dedent
@@ -82,9 +56,7 @@ def test_service_present_preserves_named_target_port(kubernetes, service, kubern
 
 
 @pytest.mark.parametrize("service", [False], indirect=True)
-def test_service_present_from_source_is_idempotent(
-    kubernetes, service, state_tree, kubernetes_exe
-):
+def test_service_present_from_source_is_idempotent(kubernetes, service, state_tree, kubernetes_exe):
     """A dropped field also means the state can never converge."""
     sls = "k8s/service-target-port"
     contents = dedent(f"""
