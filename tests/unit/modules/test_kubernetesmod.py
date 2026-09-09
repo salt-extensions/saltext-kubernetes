@@ -1553,6 +1553,28 @@ def test_show_secret_binary_data(mock_api):
         assert result["data"]["binary_key"] == base64.b64decode(binary_value)
 
 
+@pytest.mark.parametrize(
+    "source,explicit,expected",
+    [
+        ({"type": "kubernetes.io/tls"}, "Opaque", "kubernetes.io/tls"),
+        ({}, "kubernetes.io/dockerconfigjson", "kubernetes.io/dockerconfigjson"),
+        ({"secret_type": "kubernetes.io/basic-auth"}, None, "kubernetes.io/basic-auth"),
+    ],
+)
+def test_resolve_secret_type(source, explicit, expected):
+    """Secret type resolution prefers canonical, explicit, then legacy values."""
+    assert kubernetes._resolve_secret_type(source, explicit) == expected
+
+
+def test_replace_secret_preserves_existing_type(mock_api):
+    """Replacing without a type carries the existing Secret type forward."""
+    mock_api.client.CoreV1Api().read_namespaced_secret.return_value.type = "kubernetes.io/tls"
+
+    kubernetes.replace_secret("test", {"tls.crt": "Y2VydA==", "tls.key": "a2V5"})
+
+    assert mock_api.client.V1Secret.call_args.kwargs["type"] == "kubernetes.io/tls"
+
+
 def test_source_file_wrong_kind():
     """
     Test __create_object_body raises when source defines wrong kind

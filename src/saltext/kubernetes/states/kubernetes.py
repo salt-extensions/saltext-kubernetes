@@ -1926,6 +1926,7 @@ def secret_present(
             res = __salt__["kubernetes.patch_secret"](
                 name,
                 namespace,
+                secret_type=secret_type,
                 dry_run=bool(__opts__["test"]),
                 wait=wait,
                 timeout=timeout,
@@ -1948,8 +1949,14 @@ def secret_present(
             return ret
 
         ret["changes"] = {
-            "old": {"data": list(secret.get("data") or [])},
-            "new": {"data": list(res.get("data") or [])},
+            "old": {
+                "data": list(secret.get("data") or []),
+                "type": secret.get("type"),
+            },
+            "new": {
+                "data": list(res.get("data") or []),
+                "type": res.get("type"),
+            },
         }
         if __opts__["test"]:
             ret["result"] = None
