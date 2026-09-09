@@ -294,6 +294,29 @@ def test_deployment_invalid_spec(invalid_spec, expected_error):
         func(invalid_spec)
 
 
+def test_deployment_spec_accepts_kubernetes_field_names():
+    """Deployment specs accept camelCase and snake_case field names."""
+    func = getattr(kubernetes, "__dict_to_deployment_spec")
+
+    spec = func(
+        {
+            "replicas": 1,
+            "revisionHistoryLimit": 3,
+            "progressDeadlineSeconds": 120,
+            "min_ready_seconds": 5,
+            "selector": {"matchLabels": {"app": "camel"}},
+            "template": {
+                "metadata": {"labels": {"app": "camel"}},
+                "spec": {"containers": [{"name": "nginx", "image": "nginx:1.27"}]},
+            },
+        }
+    )
+
+    assert spec.revision_history_limit == 3
+    assert spec.progress_deadline_seconds == 120
+    assert spec.min_ready_seconds == 5
+
+
 @pytest.mark.parametrize(
     "invalid_spec,expected_error",
     [
