@@ -47,6 +47,19 @@ def kubernetes(states):
     return states.kubernetes
 
 
+@pytest.fixture
+def deployment_spec():
+    """Basic Deployment spec used by the regression tests."""
+    return {
+        "replicas": 1,
+        "selector": {"matchLabels": {"app": "camel"}},
+        "template": {
+            "metadata": {"labels": {"app": "camel"}},
+            "spec": {"containers": [{"name": "nginx", "image": "nginx:1.27"}]},
+        },
+    }
+
+
 @pytest.mark.parametrize("deployment", [False], indirect=True)
 def test_deployment_present_accepts_camelcase_spec_fields(kubernetes, deployment, kubernetes_exe):
     """revisionHistoryLimit is valid manifest YAML and must be accepted."""
