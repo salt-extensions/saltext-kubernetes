@@ -988,7 +988,7 @@ def persistent_volume(kubernetes_exe, persistent_volume_spec, request):
     try:
         yield {"name": name, "spec": persistent_volume_spec}
     finally:
-        kubernetes_exe.delete_persistent_volume(name=name)
+        kubernetes_exe.delete_persistent_volume(name=name, wait=True)
         assert kubernetes_exe.show_persistent_volume(name=name) is None
 
 

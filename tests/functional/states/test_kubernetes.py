@@ -366,6 +366,77 @@ def test_deployment_present(kubernetes, deployment, testmode, kubernetes_exe):
         assert deployment_state is None
 
 
+@pytest.mark.parametrize("deployment", [False], indirect=True)
+def test_deployment_present_accepts_camelcase_spec_fields(kubernetes, deployment, kubernetes_exe):
+    """Deployment states accept Kubernetes-style camelCase spec fields."""
+    ret = kubernetes.deployment_present(
+        name=deployment["name"],
+        namespace=deployment["namespace"],
+        metadata={},
+        spec={
+            "replicas": 1,
+            "revisionHistoryLimit": 3,
+            "progressDeadlineSeconds": 120,
+            "minReadySeconds": 5,
+            "selector": {"matchLabels": {"app": "camel"}},
+            "template": {
+                "metadata": {"labels": {"app": "camel"}},
+                "spec": {"containers": [{"name": "nginx", "image": "nginx:1.27"}]},
+            },
+        },
+    )
+
+    assert ret.result is True
+    live = kubernetes_exe.show_deployment(
+        name=deployment["name"], namespace=deployment["namespace"]
+    )
+    assert live["spec"]["revisionHistoryLimit"] == 3
+    assert live["spec"]["progressDeadlineSeconds"] == 120
+    assert live["spec"]["minReadySeconds"] == 5
+
+
+@pytest.mark.parametrize("deployment", [False], indirect=True)
+def test_deployment_present_from_source_accepts_camelcase_spec_fields(
+    kubernetes, deployment, state_tree, kubernetes_exe
+):
+    """Deployment source manifests preserve camelCase spec fields."""
+    sls = "k8s/deployment-camelcase"
+    contents = dedent(f"""
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: {deployment["name"]}
+          namespace: {deployment["namespace"]}
+        spec:
+          replicas: 1
+          revisionHistoryLimit: 7
+          selector:
+            matchLabels:
+              app: camel-src
+          template:
+            metadata:
+              labels:
+                app: camel-src
+            spec:
+              containers:
+                - name: nginx
+                  image: nginx:1.27
+        """).strip()
+
+    with pytest.helpers.temp_file(f"{sls}.yml", contents, state_tree):
+        ret = kubernetes.deployment_present(
+            name=deployment["name"],
+            namespace=deployment["namespace"],
+            source=f"salt://{sls}.yml",
+        )
+
+    assert ret.result is True
+    live = kubernetes_exe.show_deployment(
+        name=deployment["name"], namespace=deployment["namespace"]
+    )
+    assert live["spec"]["revisionHistoryLimit"] == 7
+
+
 def test_deployment_present_idempotency(kubernetes, deployment, testmode):
     """
     Test kubernetes.deployment_present is idempotent
