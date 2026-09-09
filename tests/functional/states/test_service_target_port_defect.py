@@ -15,6 +15,16 @@ from textwrap import dedent
 
 import pytest
 
+pytestmark = [
+    pytest.mark.skip_unless_on_linux(reason="Only run on Linux platforms"),
+]
+
+
+@pytest.fixture
+def kubernetes(states):
+    """Return the Kubernetes state module."""
+    return states.kubernetes
+
 
 @pytest.mark.parametrize("service", [False], indirect=True)
 def test_service_present_preserves_target_port(kubernetes, service, kubernetes_exe):

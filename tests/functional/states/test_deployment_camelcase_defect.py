@@ -36,6 +36,16 @@ from textwrap import dedent
 
 import pytest
 
+pytestmark = [
+    pytest.mark.skip_unless_on_linux(reason="Only run on Linux platforms"),
+]
+
+
+@pytest.fixture
+def kubernetes(states):
+    """Return the Kubernetes state module."""
+    return states.kubernetes
+
 
 @pytest.mark.parametrize("deployment", [False], indirect=True)
 def test_deployment_present_accepts_camelcase_spec_fields(kubernetes, deployment, kubernetes_exe):
