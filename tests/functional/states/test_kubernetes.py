@@ -1557,6 +1557,124 @@ def test_secret_present_template_context(kubernetes, secret, secret_template, ku
     assert secret_state["data"]["key"] == "value"
 
 
+@pytest.fixture
+def tls_secret_template(state_tree):
+    """Return a TLS Secret manifest using the canonical Kubernetes type field."""
+    sls = "k8s/secret-tls-typed"
+    contents = dedent("""
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: {{ name }}
+          namespace: {{ namespace }}
+        type: kubernetes.io/tls
+        data:
+          tls.crt: {{ tls_crt }}
+          tls.key: {{ tls_key }}
+        """).strip()
+
+    with pytest.helpers.temp_file(f"{sls}.yml.jinja", contents, state_tree):
+        yield f"salt://{sls}.yml.jinja"
+
+
+@pytest.mark.parametrize("secret", [False], indirect=True)
+def test_secret_present_source_preserves_declared_type(
+    kubernetes, secret, tls_secret_template, kubernetes_exe
+):
+    """A source manifest's canonical type is applied to the Secret."""
+    ret = kubernetes.secret_present(
+        name=secret["name"],
+        namespace=secret["namespace"],
+        source=tls_secret_template,
+        template="jinja",
+        template_context={
+            "name": secret["name"],
+            "namespace": secret["namespace"],
+            "tls_crt": "dGxzLWNlcnQ=",
+            "tls_key": "dGxzLWtleQ==",
+        },
+        wait=True,
+    )
+
+    assert ret.result is True
+    secret_state = kubernetes_exe.show_secret(name=secret["name"], namespace=secret["namespace"])
+    assert secret_state["type"] == "kubernetes.io/tls"
+
+
+@pytest.mark.parametrize("secret", [False], indirect=True)
+def test_secret_present_source_preserves_explicit_type(
+    kubernetes, secret, state_tree, kubernetes_exe
+):
+    """An explicit type is retained when the source does not declare one."""
+    sls = "k8s/secret-untyped"
+    contents = dedent("""
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: {{ name }}
+          namespace: {{ namespace }}
+        data:
+          .dockerconfigjson: e30=
+        """).strip()
+
+    with pytest.helpers.temp_file(f"{sls}.yml.jinja", contents, state_tree):
+        ret = kubernetes.secret_present(
+            name=secret["name"],
+            namespace=secret["namespace"],
+            source=f"salt://{sls}.yml.jinja",
+            template="jinja",
+            template_context={"name": secret["name"], "namespace": secret["namespace"]},
+            secret_type="kubernetes.io/dockerconfigjson",
+            wait=True,
+        )
+
+    assert ret.result is True
+    secret_state = kubernetes_exe.show_secret(name=secret["name"], namespace=secret["namespace"])
+    assert secret_state["type"] == "kubernetes.io/dockerconfigjson"
+
+
+@pytest.mark.parametrize("secret", [False], indirect=True)
+def test_secret_present_source_update_preserves_explicit_type(
+    kubernetes, secret, state_tree, kubernetes_exe
+):
+    """Updating a sourced Secret forwards its explicit type."""
+    kubernetes_exe.create_secret(
+        name=secret["name"],
+        namespace=secret["namespace"],
+        data={"tls.crt": "b2xkLWNlcnQ=", "tls.key": "b2xkLWtleQ=="},
+        secret_type="kubernetes.io/tls",
+    )
+    sls = "k8s/secret-tls-update"
+    contents = dedent("""
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: {{ name }}
+          namespace: {{ namespace }}
+        data:
+          tls.crt: bmV3LWNlcnQ=
+          tls.key: bmV3LWtleQ==
+        """).strip()
+
+    with pytest.helpers.temp_file(f"{sls}.yml.jinja", contents, state_tree):
+        ret = kubernetes.secret_present(
+            name=secret["name"],
+            namespace=secret["namespace"],
+            source=f"salt://{sls}.yml.jinja",
+            template="jinja",
+            template_context={"name": secret["name"], "namespace": secret["namespace"]},
+            secret_type="kubernetes.io/tls",
+            wait=True,
+        )
+
+    assert ret.result is True
+    secret_state = kubernetes_exe.show_secret(
+        name=secret["name"], namespace=secret["namespace"], decode=True
+    )
+    assert secret_state["type"] == "kubernetes.io/tls"
+    assert secret_state["data"]["tls.crt"] == "new-cert"
+
+
 @pytest.mark.parametrize("secret", [False], indirect=True)
 def test_service_account_token_secret_present(kubernetes, secret, kubernetes_exe, testmode):
     """

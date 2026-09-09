@@ -2028,6 +2028,15 @@ def create_service(
         _cleanup(**cfg)
 
 
+def _resolve_secret_type(src_obj, secret_type):
+    """Resolve Secret type from canonical, explicit, then legacy values."""
+    if "type" in src_obj:
+        return src_obj["type"]
+    if secret_type is not None:
+        return secret_type
+    return src_obj.get("secret_type")
+
+
 def create_secret(
     name,
     namespace="default",
@@ -2047,6 +2056,10 @@ def create_secret(
     """
     Creates the kubernetes secret as defined by the user.
     Values that are already base64 encoded will not be re-encoded.
+
+    .. versionchanged:: 3.0.0
+        Source manifests now preserve the canonical Kubernetes ``type`` field
+        and no longer discard an explicit ``secret_type`` argument.
 
     .. note::
         Automatic encoding of secret values might cause issues if the values are not correctly identified as base64.
@@ -2129,7 +2142,7 @@ def create_secret(
             raise CommandExecutionError("`source` did not render to a dictionary")
         if "data" in src_obj:
             data = src_obj["data"]
-        secret_type = src_obj.get("secret_type")
+        secret_type = _resolve_secret_type(src_obj, secret_type)
     elif data is None:
         data = {}
 
@@ -3082,6 +3095,10 @@ def replace_secret(
     Values that are already base64 encoded will not be re-encoded.
     If a source file is specified, the secret type will be read from the template.
 
+    .. versionchanged:: 3.0.0
+        Source manifests now preserve the canonical Kubernetes ``type`` field.
+        When no type is supplied, the existing Secret type is retained.
+
     .. note::
         Automatic encoding of secret values might cause issues if the values are not correctly identified as base64.
         If you run into issues - encode the values before passing them to this function.
@@ -3162,7 +3179,7 @@ def replace_secret(
             raise CommandExecutionError("`source` did not render to a dictionary")
         if "data" in src_obj:
             data = src_obj["data"]
-        secret_type = src_obj.get("secret_type")
+        secret_type = _resolve_secret_type(src_obj, secret_type)
     elif data is None:
         data = {}
 
@@ -3176,21 +3193,18 @@ def replace_secret(
         else:
             encoded_data[key] = base64.b64encode(str(value).encode("utf-8")).decode("utf-8")
 
-    # Get existing secret type if not specified
-    if not type:
-        existing_secret = kubernetes.client.CoreV1Api().read_namespaced_secret(name, namespace)
-        secret_type = existing_secret.type
-
-    body = kubernetes.client.V1Secret(
-        metadata=__dict_to_object_meta(name, namespace, metadata),
-        data=encoded_data,
-        type=secret_type,
-    )
-
     cfg = _setup_conn(**kwargs)
 
     try:
         api_instance = kubernetes.client.CoreV1Api()
+        if secret_type is None:
+            secret_type = api_instance.read_namespaced_secret(name, namespace).type
+
+        body = kubernetes.client.V1Secret(
+            metadata=__dict_to_object_meta(name, namespace, metadata),
+            data=encoded_data,
+            type=secret_type,
+        )
         api_response = api_instance.replace_namespaced_secret(name, namespace, body)
 
         if wait:
@@ -3777,6 +3791,7 @@ def patch_secret(
     template=None,
     saltenv=None,
     template_context=None,
+    secret_type=None,
     dry_run=False,
     wait=False,
     timeout=60,
@@ -3784,6 +3799,9 @@ def patch_secret(
 ):
     """
     .. versionadded:: 2.0.0
+
+    .. versionchanged:: 3.0.0
+        Added ``secret_type`` and canonical source-manifest ``type`` support.
 
     Patches an existing secret with the provided patch dictionary.
 
@@ -3834,6 +3852,11 @@ def patch_secret(
 
     if not isinstance(patch, dict):
         raise CommandExecutionError("Patch must be a dictionary")
+
+    resolved_type = _resolve_secret_type(patch, secret_type)
+    if resolved_type is not None:
+        patch = {**patch, "type": resolved_type}
+    patch.pop("secret_type", None)
 
     # Encode secret data values to base64 if not already encoded
     if "data" in patch and isinstance(patch["data"], dict):

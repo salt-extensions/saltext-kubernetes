@@ -376,6 +376,19 @@ def test_replace_secret(kubernetes, secret, secret_data):
     assert res["data"]["key"] == "new_value"
 
 
+@pytest.mark.parametrize("secret_data", ["tls_base64"], indirect=True)
+def test_replace_secret_preserves_existing_type(kubernetes, secret, secret_data):
+    """Replacing a typed Secret without restating its type preserves it."""
+    res = kubernetes.replace_secret(
+        name=secret["name"],
+        namespace=secret["namespace"],
+        data=secret_data[0],
+        wait=True,
+    )
+
+    assert res["type"] == "kubernetes.io/tls"
+
+
 @pytest.mark.parametrize("secret", [False], indirect=True)
 def test_replace_nonexistent_secret(kubernetes, secret, secret_data):
     """

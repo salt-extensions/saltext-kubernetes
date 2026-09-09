@@ -230,6 +230,28 @@ def test_secret_present__create_no_data():
             }
 
 
+def test_secret_present_forwards_type_when_patching_source():
+    """Existing sourced Secrets pass the explicit type to patch_secret."""
+    secret = make_secret(name="sekret")
+    patch_mock = MagicMock(return_value=secret)
+    with patch.dict(
+        kubernetes.__salt__,
+        {
+            "kubernetes.show_secret": MagicMock(return_value=secret),
+            "kubernetes.patch_secret": patch_mock,
+        },
+    ):
+        with patch.dict(kubernetes.__opts__, {"test": False}):
+            ret = kubernetes.secret_present(
+                name="sekret",
+                source="salt://secret.yml",
+                secret_type="kubernetes.io/tls",
+            )
+
+    assert ret["result"] is True
+    assert patch_mock.call_args.kwargs["secret_type"] == "kubernetes.io/tls"
+
+
 def test_secret_absent__noop_test_true():
     with mock_func("show_secret", return_value=None, test=True):
         actual = kubernetes.secret_absent(name="sekret")
