@@ -1004,6 +1004,66 @@ def test_present_handles_show_error(state_func, show_func):
             assert "API error" in ret["comment"]
 
 
+def test_manifest_present_skips_live_apply_when_preflight_matches():
+    """An unchanged manifest returns before the mutating apply call."""
+    desired = make_configmap("test-configmap", data={"key": "value"})
+    apply_mock = MagicMock(return_value=desired)
+
+    with patch.dict(
+        kubernetes.__salt__,
+        {
+            "kubernetes.apply": apply_mock,
+            "kubernetes.get_object": MagicMock(return_value=desired),
+        },
+    ):
+        with patch.dict(kubernetes.__opts__, {"test": False}):
+            ret = kubernetes.manifest_present(name="test", manifest=desired)
+
+    assert ret["result"] is True
+    assert not ret["changes"]
+    apply_mock.assert_called_once()
+    assert apply_mock.call_args.kwargs["dry_run"] is True
+
+
+def test_manifest_present_applies_when_preflight_finds_drift():
+    """A changed manifest performs one dry run followed by one live apply."""
+    desired = make_configmap("test-configmap", data={"key": "new"})
+    existing = make_configmap("test-configmap", data={"key": "old"})
+    apply_mock = MagicMock(side_effect=[desired, desired])
+
+    with patch.dict(
+        kubernetes.__salt__,
+        {
+            "kubernetes.apply": apply_mock,
+            "kubernetes.get_object": MagicMock(return_value=existing),
+        },
+    ):
+        with patch.dict(kubernetes.__opts__, {"test": False}):
+            ret = kubernetes.manifest_present(name="test", manifest=desired)
+
+    assert ret["result"] is True
+    assert ret["changes"] == {"applied": desired}
+    assert apply_mock.call_count == 2
+    assert apply_mock.call_args_list[0].kwargs["dry_run"] is True
+    assert "dry_run" not in apply_mock.call_args_list[1].kwargs
+
+
+def test_manifest_present_live_apply_falls_back_when_preflight_fails():
+    """Live mode preserves dependency-ordered bundles when dry-run cannot complete."""
+    desired = make_configmap("test-configmap", data={"key": "value"})
+    apply_mock = MagicMock(side_effect=[CommandExecutionError("missing dependency"), desired])
+
+    with patch.dict(kubernetes.__salt__, {"kubernetes.apply": apply_mock}):
+        with patch.dict(kubernetes.__opts__, {"test": False}):
+            ret = kubernetes.manifest_present(name="test", manifest=desired)
+
+    assert ret["result"] is True
+    assert ret["changes"] == {"applied": desired}
+    assert apply_mock.call_count == 2
+    assert apply_mock.call_args_list[0].kwargs["dry_run"] is True
+    assert "dry_run" not in apply_mock.call_args_list[1].kwargs
+
+
 def test_service_present_source_conflict():
     """
     Test service_present returns error when both source and metadata/spec are provided
