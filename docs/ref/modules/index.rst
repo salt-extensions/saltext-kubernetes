@@ -9,7 +9,6 @@ _________________
 .. autosummary::
     :toctree:
 
-    k8s
     kube_bench_cache
     kubeadm
     kuberesource_cmd
