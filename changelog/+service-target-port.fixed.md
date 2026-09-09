@@ -1,0 +1,1 @@
+Fix Service port conversions so Kubernetes camelCase fields such as ``targetPort`` and ``nodePort`` are preserved when creating or updating Services. This avoids silent defaulting to the service ``port`` value and prevents steady-state drift from repeated re-submissions.

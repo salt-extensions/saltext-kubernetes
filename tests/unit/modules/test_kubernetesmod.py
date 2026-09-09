@@ -170,6 +170,22 @@ def test_service_spec_preserves_kubernetes_field_names():
     assert spec.session_affinity == "ClientIP"
 
 
+def test_service_port_fields_preserve_target_and_node_ports():
+    """CamelCase Service port fields survive conversion to the Kubernetes Python client."""
+    func = getattr(kubernetes, "__dict_to_service_spec")
+
+    spec = func(
+        {
+            "type": "NodePort",
+            "ports": [{"port": 3389, "targetPort": 22, "nodePort": 30389}],
+        }
+    )
+
+    assert spec.ports[0].port == 3389
+    assert spec.ports[0].target_port == 22
+    assert spec.ports[0].node_port == 30389
+
+
 @pytest.mark.parametrize(
     "invalid_spec,expected_error",
     [
