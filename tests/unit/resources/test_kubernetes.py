@@ -17,12 +17,19 @@ gated behind the worktree-existence check in
 """
 
 import importlib.util
+import logging
 import sys
 import types
+from types import SimpleNamespace
 
+import kubernetes.client
 import pytest
+import salt.utils
+from salt.exceptions import CommandExecutionError
 
 from saltext.kubernetes.resources import kubernetes as resource_mod
+from saltext.kubernetes.utils import _connection
+from saltext.kubernetes.utils import _kinds
 
 HAS_RESOURCES = importlib.util.find_spec("salt.utils.resources") is not None
 
@@ -155,6 +162,16 @@ def test_default_kinds_are_workload_controllers_not_pods():
     assert "pod" not in resource_mod._DEFAULT_KINDS
 
 
+def test_gateway_api_kinds_are_discovered_by_default():
+    """Gateway API resources are first-class resource targets by default."""
+    assert {
+        "gateway_class",
+        "gateway",
+        "http_route",
+        "reference_grant",
+    }.issubset(resource_mod._DEFAULT_KINDS)
+
+
 def test_every_default_kind_resolves_in_registry():
     """A typo in ``_DEFAULT_KINDS`` would silently disable a kind for
     every minion running without an explicit ``kinds:`` override.
@@ -164,8 +181,6 @@ def test_every_default_kind_resolves_in_registry():
     neither a valid registry key — and only ``deployment`` /
     ``namespace`` actually enumerated.
     """
-    from saltext.kubernetes.utils import _kinds  # pylint: disable=import-outside-toplevel
-
     for kind in resource_mod._DEFAULT_KINDS:
         assert (
             kind in _kinds._KIND_REGISTRY
@@ -179,8 +194,6 @@ def test_node_and_crd_in_registry():
     the registry made them unaddressable via the resources subsystem
     even though users could legally enable them in pillar.
     """
-    from saltext.kubernetes.utils import _kinds  # pylint: disable=import-outside-toplevel
-
     assert "node" in _kinds._KIND_REGISTRY
     assert "custom_resource_definition" in _kinds._KIND_REGISTRY
 
@@ -223,23 +236,17 @@ def test_ids_from_declared_cluster_scoped(fake_context):
 
 
 def test_ids_from_declared_rejects_unknown_kind(fake_context):
-    from salt.exceptions import CommandExecutionError  # pylint: disable=import-outside-toplevel
-
     with pytest.raises(CommandExecutionError, match="unknown kind"):
         resource_mod._ids_from_declared([{"kind": "not_a_kind", "namespace": "x", "name": "y"}])
 
 
 def test_ids_from_declared_requires_namespace_for_namespaced_kind(fake_context):
-    from salt.exceptions import CommandExecutionError  # pylint: disable=import-outside-toplevel
-
     with pytest.raises(CommandExecutionError, match="requires 'namespace'"):
         resource_mod._ids_from_declared([{"kind": "deployment", "name": "web"}])
 
 
 def test_ids_from_declared_warns_on_namespace_for_cluster_scoped(fake_context, caplog):
     """Cluster-scoped kinds with a namespace field log a warning and drop it."""
-    import logging  # pylint: disable=import-outside-toplevel
-
     caplog.set_level(logging.WARNING)
     ids = resource_mod._ids_from_declared(
         [{"kind": "node", "namespace": "should-be-ignored", "name": "n1"}]
@@ -250,8 +257,6 @@ def test_ids_from_declared_warns_on_namespace_for_cluster_scoped(fake_context, c
 
 
 def test_ids_from_declared_rejects_missing_kind_or_name(fake_context):
-    from salt.exceptions import CommandExecutionError  # pylint: disable=import-outside-toplevel
-
     with pytest.raises(CommandExecutionError, match="missing 'kind' or 'name'"):
         resource_mod._ids_from_declared([{"namespace": "x", "name": "y"}])
     with pytest.raises(CommandExecutionError, match="missing 'kind' or 'name'"):
@@ -259,8 +264,6 @@ def test_ids_from_declared_rejects_missing_kind_or_name(fake_context):
 
 
 def test_ids_from_declared_rejects_non_dict_entry(fake_context):
-    from salt.exceptions import CommandExecutionError  # pylint: disable=import-outside-toplevel
-
     with pytest.raises(CommandExecutionError, match="must be a dict"):
         resource_mod._ids_from_declared(["deployment:prod/web"])
 
@@ -280,7 +283,6 @@ def fake_resources_helper(monkeypatch):
     ``salt.utils`` package, so the stub has to land both in
     ``sys.modules`` *and* as an attribute of ``salt.utils``.
     """
-    import salt.utils  # pylint: disable=import-outside-toplevel
 
     def _factory(tree):
         fake = types.ModuleType("salt.utils.resources")
@@ -327,16 +329,12 @@ def test_init_explicit_merge_mode(fake_context, fake_resources_helper):
 
 
 def test_init_rejects_unknown_mode(fake_context, fake_resources_helper):
-    from salt.exceptions import CommandExecutionError  # pylint: disable=import-outside-toplevel
-
     fake_resources_helper({"kubernetes": {"mode": "live-stream"}})
     with pytest.raises(CommandExecutionError, match="must be one of"):
         resource_mod.init({})
 
 
 def test_init_rejects_non_list_resources(fake_context, fake_resources_helper):
-    from salt.exceptions import CommandExecutionError  # pylint: disable=import-outside-toplevel
-
     fake_resources_helper({"kubernetes": {"mode": "pillar", "resources": "not-a-list"}})
     with pytest.raises(CommandExecutionError, match="must be a list"):
         resource_mod.init({})
@@ -372,8 +370,6 @@ def test_discover_pillar_mode_does_not_call_api(fake_context, fake_resources_hel
     def _boom(*args, **kwargs):
         setup_called.append((args, kwargs))
         raise AssertionError("_setup_conn must not be invoked in pillar mode")
-
-    from saltext.kubernetes.utils import _connection  # pylint: disable=import-outside-toplevel
 
     monkeypatch.setattr(_connection, "_setup_conn", _boom)
 
@@ -416,8 +412,6 @@ def test_init_explicit_mode_discover_overrides_inference(fake_context, fake_reso
 
 def _api_list_result(objects):
     """Wrap ``[{name,namespace}, ...]`` into the kubernetes-client list shape."""
-    from types import SimpleNamespace  # pylint: disable=import-outside-toplevel
-
     items = []
     for obj in objects:
         items.append(
@@ -465,8 +459,6 @@ def _patch_kubernetes_api(monkeypatch, api_responses):
     list-response shape; calls to unmocked methods raise an
     AssertionError so the test fails loudly on unexpected API traffic.
     """
-    import kubernetes.client  # pylint: disable=import-outside-toplevel
-
     call_log = []
 
     class _FakeApi:
@@ -497,8 +489,6 @@ def _patch_kubernetes_api(monkeypatch, api_responses):
 @pytest.fixture
 def patch_setup_conn(monkeypatch):
     """No-op ``_setup_conn`` / ``_cleanup`` so discover() doesn't authenticate."""
-    from saltext.kubernetes.utils import _connection  # pylint: disable=import-outside-toplevel
-
     monkeypatch.setattr(_connection, "_setup_conn", lambda *a, **k: {})
     monkeypatch.setattr(_connection, "_cleanup", lambda *a, **k: None)
 
@@ -531,6 +521,54 @@ def test_discover_mode_enumerates_each_kind(discover_mode_context, patch_setup_c
     methods = {(cls, m) for cls, m, _a, _k in call_log}
     assert ("AppsV1Api", "list_deployment_for_all_namespaces") in methods
     assert ("CoreV1Api", "list_namespace") in methods
+
+
+def test_discover_mode_enumerates_gateway_api_kinds(
+    discover_mode_context, patch_setup_conn, monkeypatch
+):
+    """Gateway API CRDs use dynamic discovery rather than typed clients."""
+    discover_mode_context(
+        kinds=["gateway_class", "gateway", "http_route", "reference_grant"],
+        label_selector="managed-by=salt",
+    )
+    calls = []
+
+    def list_resource(api_version, kind, namespace=None, label_selector=None, field_selector=None):
+        calls.append((api_version, kind, namespace, label_selector, field_selector))
+        objects = {
+            "GatewayClass": [{"metadata": {"name": "standard"}}],
+            "Gateway": [{"metadata": {"name": "edge", "namespace": "prod"}}],
+            "HTTPRoute": [{"metadata": {"name": "app", "namespace": "prod"}}],
+            "ReferenceGrant": [{"metadata": {"name": "grant", "namespace": "backend"}}],
+        }
+        return objects[kind]
+
+    monkeypatch.setattr(resource_mod._dynamic, "list_resource", list_resource)
+
+    ids = resource_mod.discover({})
+
+    assert sorted(ids) == sorted(
+        [
+            "gateway_class:standard",
+            "gateway:prod/edge",
+            "http_route:prod/app",
+            "reference_grant:backend/grant",
+        ]
+    )
+    assert {call[1] for call in calls} == {
+        "GatewayClass",
+        "Gateway",
+        "HTTPRoute",
+        "ReferenceGrant",
+    }
+    versions = {call[1]: call[0] for call in calls}
+    assert versions == {
+        "GatewayClass": "gateway.networking.k8s.io/v1",
+        "Gateway": "gateway.networking.k8s.io/v1",
+        "HTTPRoute": "gateway.networking.k8s.io/v1",
+        "ReferenceGrant": "gateway.networking.k8s.io/v1beta1",
+    }
+    assert all(call[3] == "managed-by=salt" for call in calls)
 
 
 def test_discover_mode_with_namespaces_filter_calls_per_namespace(
@@ -573,8 +611,6 @@ def test_discover_mode_skips_unknown_kind_without_raising(
     is louder than a silently broken minion). Here, discover() is
     best-effort: one bad kind doesn't break the others.
     """
-    import logging  # pylint: disable=import-outside-toplevel
-
     caplog.set_level(logging.WARNING)
     discover_mode_context(kinds=["depolyment", "namespace"])  # typo
     _patch_kubernetes_api(
