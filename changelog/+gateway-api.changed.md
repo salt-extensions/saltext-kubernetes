@@ -1,0 +1,1 @@
+Added Gateway API support for GatewayClass, Gateway, HTTPRoute, and ReferenceGrant resources. The resources are available through typed Kubernetes execution functions and present/absent states, with resource discovery and cert-manager-backed TLS Secret reference coverage. Gateway controller reconciliation and data-plane traffic remain outside the module's scope.

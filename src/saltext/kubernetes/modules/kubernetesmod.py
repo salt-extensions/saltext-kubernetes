@@ -66,6 +66,7 @@ import base64
 import copy
 import datetime
 import hashlib
+import inspect
 import io
 import json
 import logging
@@ -220,8 +221,6 @@ def _api_client_call_api(api_client, *args, response_type=None, **kwargs):
     Inspect the signature once and route through whichever the active
     client supports.
     """
-    import inspect  # pylint: disable=import-outside-toplevel
-
     sig = inspect.signature(api_client.call_api)
     if response_type is not None:
         if "response_types_map" in sig.parameters and "response_type" not in sig.parameters:
@@ -11904,6 +11903,772 @@ def get_object(api_version, kind, name, namespace=None, **kwargs):
         return _dynamic.get_object(api_version, kind, name=name, namespace=namespace)
     finally:
         _cleanup(**cfg)
+
+
+# --- Gateway API -----------------------------------------------------------
+
+
+_GATEWAY_KIND_KEYS = {
+    "GatewayClass": "gateway_class",
+    "Gateway": "gateway",
+    "HTTPRoute": "http_route",
+    "ReferenceGrant": "reference_grant",
+}
+
+
+def _gateway_api_version(kind):
+    return _kinds.get_kind(_GATEWAY_KIND_KEYS[kind]).api_version
+
+
+def _gateway_kind(kind):
+    return _kinds.get_kind(_GATEWAY_KIND_KEYS[kind]).api_kind
+
+
+def _gateway_manifest(kind, name, namespace=None, metadata=None, spec=None):
+    """Build a Gateway API manifest without normalising its open-ended spec."""
+    manifest_metadata = dict(metadata or {})
+    manifest_metadata["name"] = name
+    if namespace is not None:
+        manifest_metadata["namespace"] = namespace
+    return {
+        "apiVersion": _gateway_api_version(kind),
+        "kind": _gateway_kind(kind),
+        "metadata": manifest_metadata,
+        "spec": dict(spec or {}),
+    }
+
+
+def _gateway_source(source, template, saltenv, template_context):
+    manifest = __read_and_render_yaml_file(source, template, saltenv, template_context)
+    if not isinstance(manifest, dict):
+        raise CommandExecutionError("Gateway API source must contain one manifest")
+    return manifest
+
+
+def _validate_gateway_source(manifest, kind):
+    if manifest.get("kind") not in (None, kind):
+        raise CommandExecutionError(f"The source file should define only a {kind} object")
+    return manifest
+
+
+def _gateway_list(kind, namespace=None, **kwargs):
+    cfg = _setup_conn(**kwargs)
+    try:
+        return _dynamic.list_resource(
+            _gateway_api_version(kind),
+            kind,
+            namespace=namespace,
+        )
+    finally:
+        _cleanup(**cfg)
+
+
+def _gateway_show(kind, name, namespace=None, **kwargs):
+    cfg = _setup_conn(**kwargs)
+    try:
+        return _dynamic.get_object(
+            _gateway_api_version(kind),
+            kind,
+            name=name,
+            namespace=namespace,
+        )
+    finally:
+        _cleanup(**cfg)
+
+
+def _gateway_create(
+    kind,
+    name,
+    namespace=None,
+    metadata=None,
+    spec=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    dry_run=False,
+    **kwargs,
+):
+    if source:
+        manifest = _validate_gateway_source(
+            _gateway_source(source, template, saltenv, template_context), kind
+        )
+        manifest.setdefault("apiVersion", _gateway_api_version(kind))
+        manifest.setdefault("kind", _gateway_kind(kind))
+        manifest.setdefault("metadata", {})
+        manifest["metadata"].setdefault("name", name)
+        if namespace is not None:
+            manifest["metadata"].setdefault("namespace", namespace)
+    else:
+        manifest = _gateway_manifest(kind, name, namespace, metadata, spec)
+    cfg = _setup_conn(**kwargs)
+    try:
+        resource = _dynamic.get_resource(_gateway_api_version(kind), kind)
+        create_kwargs = {"body": manifest}
+        if resource.namespaced:
+            create_kwargs["namespace"] = manifest["metadata"].get("namespace")
+        if dry_run:
+            create_kwargs["dry_run"] = "All"
+        result = resource.create(**create_kwargs)
+        return result.to_dict() if hasattr(result, "to_dict") else result
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 409:
+            raise CommandExecutionError(f"{kind} {name} already exists") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def _gateway_replace(
+    kind,
+    name,
+    namespace=None,
+    metadata=None,
+    spec=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    **kwargs,
+):
+    if source:
+        manifest = _validate_gateway_source(
+            _gateway_source(source, template, saltenv, template_context), kind
+        )
+        manifest.setdefault("apiVersion", _gateway_api_version(kind))
+        manifest.setdefault("kind", _gateway_kind(kind))
+    else:
+        manifest = _gateway_manifest(kind, name, namespace, metadata, spec)
+    manifest.setdefault("metadata", {})
+    manifest["metadata"]["name"] = name
+    if namespace is not None:
+        manifest["metadata"]["namespace"] = namespace
+    cfg = _setup_conn(**kwargs)
+    try:
+        api_version = _gateway_api_version(kind)
+        live = _dynamic.get_object(api_version, kind, name=name, namespace=namespace)
+        if live is None:
+            raise CommandExecutionError(f"{kind} {name} not found")
+        live_resource_version = (live.get("metadata") or {}).get("resourceVersion")
+        if live_resource_version:
+            manifest["metadata"].setdefault("resourceVersion", live_resource_version)
+        resource = _dynamic.get_resource(api_version, kind)
+        replace_kwargs = {"name": name, "body": manifest}
+        if resource.namespaced:
+            replace_kwargs["namespace"] = namespace
+        result = resource.replace(**replace_kwargs)
+        return result.to_dict() if hasattr(result, "to_dict") else result
+    except (ApiException, HTTPError) as exc:
+        if isinstance(exc, ApiException) and exc.status == 404:
+            raise CommandExecutionError(f"{kind} {name} not found") from exc
+        raise CommandExecutionError(exc) from exc
+    finally:
+        _cleanup(**cfg)
+
+
+def _gateway_patch(
+    kind,
+    name,
+    namespace=None,
+    patch=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    dry_run=False,
+    **kwargs,
+):
+    if source:
+        patch = _validate_gateway_source(
+            _gateway_source(source, template, saltenv, template_context), kind
+        )
+        patch = {key: value for key, value in patch.items() if key not in ("apiVersion", "kind")}
+    if not isinstance(patch, dict):
+        raise CommandExecutionError(f"{kind} patch must be a dictionary")
+    cfg = _setup_conn(**kwargs)
+    try:
+        return _dynamic.patch_object(
+            _gateway_api_version(kind),
+            kind,
+            name=name,
+            patch=patch,
+            namespace=namespace,
+            patch_type="merge",
+            dry_run=dry_run,
+        )
+    finally:
+        _cleanup(**cfg)
+
+
+def _gateway_delete(kind, name, namespace=None, wait=False, timeout=60, **kwargs):
+    cfg = _setup_conn(**kwargs)
+    try:
+        result = _dynamic.delete_object(
+            _gateway_api_version(kind),
+            kind,
+            name=name,
+            namespace=namespace,
+        )
+        if wait:
+            resource = _dynamic.get_resource(_gateway_api_version(kind), kind)
+            start = time.time()
+            while time.time() - start < timeout:
+                if (
+                    _dynamic.get_object(
+                        _gateway_api_version(kind), kind, name=name, namespace=namespace
+                    )
+                    is None
+                ):
+                    break
+                time.sleep(1)
+            else:
+                raise CommandExecutionError(f"Timeout waiting for {kind} {name} to be deleted")
+            del resource
+        return result
+    finally:
+        _cleanup(**cfg)
+
+
+def gateway_classes(**kwargs):
+    """Return GatewayClass objects.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.gateway_classes
+    """
+    return _gateway_list("GatewayClass", **kwargs)
+
+
+def show_gateway_class(name, **kwargs):
+    """Return a GatewayClass or ``None`` when it does not exist.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.show_gateway_class standard
+    """
+    return _gateway_show("GatewayClass", name, **kwargs)
+
+
+def create_gateway_class(
+    name,
+    metadata=None,
+    spec=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    dry_run=False,
+    **kwargs,
+):
+    """Create a cluster-scoped GatewayClass.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.create_gateway_class standard spec='{"controllerName": "example.net/gateway-controller"}'
+    """
+    return _gateway_create(
+        "GatewayClass",
+        name,
+        metadata=metadata,
+        spec=spec,
+        source=source,
+        template=template,
+        saltenv=saltenv,
+        template_context=template_context,
+        dry_run=dry_run,
+        **kwargs,
+    )
+
+
+def replace_gateway_class(
+    name,
+    metadata=None,
+    spec=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    **kwargs,
+):
+    """Replace a cluster-scoped GatewayClass.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.replace_gateway_class standard spec='{"controllerName": "example.net/gateway-controller"}'
+    """
+    return _gateway_replace(
+        "GatewayClass",
+        name,
+        metadata=metadata,
+        spec=spec,
+        source=source,
+        template=template,
+        saltenv=saltenv,
+        template_context=template_context,
+        **kwargs,
+    )
+
+
+def patch_gateway_class(
+    name,
+    patch=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    dry_run=False,
+    **kwargs,
+):
+    """Patch a cluster-scoped GatewayClass.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.patch_gateway_class standard patch='{"metadata": {"labels": {"team": "platform"}}}'
+    """
+    return _gateway_patch(
+        "GatewayClass",
+        name,
+        patch=patch,
+        source=source,
+        template=template,
+        saltenv=saltenv,
+        template_context=template_context,
+        dry_run=dry_run,
+        **kwargs,
+    )
+
+
+def delete_gateway_class(name, wait=False, timeout=60, **kwargs):
+    """Delete a cluster-scoped GatewayClass.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.delete_gateway_class standard
+    """
+    return _gateway_delete("GatewayClass", name, wait=wait, timeout=timeout, **kwargs)
+
+
+def gateways(namespace="default", **kwargs):
+    """Return Gateway objects in *namespace*.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.gateways namespace=default
+    """
+    return _gateway_list("Gateway", namespace=namespace, **kwargs)
+
+
+def show_gateway(name, namespace="default", **kwargs):
+    """Return a Gateway or ``None`` when it does not exist.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.show_gateway edge namespace=default
+    """
+    return _gateway_show("Gateway", name, namespace=namespace, **kwargs)
+
+
+def create_gateway(
+    name,
+    namespace="default",
+    metadata=None,
+    spec=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    dry_run=False,
+    **kwargs,
+):
+    """Create a namespace-scoped Gateway.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.create_gateway edge namespace=default spec='{"gatewayClassName": "standard", "listeners": []}'
+    """
+    return _gateway_create(
+        "Gateway",
+        name,
+        namespace,
+        metadata,
+        spec,
+        source,
+        template,
+        saltenv,
+        template_context,
+        dry_run,
+        **kwargs,
+    )
+
+
+def replace_gateway(
+    name,
+    namespace="default",
+    metadata=None,
+    spec=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    **kwargs,
+):
+    """Replace a namespace-scoped Gateway.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.replace_gateway edge namespace=default spec='{"gatewayClassName": "standard", "listeners": []}'
+    """
+    return _gateway_replace(
+        "Gateway",
+        name,
+        namespace,
+        metadata,
+        spec,
+        source,
+        template,
+        saltenv,
+        template_context,
+        **kwargs,
+    )
+
+
+def patch_gateway(
+    name,
+    namespace="default",
+    patch=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    dry_run=False,
+    **kwargs,
+):
+    """Patch a namespace-scoped Gateway.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.patch_gateway edge namespace=default patch='{"spec": {"listeners": []}}'
+    """
+    return _gateway_patch(
+        "Gateway",
+        name,
+        namespace,
+        patch,
+        source,
+        template,
+        saltenv,
+        template_context,
+        dry_run,
+        **kwargs,
+    )
+
+
+def delete_gateway(name, namespace="default", wait=False, timeout=60, **kwargs):
+    """Delete a namespace-scoped Gateway.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.delete_gateway edge namespace=default
+    """
+    return _gateway_delete("Gateway", name, namespace, wait, timeout, **kwargs)
+
+
+def http_routes(namespace="default", **kwargs):
+    """Return HTTPRoute objects in *namespace*.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.http_routes namespace=default
+    """
+    return _gateway_list("HTTPRoute", namespace=namespace, **kwargs)
+
+
+def show_http_route(name, namespace="default", **kwargs):
+    """Return an HTTPRoute or ``None`` when it does not exist.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.show_http_route app namespace=default
+    """
+    return _gateway_show("HTTPRoute", name, namespace=namespace, **kwargs)
+
+
+def create_http_route(
+    name,
+    namespace="default",
+    metadata=None,
+    spec=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    dry_run=False,
+    **kwargs,
+):
+    """Create a namespace-scoped HTTPRoute.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.create_http_route app namespace=default spec='{"rules": []}'
+    """
+    return _gateway_create(
+        "HTTPRoute",
+        name,
+        namespace,
+        metadata,
+        spec,
+        source,
+        template,
+        saltenv,
+        template_context,
+        dry_run,
+        **kwargs,
+    )
+
+
+def replace_http_route(
+    name,
+    namespace="default",
+    metadata=None,
+    spec=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    **kwargs,
+):
+    """Replace a namespace-scoped HTTPRoute.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.replace_http_route app namespace=default spec='{"rules": []}'
+    """
+    return _gateway_replace(
+        "HTTPRoute",
+        name,
+        namespace,
+        metadata,
+        spec,
+        source,
+        template,
+        saltenv,
+        template_context,
+        **kwargs,
+    )
+
+
+def patch_http_route(
+    name,
+    namespace="default",
+    patch=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    dry_run=False,
+    **kwargs,
+):
+    """Patch a namespace-scoped HTTPRoute.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.patch_http_route app namespace=default patch='{"spec": {"rules": []}}'
+    """
+    return _gateway_patch(
+        "HTTPRoute",
+        name,
+        namespace,
+        patch,
+        source,
+        template,
+        saltenv,
+        template_context,
+        dry_run,
+        **kwargs,
+    )
+
+
+def delete_http_route(name, namespace="default", wait=False, timeout=60, **kwargs):
+    """Delete a namespace-scoped HTTPRoute.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.delete_http_route app namespace=default
+    """
+    return _gateway_delete("HTTPRoute", name, namespace, wait, timeout, **kwargs)
+
+
+def reference_grants(namespace="default", **kwargs):
+    """Return ReferenceGrant objects in *namespace*.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.reference_grants namespace=default
+    """
+    return _gateway_list("ReferenceGrant", namespace=namespace, **kwargs)
+
+
+def show_reference_grant(name, namespace="default", **kwargs):
+    """Return a ReferenceGrant or ``None`` when it does not exist.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.show_reference_grant grant namespace=default
+    """
+    return _gateway_show("ReferenceGrant", name, namespace=namespace, **kwargs)
+
+
+def create_reference_grant(
+    name,
+    namespace="default",
+    metadata=None,
+    spec=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    dry_run=False,
+    **kwargs,
+):
+    """Create a namespace-scoped ReferenceGrant.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.create_reference_grant grant namespace=default spec='{"from": [], "to": []}'
+    """
+    return _gateway_create(
+        "ReferenceGrant",
+        name,
+        namespace,
+        metadata,
+        spec,
+        source,
+        template,
+        saltenv,
+        template_context,
+        dry_run,
+        **kwargs,
+    )
+
+
+def replace_reference_grant(
+    name,
+    namespace="default",
+    metadata=None,
+    spec=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    **kwargs,
+):
+    """Replace a namespace-scoped ReferenceGrant.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.replace_reference_grant grant namespace=default spec='{"from": [], "to": []}'
+    """
+    return _gateway_replace(
+        "ReferenceGrant",
+        name,
+        namespace,
+        metadata,
+        spec,
+        source,
+        template,
+        saltenv,
+        template_context,
+        **kwargs,
+    )
+
+
+def patch_reference_grant(
+    name,
+    namespace="default",
+    patch=None,
+    source=None,
+    template=None,
+    saltenv=None,
+    template_context=None,
+    dry_run=False,
+    **kwargs,
+):
+    """Patch a namespace-scoped ReferenceGrant.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.patch_reference_grant grant namespace=default patch='{"spec": {"from": []}}'
+    """
+    return _gateway_patch(
+        "ReferenceGrant",
+        name,
+        namespace,
+        patch,
+        source,
+        template,
+        saltenv,
+        template_context,
+        dry_run,
+        **kwargs,
+    )
+
+
+def delete_reference_grant(name, namespace="default", wait=False, timeout=60, **kwargs):
+    """Delete a namespace-scoped ReferenceGrant.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.delete_reference_grant grant namespace=default
+    """
+    return _gateway_delete("ReferenceGrant", name, namespace, wait, timeout, **kwargs)
 
 
 def normalise_manifest_input(

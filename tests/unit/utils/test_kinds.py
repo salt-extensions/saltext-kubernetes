@@ -52,6 +52,10 @@ EXPECTED_KINDS = {
     "priority_class",
     "node",
     "custom_resource_definition",
+    "gateway_class",
+    "gateway",
+    "http_route",
+    "reference_grant",
 }
 
 
@@ -64,6 +68,10 @@ def test_registry_covers_every_supported_kind():
 def test_api_methods_exist(kind_name):
     """``api_class_attr`` resolves; ``list_method`` and ``read_method`` exist on it."""
     kind = _kinds.get_kind(kind_name)
+    if kind.api_version:
+        assert kind.api_kind
+        assert kind.plural
+        return
     api_class = getattr(kubernetes.client, kind.api_class_attr)
     assert hasattr(
         api_class, kind.list_method

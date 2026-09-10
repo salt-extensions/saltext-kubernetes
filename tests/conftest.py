@@ -7,6 +7,7 @@ from pytest_kind import KindCluster
 from saltfactories.utils import random_string
 
 from saltext.kubernetes import PACKAGE_ROOT
+from saltext.kubernetes.utils import _dynamic
 
 # Reset the root logger to its default level(because salt changed it)
 logging.root.setLevel(logging.WARNING)
@@ -27,6 +28,11 @@ K8S_VERSIONS = [
     # "v1.30.13",
     "v1.35.0",
 ]  # pragma: no cover
+
+GATEWAY_API_CRDS = (
+    "https://github.com/kubernetes-sigs/gateway-api/releases/download/"
+    "v1.2.0/standard-install.yaml"
+)
 
 # This swallows all logging to stdout.
 # To show select logs, set --log-cli-level=<level>
@@ -166,6 +172,30 @@ def kind_cluster(request):  # pragma: no cover
                     text=True,
                 )
                 log.info("cert-manager ready")
+                log.info("Installing Gateway API CRDs in kind cluster")
+                subprocess.run(
+                    kubectl_cmd + ["apply", "-f", GATEWAY_API_CRDS],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+                subprocess.run(
+                    kubectl_cmd
+                    + [
+                        "wait",
+                        "--for=condition=Established",
+                        "crd/gatewayclasses.gateway.networking.k8s.io",
+                        "crd/gateways.gateway.networking.k8s.io",
+                        "crd/httproutes.gateway.networking.k8s.io",
+                        "crd/referencegrants.gateway.networking.k8s.io",
+                        "--timeout=120s",
+                    ],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+                _dynamic.invalidate_caches()
+                log.info("Gateway API CRDs ready")
                 break
             except subprocess.CalledProcessError as exc:  # pylint: disable=try-except-raise
                 retries -= 1

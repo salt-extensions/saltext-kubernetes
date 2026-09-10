@@ -158,6 +158,103 @@ def test_configmap_present__fail():
     }
 
 
+def test_gateway_present_creates_when_absent():
+    gateway = {
+        "apiVersion": "gateway.networking.k8s.io/v1",
+        "kind": "Gateway",
+        "metadata": {"name": "edge", "namespace": "default"},
+        "spec": {"gatewayClassName": "standard"},
+    }
+    with mock_func("show_gateway", return_value=None):
+        with mock_func("create_gateway", return_value=gateway) as create:
+            result = kubernetes.gateway_present("edge", spec={"gatewayClassName": "standard"})
+    assert result["result"] is True
+    create.assert_called_once()
+
+
+def test_gateway_present_is_idempotent_without_patching():
+    gateway = {
+        "metadata": {"name": "edge", "namespace": "default", "labels": {"team": "net"}},
+        "spec": {"gatewayClassName": "standard", "listeners": []},
+    }
+    with mock_func("show_gateway", return_value=gateway):
+        with mock_func("patch_gateway", return_value=gateway) as patch_gateway:
+            result = kubernetes.gateway_present(
+                "edge",
+                metadata={"labels": {"team": "net"}},
+                spec={"gatewayClassName": "standard", "listeners": []},
+            )
+    assert result["result"] is True
+    assert "already in the desired state" in result["comment"]
+    patch_gateway.assert_not_called()
+
+
+def test_gateway_present_reports_dry_run_without_patching():
+    gateway = {
+        "metadata": {"name": "edge", "namespace": "default"},
+        "spec": {"gatewayClassName": "old"},
+    }
+    with mock_func("show_gateway", return_value=gateway):
+        with mock_func("patch_gateway", return_value={}) as patch_gateway:
+            with patch.dict(kubernetes.__opts__, {"test": True}):
+                result = kubernetes.gateway_present("edge", spec={"gatewayClassName": "standard"})
+    assert result["result"] is None
+    assert "going to be updated" in result["comment"]
+    patch_gateway.assert_not_called()
+
+
+def test_gateway_present_patches_drift():
+    gateway = {
+        "metadata": {"name": "edge", "namespace": "default"},
+        "spec": {"gatewayClassName": "old"},
+    }
+    updated = {
+        "metadata": {"name": "edge", "namespace": "default"},
+        "spec": {"gatewayClassName": "standard"},
+    }
+    with mock_func("show_gateway", return_value=gateway):
+        with mock_func("patch_gateway", return_value=updated) as patch_gateway:
+            result = kubernetes.gateway_present("edge", spec={"gatewayClassName": "standard"})
+    assert result["result"] is True
+    patch_gateway.assert_called_once()
+
+
+def test_gateway_class_present_is_cluster_scoped():
+    gateway_class = {
+        "metadata": {"name": "standard"},
+        "spec": {"controllerName": "example.net/controller"},
+    }
+    with mock_func("show_gateway_class", return_value=None):
+        with mock_func("create_gateway_class", return_value=gateway_class) as create:
+            result = kubernetes.gateway_class_present(
+                "standard", spec={"controllerName": "example.net/controller"}
+            )
+    assert result["result"] is True
+    assert "namespace" not in create.call_args.kwargs
+
+
+def test_gateway_absent_checks_existence_before_delete():
+    with mock_func("show_gateway", return_value=None):
+        with mock_func("delete_gateway", return_value=None) as delete:
+            result = kubernetes.gateway_absent("edge", namespace="prod")
+    assert result["result"] is True
+    delete.assert_not_called()
+
+
+def test_http_route_present_normalizes_source_before_comparing():
+    existing = {
+        "metadata": {"name": "app", "namespace": "prod"},
+        "spec": {"rules": [{"backendRefs": [{"name": "svc", "port": 80}]}]},
+    }
+    with mock_func("normalise_manifest_input", return_value=[existing]):
+        with mock_func("show_http_route", return_value=existing):
+            result = kubernetes.http_route_present(
+                "app", namespace="prod", source="salt://gateway.yaml"
+            )
+    assert result["result"] is True
+    assert "already in the desired state" in result["comment"]
+
+
 def test_configmap_present__create_no_data():
     # Create a new configmap with no 'data' attribute
     with mock_func("show_configmap", return_value=None):

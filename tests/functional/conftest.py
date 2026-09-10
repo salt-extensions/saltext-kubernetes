@@ -1,9 +1,12 @@
 import logging
 import shutil
+import time
 
 import pytest
 from saltfactories.utils import random_string
 from saltfactories.utils.functional import Loaders
+
+from saltext.kubernetes.utils import _dynamic
 
 log = logging.getLogger(__name__)
 
@@ -180,6 +183,133 @@ def namespace(kubernetes_exe, request):
         yield name
     finally:
         kubernetes_exe.delete_namespace(name, wait=True)
+
+
+@pytest.fixture(params=[True])
+def gateway_class(kubernetes_exe, request):
+    name = random_string("gateway-class-", uppercase=False)
+    if request.param:
+        kubernetes_exe.create_gateway_class(
+            name=name,
+            spec={"controllerName": "example.net/test-controller"},
+        )
+    try:
+        yield {
+            "name": name,
+            "spec": {"controllerName": "example.net/test-controller"},
+        }
+    finally:
+        kubernetes_exe.delete_gateway_class(name)
+
+
+@pytest.fixture(params=[True])
+def gateway(kubernetes_exe, namespace, gateway_class, request):
+    name = random_string("gateway-", uppercase=False)
+    spec = {
+        "gatewayClassName": gateway_class["name"],
+        "listeners": [{"name": "http", "protocol": "HTTP", "port": 80}],
+    }
+    if request.param:
+        kubernetes_exe.create_gateway(name, namespace=namespace, spec=spec)
+    try:
+        yield {"name": name, "namespace": namespace, "spec": spec}
+    finally:
+        kubernetes_exe.delete_gateway(name, namespace=namespace)
+
+
+@pytest.fixture(params=[True])
+def http_route(kubernetes_exe, namespace, gateway, request):
+    name = random_string("route-", uppercase=False)
+    spec = {
+        "parentRefs": [{"name": gateway["name"]}],
+        "rules": [{"backendRefs": [{"name": "backend", "port": 8080}]}],
+    }
+    if request.param:
+        kubernetes_exe.create_http_route(name, namespace=namespace, spec=spec)
+    try:
+        yield {"name": name, "namespace": namespace, "spec": spec}
+    finally:
+        kubernetes_exe.delete_http_route(name, namespace=namespace)
+
+
+@pytest.fixture(params=[True])
+def reference_grant(kubernetes_exe, namespace, request):
+    name = random_string("grant-", uppercase=False)
+    spec = {
+        "from": [
+            {
+                "group": "gateway.networking.k8s.io",
+                "kind": "HTTPRoute",
+                "namespace": namespace,
+            }
+        ],
+        "to": [{"group": "", "kind": "Service"}],
+    }
+    if request.param:
+        kubernetes_exe.create_reference_grant(name, namespace=namespace, spec=spec)
+    try:
+        yield {"name": name, "namespace": namespace, "spec": spec}
+    finally:
+        kubernetes_exe.delete_reference_grant(name, namespace=namespace)
+
+
+@pytest.fixture
+def gateway_tls_secret(kubernetes_exe, namespace):
+    """Provision a cert-manager TLS Secret for Gateway listener tests."""
+    issuer = random_string("issuer-", uppercase=False)
+    certificate = random_string("certificate-", uppercase=False)
+    secret = random_string("tls-", uppercase=False)
+    kubernetes_exe.apply(
+        manifest={
+            "apiVersion": "cert-manager.io/v1",
+            "kind": "Issuer",
+            "metadata": {"name": issuer, "namespace": namespace},
+            "spec": {"selfSigned": {}},
+        }
+    )
+    kubernetes_exe.apply(
+        manifest={
+            "apiVersion": "cert-manager.io/v1",
+            "kind": "Certificate",
+            "metadata": {"name": certificate, "namespace": namespace},
+            "spec": {
+                "secretName": secret,
+                "dnsNames": ["gateway.example.test"],
+                "issuerRef": {"name": issuer, "kind": "Issuer"},
+            },
+        }
+    )
+    deadline = time.monotonic() + 120
+    while time.monotonic() < deadline:
+        live = _dynamic.get_object("cert-manager.io/v1", "Certificate", certificate, namespace)
+        if any(
+            condition.get("type") == "Ready" and condition.get("status") == "True"
+            for condition in (live or {}).get("status", {}).get("conditions", [])
+        ):
+            break
+        time.sleep(2)
+    else:
+        raise AssertionError("Timed out waiting for cert-manager Certificate Ready=True")
+    tls_secret = kubernetes_exe.show_secret(secret, namespace=namespace)
+    assert tls_secret["type"] == "kubernetes.io/tls"
+    assert {"tls.crt", "tls.key"}.issubset(tls_secret["data"])
+    try:
+        yield {"name": secret, "namespace": namespace}
+    finally:
+        kubernetes_exe.delete_manifest(
+            manifest={
+                "apiVersion": "cert-manager.io/v1",
+                "kind": "Certificate",
+                "metadata": {"name": certificate, "namespace": namespace},
+            }
+        )
+        kubernetes_exe.delete_manifest(
+            manifest={
+                "apiVersion": "cert-manager.io/v1",
+                "kind": "Issuer",
+                "metadata": {"name": issuer, "namespace": namespace},
+            }
+        )
 
 
 @pytest.fixture(params=[True])
@@ -1018,12 +1148,10 @@ def persistent_volume_claim(kubernetes_exe, persistent_volume_claim_spec, reques
         # for actual disappearance rather than asserting synchronous
         # deletion.
         kubernetes_exe.delete_persistent_volume_claim(name=name, namespace="default", wait=True)
-        import time as _time  # pylint: disable=import-outside-toplevel
-
         for _ in range(30):
             if kubernetes_exe.show_persistent_volume_claim(name=name, namespace="default") is None:
                 break
-            _time.sleep(1)
+            time.sleep(1)
         assert kubernetes_exe.show_persistent_volume_claim(name=name, namespace="default") is None
 
 
