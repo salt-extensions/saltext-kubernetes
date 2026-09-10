@@ -103,6 +103,9 @@ The kubernetes module is used to manage different kubernetes resources.
             key3: value3
 
 .. versionadded:: 2017.7.0
+
+.. versionchanged:: 3.0.0
+    Added present/absent states for the stable Gateway API resources.
 """
 
 import copy
@@ -3913,7 +3916,21 @@ def ingress_present(
 
 
 def gateway_class_absent(name, wait=False, timeout=60, **kwargs):
-    """Ensure the named GatewayClass is absent."""
+    """Ensure the named GatewayClass is absent.
+
+    .. versionadded:: 3.0.0
+
+    name
+        GatewayClass name.
+
+    wait, timeout
+        Whether to wait for deletion and the maximum wait time in seconds.
+
+    .. code-block:: yaml
+
+        standard:
+          kubernetes.gateway_class_absent: []
+    """
     return _rbac_absent_impl(
         name, "gateway_class", "GatewayClass", False, None, wait, timeout, kwargs
     )
@@ -3928,7 +3945,23 @@ def gateway_class_present(
     template_context=None,
     **kwargs,
 ):
-    """Ensure the named cluster-scoped GatewayClass is present."""
+    """Ensure the named cluster-scoped GatewayClass is present.
+
+    .. versionadded:: 3.0.0
+
+    name
+        GatewayClass name.
+
+    metadata, spec, source, template, template_context
+        Desired object data and optional source-rendering settings.
+
+    .. code-block:: yaml
+
+        standard:
+            kubernetes.gateway_class_present:
+            - spec:
+                controllerName: example.net/gateway-controller
+    """
     return _gateway_present_impl(
         name,
         "gateway_class",
@@ -3945,7 +3978,22 @@ def gateway_class_present(
 
 
 def gateway_absent(name, namespace="default", wait=False, timeout=60, **kwargs):
-    """Ensure the named Gateway is absent."""
+    """Ensure the named Gateway is absent.
+
+    .. versionadded:: 3.0.0
+
+    name, namespace
+        Gateway identity. The namespace defaults to ``default``.
+
+    wait, timeout
+        Whether to wait for deletion and the maximum wait time in seconds.
+
+    .. code-block:: yaml
+
+        edge:
+          kubernetes.gateway_absent:
+            - namespace: default
+    """
     return _rbac_absent_impl(name, "gateway", "Gateway", True, namespace, wait, timeout, kwargs)
 
 
@@ -3959,7 +4007,28 @@ def gateway_present(
     template_context=None,
     **kwargs,
 ):
-    """Ensure the named Gateway is present."""
+    """Ensure the named Gateway is present.
+
+    .. versionadded:: 3.0.0
+
+    name, namespace
+        Gateway identity. The namespace defaults to ``default``.
+
+    metadata, spec, source, template, template_context
+        Desired object data and optional source-rendering settings.
+
+    .. code-block:: yaml
+
+        edge:
+          kubernetes.gateway_present:
+            - namespace: default
+            - spec:
+              gatewayClassName: standard
+              listeners:
+                - name: http
+                  protocol: HTTP
+                  port: 80
+    """
     return _gateway_present_impl(
         name,
         "gateway",
@@ -3976,7 +4045,22 @@ def gateway_present(
 
 
 def http_route_absent(name, namespace="default", wait=False, timeout=60, **kwargs):
-    """Ensure the named HTTPRoute is absent."""
+    """Ensure the named HTTPRoute is absent.
+
+    .. versionadded:: 3.0.0
+
+    name, namespace
+        HTTPRoute identity. The namespace defaults to ``default``.
+
+    wait, timeout
+        Whether to wait for deletion and the maximum wait time in seconds.
+
+    .. code-block:: yaml
+
+        app-route:
+          kubernetes.http_route_absent:
+            - namespace: default
+    """
     return _rbac_absent_impl(
         name, "http_route", "HTTPRoute", True, namespace, wait, timeout, kwargs
     )
@@ -3992,7 +4076,29 @@ def http_route_present(
     template_context=None,
     **kwargs,
 ):
-    """Ensure the named HTTPRoute is present."""
+    """Ensure the named HTTPRoute is present.
+
+    .. versionadded:: 3.0.0
+
+    name, namespace
+        HTTPRoute identity. The namespace defaults to ``default``.
+
+    metadata, spec, source, template, template_context
+        Desired object data and optional source-rendering settings.
+
+    .. code-block:: yaml
+
+        app-route:
+          kubernetes.http_route_present:
+            - namespace: default
+            - spec:
+              parentRefs:
+                - name: edge
+              rules:
+                - backendRefs:
+                  - name: backend
+                    port: 8080
+    """
     return _gateway_present_impl(
         name,
         "http_route",
@@ -4009,7 +4115,22 @@ def http_route_present(
 
 
 def reference_grant_absent(name, namespace="default", wait=False, timeout=60, **kwargs):
-    """Ensure the named ReferenceGrant is absent."""
+    """Ensure the named ReferenceGrant is absent.
+
+    .. versionadded:: 3.0.0
+
+    name, namespace
+        ReferenceGrant identity. The namespace defaults to ``default``.
+
+    wait, timeout
+        Whether to wait for deletion and the maximum wait time in seconds.
+
+    .. code-block:: yaml
+
+        backend-grant:
+          kubernetes.reference_grant_absent:
+            - namespace: backend
+    """
     return _rbac_absent_impl(
         name, "reference_grant", "ReferenceGrant", True, namespace, wait, timeout, kwargs
     )
@@ -4025,7 +4146,30 @@ def reference_grant_present(
     template_context=None,
     **kwargs,
 ):
-    """Ensure the named ReferenceGrant is present."""
+    """Ensure the named ReferenceGrant is present.
+
+    .. versionadded:: 3.0.0
+
+    name, namespace
+        ReferenceGrant identity. The namespace defaults to ``default``.
+
+    metadata, spec, source, template, template_context
+        Desired object data and optional source-rendering settings.
+
+    .. code-block:: yaml
+
+        backend-grant:
+          kubernetes.reference_grant_present:
+            - namespace: backend
+            - spec:
+              from:
+                - group: gateway.networking.k8s.io
+                  kind: HTTPRoute
+                  namespace: apps
+              to:
+                - group: ""
+                  kind: Service
+    """
     return _gateway_present_impl(
         name,
         "reference_grant",

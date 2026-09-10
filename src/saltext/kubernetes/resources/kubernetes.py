@@ -3,6 +3,9 @@ Kubernetes resource type for Salt's resources subsystem.
 
 .. versionadded:: 2.1.0
 
+.. versionchanged:: 3.0.0
+    Added Gateway API resource discovery and condition grains.
+
 .. note::
     Requires **Salt 3008.0 or newer** — the resources subsystem
     (``salt.utils.resources`` / ``salt.utils.resource_registry``) is

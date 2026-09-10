@@ -43,6 +43,10 @@ CLI Example:
     auth modes. The legacy kubeconfig path is unchanged and remains the
     default. See :doc:`/topics/auth`.
 
+.. versionchanged:: 3.0.0
+
+    Added typed execution functions for the stable Gateway API resources.
+
 .. warning::
 
     Configuration options changed in 2019.2.0. The following configuration options have been removed:
@@ -12132,6 +12136,8 @@ def _gateway_delete(kind, name, namespace=None, wait=False, timeout=60, **kwargs
 def gateway_classes(**kwargs):
     """Return GatewayClass objects.
 
+    .. versionadded:: 3.0.0
+
     CLI Example:
 
     .. code-block:: bash
@@ -12143,6 +12149,11 @@ def gateway_classes(**kwargs):
 
 def show_gateway_class(name, **kwargs):
     """Return a GatewayClass or ``None`` when it does not exist.
+
+    .. versionadded:: 3.0.0
+
+    name
+        GatewayClass name.
 
     CLI Example:
 
@@ -12165,6 +12176,23 @@ def create_gateway_class(
     **kwargs,
 ):
     """Create a cluster-scoped GatewayClass.
+
+    .. versionadded:: 3.0.0
+
+    name
+        GatewayClass name.
+
+    metadata
+        Optional Kubernetes metadata mapping.
+
+    spec
+        GatewayClass spec, including the required ``controllerName``.
+
+    source
+        Optional Salt fileserver manifest. Mutually exclusive with ``metadata`` and ``spec``.
+
+    dry_run
+        Validate without persisting the object.
 
     CLI Example:
 
@@ -12198,6 +12226,14 @@ def replace_gateway_class(
 ):
     """Replace a cluster-scoped GatewayClass.
 
+    .. versionadded:: 3.0.0
+
+    name
+        GatewayClass name.
+
+    metadata, spec, source, template, saltenv, template_context
+        Manifest replacement data and source-rendering options.
+
     CLI Example:
 
     .. code-block:: bash
@@ -12229,6 +12265,20 @@ def patch_gateway_class(
 ):
     """Patch a cluster-scoped GatewayClass.
 
+    .. versionadded:: 3.0.0
+
+    name
+        GatewayClass name.
+
+    patch
+        Merge-patch mapping. Mutually exclusive with ``source``.
+
+    source, template, saltenv, template_context
+        Optional source-rendering options.
+
+    dry_run
+        Validate without persisting the patch.
+
     CLI Example:
 
     .. code-block:: bash
@@ -12251,6 +12301,17 @@ def patch_gateway_class(
 def delete_gateway_class(name, wait=False, timeout=60, **kwargs):
     """Delete a cluster-scoped GatewayClass.
 
+    .. versionadded:: 3.0.0
+
+    name
+        GatewayClass name.
+
+    wait
+        Wait until the object is deleted.
+
+    timeout
+        Maximum seconds to wait when ``wait=True``.
+
     CLI Example:
 
     .. code-block:: bash
@@ -12263,6 +12324,11 @@ def delete_gateway_class(name, wait=False, timeout=60, **kwargs):
 def gateways(namespace="default", **kwargs):
     """Return Gateway objects in *namespace*.
 
+    .. versionadded:: 3.0.0
+
+    namespace
+        Namespace to list. Defaults to ``default``.
+
     CLI Example:
 
     .. code-block:: bash
@@ -12274,6 +12340,14 @@ def gateways(namespace="default", **kwargs):
 
 def show_gateway(name, namespace="default", **kwargs):
     """Return a Gateway or ``None`` when it does not exist.
+
+    .. versionadded:: 3.0.0
+
+    name
+        Gateway name.
+
+    namespace
+        Gateway namespace. Defaults to ``default``.
 
     CLI Example:
 
@@ -12297,6 +12371,20 @@ def create_gateway(
     **kwargs,
 ):
     """Create a namespace-scoped Gateway.
+
+    .. versionadded:: 3.0.0
+
+    name
+        Gateway name.
+
+    namespace
+        Gateway namespace. Defaults to ``default``.
+
+    metadata, spec, source, template, saltenv, template_context
+        Manifest data and source-rendering options.
+
+    dry_run
+        Validate without persisting the object.
 
     CLI Example:
 
@@ -12332,6 +12420,17 @@ def replace_gateway(
 ):
     """Replace a namespace-scoped Gateway.
 
+    .. versionadded:: 3.0.0
+
+    name
+        Gateway name.
+
+    namespace
+        Gateway namespace. Defaults to ``default``.
+
+    metadata, spec, source, template, saltenv, template_context
+        Manifest replacement data and source-rendering options.
+
     CLI Example:
 
     .. code-block:: bash
@@ -12365,6 +12464,23 @@ def patch_gateway(
 ):
     """Patch a namespace-scoped Gateway.
 
+    .. versionadded:: 3.0.0
+
+    name
+        Gateway name.
+
+    namespace
+        Gateway namespace. Defaults to ``default``.
+
+    patch
+        Merge-patch mapping. Mutually exclusive with ``source``.
+
+    source, template, saltenv, template_context
+        Optional source-rendering options.
+
+    dry_run
+        Validate without persisting the patch.
+
     CLI Example:
 
     .. code-block:: bash
@@ -12388,6 +12504,17 @@ def patch_gateway(
 def delete_gateway(name, namespace="default", wait=False, timeout=60, **kwargs):
     """Delete a namespace-scoped Gateway.
 
+    .. versionadded:: 3.0.0
+
+    name
+        Gateway name.
+
+    namespace
+        Gateway namespace. Defaults to ``default``.
+
+    wait, timeout
+        Whether to wait for deletion and the maximum wait time in seconds.
+
     CLI Example:
 
     .. code-block:: bash
@@ -12400,6 +12527,11 @@ def delete_gateway(name, namespace="default", wait=False, timeout=60, **kwargs):
 def http_routes(namespace="default", **kwargs):
     """Return HTTPRoute objects in *namespace*.
 
+    .. versionadded:: 3.0.0
+
+    namespace
+        Namespace to list. Defaults to ``default``.
+
     CLI Example:
 
     .. code-block:: bash
@@ -12411,6 +12543,14 @@ def http_routes(namespace="default", **kwargs):
 
 def show_http_route(name, namespace="default", **kwargs):
     """Return an HTTPRoute or ``None`` when it does not exist.
+
+    .. versionadded:: 3.0.0
+
+    name
+        HTTPRoute name.
+
+    namespace
+        HTTPRoute namespace. Defaults to ``default``.
 
     CLI Example:
 
@@ -12434,6 +12574,17 @@ def create_http_route(
     **kwargs,
 ):
     """Create a namespace-scoped HTTPRoute.
+
+    .. versionadded:: 3.0.0
+
+    name, namespace
+        HTTPRoute name and namespace. The namespace defaults to ``default``.
+
+    metadata, spec, source, template, saltenv, template_context
+        Manifest data and source-rendering options.
+
+    dry_run
+        Validate without persisting the object.
 
     CLI Example:
 
@@ -12469,6 +12620,11 @@ def replace_http_route(
 ):
     """Replace a namespace-scoped HTTPRoute.
 
+    .. versionadded:: 3.0.0
+
+    name, namespace, metadata, spec, source, template, saltenv, template_context
+        Manifest replacement data and source-rendering options.
+
     CLI Example:
 
     .. code-block:: bash
@@ -12502,6 +12658,20 @@ def patch_http_route(
 ):
     """Patch a namespace-scoped HTTPRoute.
 
+    .. versionadded:: 3.0.0
+
+    name, namespace
+        HTTPRoute name and namespace. The namespace defaults to ``default``.
+
+    patch
+        Merge-patch mapping. Mutually exclusive with ``source``.
+
+    source, template, saltenv, template_context
+        Optional source-rendering options.
+
+    dry_run
+        Validate without persisting the patch.
+
     CLI Example:
 
     .. code-block:: bash
@@ -12525,6 +12695,11 @@ def patch_http_route(
 def delete_http_route(name, namespace="default", wait=False, timeout=60, **kwargs):
     """Delete a namespace-scoped HTTPRoute.
 
+    .. versionadded:: 3.0.0
+
+    name, namespace, wait, timeout
+        Resource identity and deletion wait options.
+
     CLI Example:
 
     .. code-block:: bash
@@ -12537,6 +12712,11 @@ def delete_http_route(name, namespace="default", wait=False, timeout=60, **kwarg
 def reference_grants(namespace="default", **kwargs):
     """Return ReferenceGrant objects in *namespace*.
 
+    .. versionadded:: 3.0.0
+
+    namespace
+        Namespace to list. Defaults to ``default``.
+
     CLI Example:
 
     .. code-block:: bash
@@ -12548,6 +12728,11 @@ def reference_grants(namespace="default", **kwargs):
 
 def show_reference_grant(name, namespace="default", **kwargs):
     """Return a ReferenceGrant or ``None`` when it does not exist.
+
+    .. versionadded:: 3.0.0
+
+    name, namespace
+        ReferenceGrant name and namespace. The namespace defaults to ``default``.
 
     CLI Example:
 
@@ -12571,6 +12756,17 @@ def create_reference_grant(
     **kwargs,
 ):
     """Create a namespace-scoped ReferenceGrant.
+
+    .. versionadded:: 3.0.0
+
+    name, namespace
+        ReferenceGrant name and namespace. The namespace defaults to ``default``.
+
+    metadata, spec, source, template, saltenv, template_context
+        Manifest data and source-rendering options.
+
+    dry_run
+        Validate without persisting the object.
 
     CLI Example:
 
@@ -12606,6 +12802,11 @@ def replace_reference_grant(
 ):
     """Replace a namespace-scoped ReferenceGrant.
 
+    .. versionadded:: 3.0.0
+
+    name, namespace, metadata, spec, source, template, saltenv, template_context
+        Manifest replacement data and source-rendering options.
+
     CLI Example:
 
     .. code-block:: bash
@@ -12639,6 +12840,20 @@ def patch_reference_grant(
 ):
     """Patch a namespace-scoped ReferenceGrant.
 
+    .. versionadded:: 3.0.0
+
+    name, namespace
+        ReferenceGrant name and namespace. The namespace defaults to ``default``.
+
+    patch
+        Merge-patch mapping. Mutually exclusive with ``source``.
+
+    source, template, saltenv, template_context
+        Optional source-rendering options.
+
+    dry_run
+        Validate without persisting the patch.
+
     CLI Example:
 
     .. code-block:: bash
@@ -12661,6 +12876,11 @@ def patch_reference_grant(
 
 def delete_reference_grant(name, namespace="default", wait=False, timeout=60, **kwargs):
     """Delete a namespace-scoped ReferenceGrant.
+
+    .. versionadded:: 3.0.0
+
+    name, namespace, wait, timeout
+        Resource identity and deletion wait options.
 
     CLI Example:
 
