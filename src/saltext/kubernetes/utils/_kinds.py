@@ -96,6 +96,14 @@ def _service_ready(obj):
     return bool(obj.spec.cluster_ip)
 
 
+def _secret_ready(obj):
+    """Wait for Kubernetes to populate manually managed token Secrets."""
+    if getattr(obj, "type", None) != "kubernetes.io/service-account-token":
+        return True
+    data = getattr(obj, "data", None) or {}
+    return all(data.get(key) for key in ("token", "ca.crt", "namespace"))
+
+
 # ---------------------------------------------------------------------------
 # User-driven wait predicates: condition= and jsonpath= matching against the
 # live API object. Used by ``kubernetes.wait_for`` and the ``wait_for=`` block
@@ -293,7 +301,7 @@ _KIND_REGISTRY: dict[str, KindOps] = {
         list_method="list_namespaced_secret",
         read_method="read_namespaced_secret",
         namespaced=True,
-        ready_predicate=_always_ready,
+        ready_predicate=_secret_ready,
     ),
     "configmap": KindOps(
         api_class_attr="CoreV1Api",
