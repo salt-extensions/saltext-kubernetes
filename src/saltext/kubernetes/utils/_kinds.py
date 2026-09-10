@@ -52,6 +52,15 @@ class KindOps:
     ready_predicate: Callable[[object], bool]
     """Returns ``True`` when an API object is considered Ready."""
 
+    api_version: str | None = None
+    """API version used by dynamic resources, when no typed client exists."""
+
+    api_kind: str | None = None
+    """Kubernetes kind used by the dynamic client."""
+
+    plural: str | None = None
+    """Resource plural used by dynamic resources when discovery is unavailable."""
+
 
 # ---------------------------------------------------------------------------
 # Ready predicates. Behaviour is preserved exactly from the previous in-line
@@ -85,6 +94,14 @@ def _pod_ready(obj):
 def _service_ready(obj):
     """A Service is ready once the API server has assigned a clusterIP."""
     return bool(obj.spec.cluster_ip)
+
+
+def _secret_ready(obj):
+    """Wait for Kubernetes to populate manually managed token Secrets."""
+    if getattr(obj, "type", None) != "kubernetes.io/service-account-token":
+        return True
+    data = getattr(obj, "data", None) or {}
+    return all(data.get(key) for key in ("token", "ca.crt", "namespace"))
 
 
 # ---------------------------------------------------------------------------
@@ -284,7 +301,7 @@ _KIND_REGISTRY: dict[str, KindOps] = {
         list_method="list_namespaced_secret",
         read_method="read_namespaced_secret",
         namespaced=True,
-        ready_predicate=_always_ready,
+        ready_predicate=_secret_ready,
     ),
     "configmap": KindOps(
         api_class_attr="CoreV1Api",
@@ -447,6 +464,49 @@ _KIND_REGISTRY: dict[str, KindOps] = {
         read_method="read_custom_resource_definition",
         namespaced=False,
         ready_predicate=_always_ready,
+    ),
+    # Gateway API resources. These are CRDs and use the dynamic client in the
+    # resources subsystem; they are existence-ready until a controller is
+    # explicitly installed and controller-specific status is available.
+    "gateway_class": KindOps(
+        api_class_attr="CustomObjectsApi",
+        list_method="list_cluster_custom_object",
+        read_method="get_cluster_custom_object",
+        namespaced=False,
+        ready_predicate=_always_ready,
+        api_version="gateway.networking.k8s.io/v1",
+        api_kind="GatewayClass",
+        plural="gatewayclasses",
+    ),
+    "gateway": KindOps(
+        api_class_attr="CustomObjectsApi",
+        list_method="list_namespaced_custom_object",
+        read_method="get_namespaced_custom_object",
+        namespaced=True,
+        ready_predicate=_always_ready,
+        api_version="gateway.networking.k8s.io/v1",
+        api_kind="Gateway",
+        plural="gateways",
+    ),
+    "http_route": KindOps(
+        api_class_attr="CustomObjectsApi",
+        list_method="list_namespaced_custom_object",
+        read_method="get_namespaced_custom_object",
+        namespaced=True,
+        ready_predicate=_always_ready,
+        api_version="gateway.networking.k8s.io/v1",
+        api_kind="HTTPRoute",
+        plural="httproutes",
+    ),
+    "reference_grant": KindOps(
+        api_class_attr="CustomObjectsApi",
+        list_method="list_namespaced_custom_object",
+        read_method="get_namespaced_custom_object",
+        namespaced=True,
+        ready_predicate=_always_ready,
+        api_version="gateway.networking.k8s.io/v1beta1",
+        api_kind="ReferenceGrant",
+        plural="referencegrants",
     ),
 }
 

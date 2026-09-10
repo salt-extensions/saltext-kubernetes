@@ -3,6 +3,9 @@ Kubernetes resource type for Salt's resources subsystem.
 
 .. versionadded:: 2.1.0
 
+.. versionchanged:: 3.0.0
+    Added Gateway API resource discovery and condition grains.
+
 .. note::
     Requires **Salt 3008.0 or newer** — the resources subsystem
     (``salt.utils.resources`` / ``salt.utils.resource_registry``) is
@@ -106,6 +109,7 @@ except ImportError:
 # pylint: enable=import-error,no-name-in-module
 
 from saltext.kubernetes.utils import _connection
+from saltext.kubernetes.utils import _dynamic
 from saltext.kubernetes.utils import _kinds
 
 log = logging.getLogger(__name__)
@@ -138,6 +142,10 @@ _DEFAULT_KINDS = (
     "resource_quota",
     "priority_class",
     "custom_resource_definition",
+    "gateway_class",
+    "gateway",
+    "http_route",
+    "reference_grant",
 )
 
 
@@ -382,6 +390,23 @@ def discover(opts):  # pylint: disable=unused-argument
                 continue
             list_ns = namespaces if (kind_ops.namespaced and namespaces) else [None]
             for ns in list_ns:
+                if kind_ops.api_version:
+                    items = _dynamic.list_resource(
+                        kind_ops.api_version,
+                        kind_ops.api_kind,
+                        namespace=ns,
+                        label_selector=label_selector,
+                    )
+                    for obj in items:
+                        metadata = obj.get("metadata") or {}
+                        name = metadata.get("name")
+                        if not name:
+                            continue
+                        obj_namespace = metadata.get("namespace")
+                        rid = _make_id(kind, obj_namespace, name)
+                        if rid not in declared_set:
+                            out.append(rid)
+                    continue
                 api_class = getattr(kubernetes.client, kind_ops.api_class_attr)
                 api_instance = api_class()
                 if kind_ops.namespaced and ns:
@@ -467,6 +492,38 @@ def grains():
         # could go through the dynamic client here too, but the typed
         # path is faster and the resource type only knows about kinds
         # already in the registry.
+        if kind_ops.api_version:
+            obj = _dynamic.get_object(
+                kind_ops.api_version,
+                kind_ops.api_kind,
+                name=name,
+                namespace=namespace,
+            )
+            if obj is None:
+                return {"kind": kind, "namespace": namespace, "name": name}
+            metadata = obj.get("metadata") or {}
+            labels = metadata.get("labels") or {}
+            annotations = metadata.get("annotations") or {}
+            status = obj.get("status") or {}
+            grain_dict = {
+                "kind": kind,
+                "namespace": namespace,
+                "name": name,
+                "label": dict(labels),
+                "annotation": {
+                    key: value
+                    for key, value in annotations.items()
+                    if not key.startswith("kubectl.kubernetes.io/")
+                    and not key.startswith("deployment.kubernetes.io/")
+                },
+            }
+            conditions = status.get("conditions") or []
+            for condition in conditions:
+                condition_type = condition.get("type")
+                if condition_type and "status" in condition:
+                    grain_dict[f"condition.{condition_type}"] = condition["status"]
+            return grain_dict
+
         api_class = getattr(kubernetes.client, kind_ops.api_class_attr)
         api = api_class()
         try:
