@@ -114,6 +114,10 @@ def _make_service(cluster_ip):
     return SimpleNamespace(spec=SimpleNamespace(cluster_ip=cluster_ip))
 
 
+def _make_secret(secret_type, data=None):
+    return SimpleNamespace(type=secret_type, data=data)
+
+
 def test_deployment_ready_when_available_matches_replicas():
     assert _kinds._deployment_ready(_make_deployment(3, 3)) is True
 
@@ -150,6 +154,18 @@ def test_service_ready_when_cluster_ip_assigned():
 def test_service_not_ready_without_cluster_ip():
     assert _kinds._service_ready(_make_service(None)) is False
     assert _kinds._service_ready(_make_service("")) is False
+
+
+def test_regular_secret_is_ready_when_created():
+    assert _kinds._secret_ready(_make_secret("Opaque")) is True
+
+
+def test_service_account_token_secret_waits_for_generated_data():
+    secret = _make_secret("kubernetes.io/service-account-token", {"ca.crt": "cert"})
+    assert _kinds._secret_ready(secret) is False
+
+    secret.data.update({"token": "token", "namespace": "default"})
+    assert _kinds._secret_ready(secret) is True
 
 
 @pytest.mark.parametrize(
