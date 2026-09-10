@@ -283,3 +283,73 @@ def test_status_for_check_warn_when_no_fail_present(tmp_path, monkeypatch):
     monkeypatch.setattr(kube_bench_cache, "ensure_fresh", MagicMock(return_value=cache_path))
     result = kube_bench_cache.status_for_check("1.1.1")
     assert result["status"] == "WARN"
+
+
+def test_status_for_check_info_is_aggregated_as_warn(tmp_path, monkeypatch):
+    sections = [_section("node-a", "1.1.1", "INFO", actual_value="review")]
+    cache_path = _write_cache(tmp_path, sections)
+    monkeypatch.setattr(kube_bench_cache, "ensure_fresh", MagicMock(return_value=cache_path))
+
+    result = kube_bench_cache.status_for_check("1.1.1")
+
+    assert result["status"] == "WARN"
+
+
+def test_collect_job_rejects_an_active_assessment(monkeypatch):
+    monkeypatch.setattr(
+        kube_bench_cache,
+        "_is_assessment_active",
+        MagicMock(return_value=(True, "existing-assessment")),
+    )
+    create_job = MagicMock()
+    monkeypatch.setitem(kube_bench_cache.__salt__, "kubernetes.create_job", create_job)
+
+    with pytest.raises(RuntimeError, match="concurrent assessment"):
+        kube_bench_cache._collect_job("default", "kube-bench", 1, {})
+
+    create_job.assert_not_called()
+
+
+def test_wait_for_job_raises_when_job_fails(monkeypatch):
+    monkeypatch.setattr(kube_bench_cache.time, "sleep", lambda _: None)
+    show_job = MagicMock(
+        return_value={
+            "status": {"conditions": [{"type": "Failed", "status": "True", "message": "bad image"}]}
+        }
+    )
+    monkeypatch.setitem(kube_bench_cache.__salt__, "kubernetes.show_job", show_job)
+
+    with pytest.raises(RuntimeError, match="bad image"):
+        kube_bench_cache._wait_for_job("assessment", "default", 1, {})
+
+
+def test_collect_job_deletes_job_when_log_collection_fails(monkeypatch):
+    monkeypatch.setattr(
+        kube_bench_cache,
+        "_is_assessment_active",
+        MagicMock(return_value=(False, "")),
+    )
+    monkeypatch.setattr(
+        kube_bench_cache, "_create_assessment_job", MagicMock(return_value="assessment")
+    )
+    monkeypatch.setattr(kube_bench_cache, "_wait_for_job", MagicMock())
+    monkeypatch.setattr(
+        kube_bench_cache,
+        "_collect_all_pod_logs",
+        MagicMock(side_effect=RuntimeError("no usable logs")),
+    )
+    delete_job = MagicMock()
+    monkeypatch.setitem(kube_bench_cache.__salt__, "kubernetes.delete_job", delete_job)
+
+    with pytest.raises(RuntimeError, match="no usable logs"):
+        kube_bench_cache._collect_job("default", "kube-bench", 1, {})
+
+    delete_job.assert_called_once_with("assessment", namespace="default")
+
+
+def test_lock_preserves_exception_from_protected_operation(tmp_path):
+    lock_path = str(tmp_path / "cache.json.lock")
+
+    with pytest.raises(RuntimeError, match="collection failed"):
+        with kube_bench_cache._lock(lock_path):
+            raise RuntimeError("collection failed")
