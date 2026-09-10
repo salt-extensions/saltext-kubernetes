@@ -863,9 +863,23 @@ def _lock(path, timeout=_LOCK_TIMEOUT):
     fall back to proceeding without the lock rather than failing the SLS
     render outright.
     """
+    lock = wait_lock(path, lock_fn=path, timeout=timeout)
+    lock_generator = lock.gen
     try:
-        with wait_lock(path, lock_fn=path, timeout=timeout):
+        try:
+            next(lock_generator, None)
+        except FileLockError:
+            log.warning(
+                "kube_bench_cache: lock timeout after %ss -- proceeding without lock", timeout
+            )
             yield
-    except FileLockError:
-        log.warning("kube_bench_cache: lock timeout after %ss -- proceeding without lock", timeout)
-        yield
+            return
+
+        try:
+            yield
+        finally:
+            # Advance normally so wait_lock can release the lock without
+            # rewriting an exception raised by the protected operation.
+            next(lock_generator, None)
+    finally:
+        lock_generator.close()
