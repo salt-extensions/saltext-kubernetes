@@ -4,6 +4,30 @@ This project uses [Semantic Versioning](https://semver.org/) - MAJOR.MINOR.PATCH
 
 # Changelog
 
+## 3.0.0 (2026-09-10)
+
+
+### Breaking changes
+
+- The Kubernetes pod-exec function is now named `kubernetes.exec` instead of `kubernetes.exec_`. If you call `salt '*' kubernetes.exec_ ...`, use `__salt__['kubernetes.exec_']`, or reference `kubernetes.exec_` in states or the `kuberesource_cmd` companion module, update those call sites to `kubernetes.exec` (without the trailing underscore) — the old name no longer exists. This has always been the name documented in the module's docstrings and CLI examples; the rename brings the actual function in line with that documentation.
+
+
+### Removed
+
+- The legacy `k8s` execution module (`saltext.kubernetes.modules.k8s`), deprecated since 2.1.0, has been removed. Use the `kubernetes` execution module (`kubernetesmod`) instead, which is built on the official Kubernetes Python client and supports most current resource types. [#44](https://github.com/salt-extensions/saltext-kubernetes/issues/44)
+
+
+### Fixed
+
+- Fixed spec resolution when creating or updating spec-based resources (such as `Ingress`, `HorizontalPodAutoscaler`, `PodDisruptionBudget`, `NetworkPolicy`, `ResourceQuota`, `LimitRange`, `CustomResourceDefinition`, `PersistentVolume`, and `PersistentVolumeClaim`) from `source` manifest files. Previously, the manifest's top-level `spec` dictionary was passed intact rather than extracting its inner specification fields. [#46](https://github.com/salt-extensions/saltext-kubernetes/issues/46)
+- Accept Kubernetes-style camelCase fields, such as `revisionHistoryLimit`, in Deployment specifications.
+- Allow `namespace_present` to create and reconcile namespace labels and annotations from metadata or source manifests.
+- Fix Service port conversions so Kubernetes camelCase fields such as ``targetPort`` and ``nodePort`` are preserved when creating or updating Services. This avoids silent defaulting to the service ``port`` value and prevents steady-state drift from repeated re-submissions.
+- Fixed kube-bench cache collection errors being masked by lock handling. Collection failures now propagate correctly while the cache lock is released.
+- Make `manifest_present` report no changes for manifests that already match the live Kubernetes resources.
+- Preserve Kubernetes-style camelCase fields, including acronym-bearing fields such as `clusterIP`, when creating or updating Services.
+- Preserve Secret types from source manifests, explicit arguments, and existing Secrets during replacement.
+
 ## 2.1.0 (2026-05-22)
 
 
