@@ -35,7 +35,7 @@ def run(command, container=None, stdin=None, tty=False, timeout=60):
 
     .. code-block:: bash
 
-        salt '*' kuberesource_cmd.run
+        salt '*' kubernetes.run
     """
     kind, namespace, name = resource_identity(__resource__)  # noqa: F821
     require_kind(kind, "pod")
@@ -58,7 +58,7 @@ def run_all(command, container=None, stdin=None, timeout=60):
 
     .. code-block:: bash
 
-        salt '*' kuberesource_cmd.run_all
+        salt '*' kubernetes.run_all
     """
     return run(command, container=container, stdin=stdin, timeout=timeout)
 
@@ -71,7 +71,7 @@ def run_stdout(command, container=None, stdin=None, timeout=60):
 
     .. code-block:: bash
 
-        salt '*' kuberesource_cmd.run_stdout
+        salt '*' kubernetes.run_stdout
     """
     result = run(command, container=container, stdin=stdin, timeout=timeout)
     return result["stdout"]

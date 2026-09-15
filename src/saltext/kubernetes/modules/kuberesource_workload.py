@@ -31,7 +31,7 @@ def scale(replicas):
 
     .. code-block:: bash
 
-        salt '*' kuberesource_workload.scale
+        salt '*' kubernetes.scale
     """
     kind, namespace, name = resource_identity(__resource__)  # noqa: F821
     require_kind(kind, *_SCALABLE_KINDS)
@@ -48,7 +48,7 @@ def restart():
 
     .. code-block:: bash
 
-        salt '*' kuberesource_workload.restart
+        salt '*' kubernetes.restart
     """
     kind, namespace, name = resource_identity(__resource__)  # noqa: F821
     require_kind(kind, *_RESTARTABLE_KINDS)
@@ -65,7 +65,7 @@ def rollback(to_revision=None):
 
     .. code-block:: bash
 
-        salt '*' kuberesource_workload.rollback
+        salt '*' kubernetes.rollback
     """
     kind, namespace, name = resource_identity(__resource__)  # noqa: F821
     require_kind(kind, "deployment")
