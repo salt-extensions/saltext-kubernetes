@@ -55,7 +55,7 @@ def apply_(
 
     .. code-block:: bash
 
-        salt '*' kuberesource_state.apply_
+        salt '*' kubernetes.apply_
     """
     kind, ns, name = resource_identity(__resource__)  # noqa: F821
     ctx = dict(template_context or {})

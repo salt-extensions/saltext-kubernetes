@@ -27,7 +27,7 @@ def cordon():
 
     .. code-block:: bash
 
-        salt '*' kuberesource_node.cordon
+        salt '*' kubernetes.cordon
     """
     kind, _, name = resource_identity(__resource__)  # noqa: F821
     require_kind(kind, "node")
@@ -42,7 +42,7 @@ def uncordon():
 
     .. code-block:: bash
 
-        salt '*' kuberesource_node.uncordon
+        salt '*' kubernetes.uncordon
     """
     kind, _, name = resource_identity(__resource__)  # noqa: F821
     require_kind(kind, "node")
@@ -64,7 +64,7 @@ def drain(
 
     .. code-block:: bash
 
-        salt '*' kuberesource_node.drain
+        salt '*' kubernetes.drain
     """
     kind, _, name = resource_identity(__resource__)  # noqa: F821
     require_kind(kind, "node")
@@ -87,7 +87,7 @@ def taint(key, effect, value=None):
 
     .. code-block:: bash
 
-        salt '*' kuberesource_node.taint
+        salt '*' kubernetes.taint
     """
     kind, _, name = resource_identity(__resource__)  # noqa: F821
     require_kind(kind, "node")
@@ -111,7 +111,7 @@ def untaint(key, effect=None):
 
     .. code-block:: bash
 
-        salt '*' kuberesource_node.untaint
+        salt '*' kubernetes.untaint
     """
     kind, _, name = resource_identity(__resource__)  # noqa: F821
     require_kind(kind, "node")
@@ -128,7 +128,7 @@ def annotations():
 
     .. code-block:: bash
 
-        salt '*' kuberesource_node.annotations
+        salt '*' kubernetes.annotations
     """
     kind, _, name = resource_identity(__resource__)  # noqa: F821
     require_kind(kind, "node")
@@ -152,7 +152,7 @@ def add_annotation(annotation_name, annotation_value):
 
     .. code-block:: bash
 
-        salt '*' kuberesource_node.add_annotation \
+        salt '*' kubernetes.add_annotation \
             annotation_name=example.com/owner annotation_value=ops
     """
     kind, _, name = resource_identity(__resource__)  # noqa: F821
@@ -180,7 +180,7 @@ def remove_annotation(annotation_name):
 
     .. code-block:: bash
 
-        salt '*' kuberesource_node.remove_annotation \
+        salt '*' kubernetes.remove_annotation \
             annotation_name=example.com/owner
     """
     kind, _, name = resource_identity(__resource__)  # noqa: F821

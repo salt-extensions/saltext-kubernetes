@@ -36,7 +36,7 @@ def fetch(
 
     .. code-block:: bash
 
-        salt '*' kuberesource_logs.fetch
+        salt '*' kubernetes.fetch
     """
     kind, namespace, name = resource_identity(__resource__)  # noqa: F821
     require_kind(kind, "pod")
@@ -59,6 +59,6 @@ def tail(lines=50, container=None):
 
     .. code-block:: bash
 
-        salt '*' kuberesource_logs.tail
+        salt '*' kubernetes.tail
     """
     return fetch(container=container, tail_lines=lines)

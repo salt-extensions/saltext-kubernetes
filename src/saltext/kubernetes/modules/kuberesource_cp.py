@@ -29,7 +29,7 @@ def to_pod(src_path, dst_path, container=None):
 
     .. code-block:: bash
 
-        salt '*' kuberesource_cp.to_pod
+        salt '*' kubernetes.to_pod
     """
     kind, namespace, name = resource_identity(__resource__)  # noqa: F821
     require_kind(kind, "pod")
@@ -52,7 +52,7 @@ def from_pod(src_path, dst_path, container=None):
 
     .. code-block:: bash
 
-        salt '*' kuberesource_cp.from_pod
+        salt '*' kubernetes.from_pod
     """
     kind, namespace, name = resource_identity(__resource__)  # noqa: F821
     require_kind(kind, "pod")

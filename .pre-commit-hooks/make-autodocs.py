@@ -12,20 +12,21 @@ changed_something = False
 
 
 def _find_virtualname(path):
-    tree = ast.parse(path.read_text())
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Assign):
-            for target in node.targets:
-                if isinstance(target, ast.Name) and target.id == "__virtualname__":
-                    if isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
-                        virtualname = node.value.value
-                        break
-            else:
-                continue
-            break
-    else:
-        virtualname = path.with_suffix("").name
-    return virtualname
+    return path.with_suffix("").name
+    # tree = ast.parse(path.read_text())
+    # for node in ast.walk(tree):
+    #     if isinstance(node, ast.Assign):
+    #         for target in node.targets:
+    #             if isinstance(target, ast.Name) and target.id == "__virtualname__":
+    #                 if isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+    #                     virtualname = node.value.value
+    #                     break
+    #         else:
+    #             continue
+    #         break
+    # else:
+    #     virtualname = path.with_suffix("").name
+    # return virtualname
 
 
 def write_module(rst_path, path, use_virtualname=True):
