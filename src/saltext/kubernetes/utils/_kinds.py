@@ -20,6 +20,7 @@ path's ``list_*`` lookup).
 
 from collections.abc import Callable
 from dataclasses import dataclass
+import re
 
 from salt.exceptions import CommandExecutionError
 
@@ -519,8 +520,19 @@ def get_kind(resource_type: str) -> KindOps:
     ``CommandExecutionError("Unsupported resource type for wait operation: ...")``
     behaviour so existing callers and tests are not surprised.
     """
+    key = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", str(resource_type)).lower()
+    compact_key = key.replace("_", "")
+    if key not in _KIND_REGISTRY:
+        key = next(
+            (
+                registered_key
+                for registered_key in _KIND_REGISTRY
+                if registered_key.replace("_", "") == compact_key
+            ),
+            key,
+        )
     try:
-        return _KIND_REGISTRY[resource_type]
+        return _KIND_REGISTRY[key]
     except KeyError as exc:
         raise CommandExecutionError(
             f"Unsupported resource type for wait operation: {resource_type}"

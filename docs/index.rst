@@ -11,6 +11,7 @@ Salt Extension for interacting with Kubernetes
   topics/installation
   topics/auth
   topics/apply-only-kinds
+  topics/ansible-k8s
   topics/resources
   topics/examples-terraform-equivalents
 

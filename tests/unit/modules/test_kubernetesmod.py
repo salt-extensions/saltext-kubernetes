@@ -1160,6 +1160,15 @@ def test_create_namespace_applies_metadata(mock_api):
     assert metadata.labels == {"team": "platform"}
 
 
+def test_wait_for_uses_registered_readiness_when_no_condition_is_given(mock_api, monkeypatch):
+    wait = Mock(return_value=True)
+    monkeypatch.setattr(kubernetes, "_wait_for_resource_status", wait)
+
+    assert kubernetes.wait_for("test", kind="configmap", namespace="default") is True
+    assert wait.call_args.args[4] == "ready"
+    assert wait.call_args.kwargs["predicate"] is None
+
+
 def test_patch_namespace_applies_metadata(mock_api):
     """Namespace patching forwards metadata and dry-run mode."""
     patch = {"metadata": {"labels": {"team": "platform"}}}

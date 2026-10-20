@@ -138,6 +138,11 @@ def _error(ret, err_msg):
     return ret
 
 
+def _saltenv():
+    """Return the active Salt environment, including alias-loaded states."""
+    return globals().get("__env__") or __opts__.get("saltenv", "base")
+
+
 def _changes(old, new):
     """
     Return a changes dict using RecursiveDictDiffer for concise reporting.
@@ -315,7 +320,7 @@ def deployment_present(
                     spec=spec,
                     source=source,
                     template=template,
-                    saltenv=__env__,
+                    saltenv=_saltenv(),
                     template_context=template_context,
                     dry_run=bool(__opts__["test"]),
                     wait=wait if not __opts__["test"] else False,
@@ -558,7 +563,7 @@ def statefulset_present(
                     spec=spec,
                     source=source,
                     template=template,
-                    saltenv=__env__,
+                    saltenv=_saltenv(),
                     template_context=template_context,
                     dry_run=bool(__opts__["test"]),
                     wait=wait if not __opts__["test"] else False,
@@ -789,7 +794,7 @@ def replicaset_present(
                     spec=spec,
                     source=source,
                     template=template,
-                    saltenv=__env__,
+                    saltenv=_saltenv(),
                     template_context=template_context,
                     dry_run=bool(__opts__["test"]),
                     wait=wait if not __opts__["test"] else False,
@@ -1019,7 +1024,7 @@ def daemonset_present(
                     spec=spec,
                     source=source,
                     template=template,
-                    saltenv=__env__,
+                    saltenv=_saltenv(),
                     template_context=template_context,
                     dry_run=bool(__opts__["test"]),
                     wait=wait if not __opts__["test"] else False,
@@ -1233,7 +1238,7 @@ def storageclass_present(
                     spec=spec,
                     source=source,
                     template=template,
-                    saltenv=__env__,
+                    saltenv=_saltenv(),
                     template_context=template_context,
                     dry_run=bool(__opts__["test"]),
                     wait=wait if not __opts__["test"] else False,
@@ -1408,7 +1413,7 @@ def service_present(
                     spec=spec,
                     source=source,
                     template=template,
-                    saltenv=__env__,
+                    saltenv=_saltenv(),
                     template_context=template_context,
                     dry_run=bool(__opts__["test"]),
                     wait=wait if not __opts__["test"] else False,
@@ -1667,7 +1672,7 @@ def namespace_present(
                 metadata=metadata,
                 source=source,
                 template=template,
-                saltenv=__env__,
+                saltenv=_saltenv(),
                 template_context=template_context,
                 dry_run=bool(__opts__["test"]),
                 **kwargs,
@@ -1696,7 +1701,7 @@ def namespace_present(
 
             res = __salt__["kubernetes.patch_namespace"](
                 name=name,
-                saltenv=__env__,
+                saltenv=_saltenv(),
                 dry_run=bool(__opts__["test"]),
                 **patch_kwargs,
                 **kwargs,
@@ -1877,7 +1882,7 @@ def secret_present(
                     data=data,
                     source=source,
                     template=template,
-                    saltenv=__env__,
+                    saltenv=_saltenv(),
                     template_context=template_context,
                     secret_type=secret_type,
                     metadata=metadata,
@@ -2122,7 +2127,7 @@ def configmap_present(
                     data=data,
                     source=source,
                     template=template,
-                    saltenv=__env__,
+                    saltenv=_saltenv(),
                     template_context=template_context,
                     dry_run=bool(__opts__["test"]),
                     wait=wait if not __opts__["test"] else False,
@@ -2361,7 +2366,7 @@ def pod_present(
                 spec=spec,
                 source=source,
                 template=template,
-                saltenv=__env__,
+                saltenv=_saltenv(),
                 template_context=template_context,
                 wait=wait,
                 timeout=timeout,
@@ -2856,7 +2861,7 @@ def _rbac_present_impl(
         "spec": spec,
         "source": source,
         "template": template,
-        "saltenv": __env__,
+        "saltenv": _saltenv(),
         "template_context": template_context,
         "dry_run": bool(__opts__["test"]),
     }
@@ -2981,7 +2986,7 @@ def _gateway_present_impl(
         documents = __salt__["kubernetes.normalise_manifest_input"](
             source=source,
             template=template,
-            saltenv=__env__,
+            saltenv=_saltenv(),
             template_context=template_context,
         )
         if len(documents) != 1:
@@ -2999,7 +3004,7 @@ def _gateway_present_impl(
         "spec": spec or {},
         "source": source,
         "template": template,
-        "saltenv": __env__,
+        "saltenv": _saltenv(),
         "template_context": template_context,
         "dry_run": bool(__opts__["test"]),
     }
@@ -3483,6 +3488,10 @@ def manifest_present(
     force_conflicts=False,
     template=None,
     template_context=None,
+    wait=False,
+    wait_condition=None,
+    wait_status="True",
+    wait_timeout=120,
     **kwargs,
 ):
     """
@@ -3524,6 +3533,22 @@ def manifest_present(
     template_context
         Variables passed to the renderer.
 
+    wait
+        Wait for each applied resource to become ready. Readiness uses the
+        registered Kubernetes kind predicate; defaults to ``False``.
+
+    wait_condition
+        Optional mapping with ``type`` and optional ``status`` keys to wait
+        for a Kubernetes status condition (for example
+        ``{type: Available, status: "True"}``). When omitted, ``wait_status``
+        is used with the kind's default readiness predicate.
+
+    wait_status
+        Expected status for ``wait_condition.type``; defaults to ``"True"``.
+
+    wait_timeout
+        Maximum seconds to wait for each resource; defaults to 120.
+
     .. code-block:: yaml
 
         my-app-stack:
@@ -3550,6 +3575,29 @@ def manifest_present(
         return _error(ret, "'source' and 'manifest' are mutually exclusive")
     if not source and manifest is None:
         return _error(ret, "Provide either 'source' or 'manifest'")
+    if wait_condition is not None and (
+        not isinstance(wait_condition, dict) or not wait_condition.get("type")
+    ):
+        return _error(ret, "wait_condition must be a mapping with a non-empty 'type'")
+
+    def _wait_for_resources(resources):
+        if not wait or __opts__.get("test", False):
+            return
+        for desired in resources:
+            metadata = desired.get("metadata") or {}
+            if not desired.get("kind") or not metadata.get("name"):
+                raise CommandExecutionError(
+                    "Readiness waiting requires every resource to have kind and metadata.name"
+                )
+            __salt__["kubernetes.wait_for"](
+                name=metadata["name"],
+                kind=desired["kind"],
+                namespace=metadata.get("namespace") or namespace,
+                condition=wait_condition.get("type") if wait_condition else None,
+                status=wait_condition.get("status", wait_status) if wait_condition else wait_status,
+                timeout=wait_timeout,
+                **kwargs,
+            )
 
     apply_kwargs = {
         "manifest": manifest,
@@ -3558,7 +3606,7 @@ def manifest_present(
         "field_manager": field_manager,
         "force_conflicts": force_conflicts,
         "template": template,
-        "saltenv": __env__,
+        "saltenv": _saltenv(),
         "template_context": template_context,
     }
 
@@ -3571,6 +3619,7 @@ def manifest_present(
             if __opts__["test"]:
                 raise
             res = __salt__["kubernetes.apply"](**apply_kwargs, **kwargs)
+            _wait_for_resources(res if isinstance(res, list) else [res])
             ret["result"] = True
             ret["comment"] = "Manifests applied via server-side apply"
             ret["changes"] = {"applied": res}
@@ -3591,6 +3640,7 @@ def manifest_present(
                 changes[obj_key] = {"old": "present", "new": "would update"}
 
         if not changes:
+            _wait_for_resources(applied_list)
             ret["result"] = True
             ret["comment"] = "Manifests already match desired state"
             return ret
@@ -3602,6 +3652,7 @@ def manifest_present(
             return ret
 
         res = __salt__["kubernetes.apply"](**apply_kwargs, **kwargs)
+        _wait_for_resources(applied_list)
         ret["result"] = True
         ret["comment"] = "Manifests applied via server-side apply"
         ret["changes"] = {"applied": res}
@@ -3694,7 +3745,7 @@ def manifest_absent(
         "propagation_policy": propagation_policy,
         "grace_period_seconds": grace_period_seconds,
         "template": template,
-        "saltenv": __env__,
+        "saltenv": _saltenv(),
         "template_context": template_context,
     }
 
@@ -3704,7 +3755,7 @@ def manifest_absent(
                 manifest=manifest,
                 source=source,
                 template=template,
-                saltenv=__env__,
+                saltenv=_saltenv(),
                 template_context=template_context,
             )
             changes = {}
@@ -3730,6 +3781,147 @@ def manifest_absent(
         ret["result"] = True
         ret["comment"] = "Manifests deleted"
         ret["changes"] = {"deleted": res}
+    except CommandExecutionError as err:
+        log.error(str(err), exc_info_on_loglevel=logging.DEBUG)
+        ret["result"] = False
+        ret["comment"] = str(err)
+        ret["changes"] = {}
+    return ret
+
+
+def manifest_patched(
+    name,
+    source=None,
+    manifest=None,
+    namespace=None,
+    patch_type="strategic",
+    field_manager=None,
+    template=None,
+    template_context=None,
+    **kwargs,
+):
+    """Apply a partial patch to existing Kubernetes objects.
+
+    This state implements the ``state: patched`` behavior of
+    ``kubernetes.core.k8s`` for manifests that include ``apiVersion``,
+    ``kind``, and ``metadata.name``. Missing objects are skipped. The
+    patch body may be supplied inline or as a Salt fileserver source and
+    may contain multiple YAML documents.
+
+    ``patch_type`` accepts ``strategic`` (the default, suitable for
+    built-in Kubernetes resources) or ``merge`` (RFC 7396, suitable for
+    custom resources). Use the execution function
+    ``kubernetes.patch_object`` for RFC 6902 JSON Patch operations.
+
+    In test mode, the API server validates the patch with ``dryRun=All``;
+    changes are reported without applying it. Changes contain only
+    resource identifiers and action labels, so Secret data is not
+    included in state output. Live runs patch each existing resource and
+    report whether the server-side object changed.
+
+    This function does not implement Ansible's ``force`` replacement,
+    ``delete_all``, ``append_hash``, or readiness waiting options. For
+    declarative create/update use :py:func:`manifest_present`; for
+    deletion use :py:func:`manifest_absent`.
+
+    name
+        Salt state ID.
+
+    source
+        Salt fileserver path to a single- or multi-document YAML patch.
+
+    manifest
+        A dict, list of dicts, or YAML string containing one or more
+        patch documents. Mutually exclusive with ``source``.
+
+    namespace
+        Fallback namespace when a patch document omits
+        ``metadata.namespace``.
+
+    patch_type
+        ``strategic`` or ``merge``. Default: ``strategic``.
+
+    field_manager
+        Optional field manager passed through to the Kubernetes API.
+
+    .. code-block:: yaml
+
+        scale-web:
+          kubernetes.manifest_patched:
+            - manifest:
+                apiVersion: apps/v1
+                kind: Deployment
+                metadata:
+                  name: web
+                  namespace: production
+                spec:
+                  replicas: 4
+    """
+    ret = {"name": name, "changes": {}, "result": False, "comment": ""}
+
+    if source and manifest is not None:
+        return _error(ret, "'source' and 'manifest' are mutually exclusive")
+    if not source and manifest is None:
+        return _error(ret, "Provide either 'source' or 'manifest'")
+    if patch_type not in ("strategic", "merge"):
+        return _error(ret, "'patch_type' must be either 'strategic' or 'merge'")
+
+    test = __opts__.get("test", False)
+    try:
+        docs = __salt__["kubernetes.normalise_manifest_input"](
+            manifest=manifest,
+            source=source,
+            template=template,
+            saltenv=_saltenv(),
+            template_context=template_context,
+        )
+        changes = {}
+        for desired in docs:
+            metadata = desired.get("metadata") or {}
+            api_version = desired.get("apiVersion")
+            kind = desired.get("kind")
+            object_name = metadata.get("name")
+            object_namespace = metadata.get("namespace") or namespace
+            if not api_version or not kind or not object_name:
+                return _error(
+                    ret,
+                    "Each patch manifest needs apiVersion, kind, and metadata.name",
+                )
+
+            live = __salt__["kubernetes.get_object"](
+                api_version=api_version,
+                kind=kind,
+                name=object_name,
+                namespace=object_namespace,
+            )
+            if live is None:
+                continue
+
+            patched = __salt__["kubernetes.patch_object"](
+                api_version=api_version,
+                kind=kind,
+                name=object_name,
+                namespace=object_namespace,
+                patch=desired,
+                patch_type=patch_type,
+                field_manager=field_manager,
+                dry_run=test,
+                **kwargs,
+            )
+            if _strip_server_metadata(live) != _strip_server_metadata(patched):
+                changes[_manifest_key(desired)] = {
+                    "old": "present",
+                    "new": "would patch" if test else "patched",
+                }
+
+        if not changes:
+            ret["result"] = True
+            ret["comment"] = "No existing manifests require patching"
+            return ret
+
+        ret["result"] = None if test else True
+        ret["comment"] = "Manifests would be patched" if test else "Manifests patched"
+        ret["changes"] = changes
     except CommandExecutionError as err:
         log.error(str(err), exc_info_on_loglevel=logging.DEBUG)
         ret["result"] = False
