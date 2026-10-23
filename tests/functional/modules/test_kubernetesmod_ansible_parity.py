@@ -1,5 +1,5 @@
 """
-Functional tests for Kubernetes API compatibility behavior on a real kind cluster:
+Functional tests for the ansible-parity additions on a real kind cluster:
 
   * ``append_hash`` on ``create_configmap`` / ``create_secret``
   * ``patch_object`` with strategic / json-merge / json-patch types

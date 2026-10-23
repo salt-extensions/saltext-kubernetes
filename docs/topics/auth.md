@@ -92,8 +92,8 @@ kubernetes.proxy_headers:
 ## Environment variables
 
 Every option above can be supplied as an environment variable, which takes
-precedence over the pillar/minion-config value. These names are also used by
-common Kubernetes automation tools, allowing installations to share a single
+precedence over the pillar/minion-config value. The names match Ansible's
+`kubernetes.core` collection so multi-tool installations can share a single
 set of credentials:
 
 | Salt option | Env var(s) (first hit wins) |

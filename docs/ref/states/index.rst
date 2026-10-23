@@ -9,9 +9,4 @@ _____________
 .. autosummary::
     :toctree:
 
-    helm
-    helm_plugin
-    helm_repo
-    k8s
-    kubeconfig
     kubernetes

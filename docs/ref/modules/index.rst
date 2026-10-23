@@ -9,13 +9,8 @@ _________________
 .. autosummary::
     :toctree:
 
-    helm
-    helm_info
-    helm_template
-    k8s
     kube_bench_cache
     kubeadm
-    kubeconfig
     kuberesource_cmd
     kuberesource_cp
     kuberesource_logs
