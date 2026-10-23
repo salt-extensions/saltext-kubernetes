@@ -88,6 +88,17 @@ def test_get_kind_unknown_raises_command_execution_error():
         _kinds.get_kind("frobozz")
 
 
+@pytest.mark.parametrize(
+    "kind_name,expected",
+    [
+        ("ConfigMap", "configmap"),
+        ("HorizontalPodAutoscaler", "horizontal_pod_autoscaler"),
+    ],
+)
+def test_get_kind_accepts_kubernetes_camel_case(kind_name, expected):
+    assert _kinds.get_kind(kind_name) is _kinds.get_kind(expected)
+
+
 # ---------------------------------------------------------------------------
 # Ready predicates — sample objects modelled after the kubernetes.client
 # response shapes the pre-refactor code accessed directly.

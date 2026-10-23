@@ -1227,6 +1227,169 @@ def test_manifest_present_live_apply_falls_back_when_preflight_fails():
     assert "dry_run" not in apply_mock.call_args_list[1].kwargs
 
 
+def test_manifest_present_waits_for_readiness_after_apply():
+    desired = make_configmap("test-configmap", data={"key": "new"})
+    existing = make_configmap("test-configmap", data={"key": "old"})
+    apply_mock = MagicMock(side_effect=[desired, desired])
+    wait_mock = MagicMock(return_value=True)
+    with patch.dict(
+        kubernetes.__salt__,
+        {
+            "kubernetes.apply": apply_mock,
+            "kubernetes.get_object": MagicMock(return_value=existing),
+            "kubernetes.wait_for": wait_mock,
+        },
+    ):
+        with patch.dict(kubernetes.__opts__, {"test": False}):
+            ret = kubernetes.manifest_present(
+                name="test",
+                manifest=desired,
+                wait=True,
+                wait_condition={"type": "Ready", "status": "True"},
+                wait_timeout=90,
+            )
+    assert ret["result"] is True
+    wait_mock.assert_called_once_with(
+        name="test-configmap",
+        kind="ConfigMap",
+        namespace="default",
+        condition="Ready",
+        status="True",
+        timeout=90,
+    )
+
+
+def test_manifest_present_does_not_wait_in_test_mode():
+    desired = make_configmap("test-configmap", data={"key": "new"})
+    wait_mock = MagicMock()
+    with patch.dict(
+        kubernetes.__salt__,
+        {
+            "kubernetes.apply": MagicMock(return_value=desired),
+            "kubernetes.get_object": MagicMock(return_value=None),
+            "kubernetes.wait_for": wait_mock,
+        },
+    ):
+        with patch.dict(kubernetes.__opts__, {"test": True}):
+            ret = kubernetes.manifest_present(name="test", manifest=desired, wait=True)
+    assert ret["result"] is None
+    wait_mock.assert_not_called()
+
+
+def test_manifest_patched_returns_no_changes_when_object_is_missing():
+    manifest = make_configmap("missing-configmap", data={"key": "new"})
+    patch_mock = MagicMock()
+    with patch.dict(
+        kubernetes.__salt__,
+        {
+            "kubernetes.normalise_manifest_input": MagicMock(return_value=[manifest]),
+            "kubernetes.get_object": MagicMock(return_value=None),
+            "kubernetes.patch_object": patch_mock,
+        },
+    ):
+        with patch.dict(kubernetes.__opts__, {"test": False}):
+            ret = kubernetes.manifest_patched(name="test", manifest=manifest)
+
+    assert ret["result"] is True
+    assert not ret["changes"]
+    patch_mock.assert_not_called()
+
+
+def test_manifest_patched_test_mode_dry_runs_without_disclosing_resource_data():
+    manifest = make_secret("test-secret", data={"password": "secret-value"})
+    live = make_secret("test-secret", data={"password": "old-value"})
+    patched = make_secret("test-secret", data={"password": "secret-value"})
+    patch_mock = MagicMock(return_value=patched)
+    with patch.dict(
+        kubernetes.__salt__,
+        {
+            "kubernetes.normalise_manifest_input": MagicMock(return_value=[manifest]),
+            "kubernetes.get_object": MagicMock(return_value=live),
+            "kubernetes.patch_object": patch_mock,
+        },
+    ):
+        with patch.dict(kubernetes.__opts__, {"test": True}):
+            ret = kubernetes.manifest_patched(name="test", manifest=manifest)
+
+    assert ret["result"] is None
+    assert ret["changes"] == {
+        "v1/Secret/default/test-secret": {"old": "present", "new": "would patch"}
+    }
+    assert "secret-value" not in repr(ret)
+    patch_mock.assert_called_once()
+    assert patch_mock.call_args.kwargs["dry_run"] is True
+
+
+def test_manifest_patched_live_reports_change_without_resource_data():
+    manifest = make_secret("test-secret", data={"password": "secret-value"})
+    live = make_secret("test-secret", data={"password": "old-value"})
+    patched = make_secret("test-secret", data={"password": "secret-value"})
+    patch_mock = MagicMock(return_value=patched)
+    with patch.dict(
+        kubernetes.__salt__,
+        {
+            "kubernetes.normalise_manifest_input": MagicMock(return_value=[manifest]),
+            "kubernetes.get_object": MagicMock(return_value=live),
+            "kubernetes.patch_object": patch_mock,
+        },
+    ):
+        with patch.dict(kubernetes.__opts__, {"test": False}):
+            ret = kubernetes.manifest_patched(name="test", manifest=manifest)
+
+    assert ret["result"] is True
+    assert ret["changes"] == {"v1/Secret/default/test-secret": {"old": "present", "new": "patched"}}
+    assert "secret-value" not in repr(ret)
+    patch_mock.assert_called_once()
+    assert patch_mock.call_args.kwargs["dry_run"] is False
+
+
+def test_manifest_patched_is_idempotent_when_server_returns_same_object():
+    manifest = make_configmap("test-configmap", data={"key": "value"})
+    patch_mock = MagicMock(return_value=manifest)
+    with patch.dict(
+        kubernetes.__salt__,
+        {
+            "kubernetes.normalise_manifest_input": MagicMock(return_value=[manifest]),
+            "kubernetes.get_object": MagicMock(return_value=manifest),
+            "kubernetes.patch_object": patch_mock,
+        },
+    ):
+        with patch.dict(kubernetes.__opts__, {"test": False}):
+            ret = kubernetes.manifest_patched(name="test", manifest=manifest)
+
+    assert ret["result"] is True
+    assert not ret["changes"]
+
+
+def test_manifest_patched_rejects_manifest_without_object_identity():
+    manifest = {"kind": "ConfigMap", "metadata": {"name": "missing-api-version"}}
+    with patch.dict(
+        kubernetes.__salt__,
+        {"kubernetes.normalise_manifest_input": MagicMock(return_value=[manifest])},
+    ):
+        ret = kubernetes.manifest_patched(name="test", manifest=manifest)
+
+    assert ret["result"] is False
+    assert "apiVersion" in ret["comment"]
+
+
+def test_manifest_patched_propagates_patch_errors():
+    manifest = make_configmap("test-configmap", data={"key": "value"})
+    with patch.dict(
+        kubernetes.__salt__,
+        {
+            "kubernetes.normalise_manifest_input": MagicMock(return_value=[manifest]),
+            "kubernetes.get_object": MagicMock(return_value=manifest),
+            "kubernetes.patch_object": MagicMock(side_effect=CommandExecutionError("patch denied")),
+        },
+    ):
+        with patch.dict(kubernetes.__opts__, {"test": False}):
+            ret = kubernetes.manifest_patched(name="test", manifest=manifest)
+
+    assert ret["result"] is False
+    assert "patch denied" in ret["comment"]
+
+
 def test_service_present_source_conflict():
     """
     Test service_present returns error when both source and metadata/spec are provided

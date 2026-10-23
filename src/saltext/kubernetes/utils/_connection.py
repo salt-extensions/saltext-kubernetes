@@ -19,9 +19,8 @@ Within each path, individual values resolve in this order:
 
     explicit kwarg  >  env var  >  pillar / minion config
 
-The env-var names match the ``K8S_AUTH_*`` convention popularised by
-Ansible's ``kubernetes.core`` collection, so users with multi-tool
-setups can share a single set of credentials.
+The ``K8S_AUTH_*`` environment-variable names are widely used by Kubernetes
+automation tools, allowing multi-tool setups to share credentials.
 
 Direct callers from outside the extension's own internals should not
 be relying on this module — use the ``kubernetes`` execution module's
@@ -69,8 +68,8 @@ POLLING_TIME_LIMIT = 30
 # Maps a Salt config key to the env-var fallbacks for that value.
 # The order within each list is the precedence (first hit wins).
 # The first entry uses the kubernetes-client native ``KUBE_CONFIG_PATH``
-# convention; subsequent entries match Ansible ``kubernetes.core``'s
-# ``K8S_AUTH_*`` convention.
+# convention; subsequent entries use the ``K8S_AUTH_*`` names commonly used
+# by Kubernetes automation tooling.
 _ENV_VAR_MAP = {
     "kubernetes.kubeconfig": ["KUBE_CONFIG_PATH", "KUBECONFIG", "K8S_AUTH_KUBECONFIG"],
     "kubernetes.context": ["KUBE_CTX", "K8S_AUTH_CONTEXT"],

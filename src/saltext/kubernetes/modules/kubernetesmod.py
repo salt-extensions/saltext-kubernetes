@@ -14,8 +14,7 @@ Module for handling kubernetes calls.
     For other auth modes — in-cluster ServiceAccount, bearer token, basic
     auth, or explicit client certificates with optional proxy support — see
     the dedicated :doc:`/topics/auth` guide. All settings can also be
-    supplied via ``K8S_AUTH_*`` environment variables (compatible with
-    Ansible's ``kubernetes.core`` collection) or as per-call kwargs that
+    supplied via ``K8S_AUTH_*`` environment variables or as per-call kwargs that
     take precedence over both env and config.
 
 The data format for `kubernetes.kubeconfig-data` value is the content of
@@ -226,6 +225,29 @@ def _api_client_call_api(api_client, *args, response_type=None, **kwargs):
     client supports.
     """
     sig = inspect.signature(api_client.call_api)
+    if (
+        not any(
+            parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in sig.parameters.values()
+        )
+        and "_preload_content" not in sig.parameters
+    ):
+        # kubernetes 37 simplified ApiClient.call_api to a RESTResponse-only
+        # interface. Use its configured REST transport directly for the small
+        # number of raw endpoints that are not represented by a typed API.
+        path, method, *rest = args
+        if rest:
+            raise TypeError("raw Kubernetes API calls support only a path and HTTP method")
+        config = api_client.configuration
+        url = f"{config.host.rstrip('/')}/{path.lstrip('/')}"
+        headers = {}
+        for auth in config.auth_settings().values():
+            key = auth.get("key")
+            value = auth.get("value")
+            if key and value:
+                headers[key] = f"{auth.get('type', '')} {value}".strip()
+        response = api_client.rest_client.request(method, url, headers=headers)
+        data = response.data
+        return data.decode("utf-8") if isinstance(data, bytes) else data
     if response_type is not None:
         if "response_types_map" in sig.parameters and "response_type" not in sig.parameters:
             # kubernetes >= 36: dict form, keyed by HTTP status code.
@@ -2162,7 +2184,7 @@ def create_secret(
     # ``append_hash`` makes the resulting object effectively immutable:
     # any change to data produces a new name, so consumers (Deployments
     # mounting the secret) trigger a rollout on data drift instead of
-    # silently picking up new values. Mirrors kubectl/Ansible behaviour.
+    # silently picking up new values. Mirrors kubectl naming behaviour.
     if append_hash:
         name = f"{name}-{_hash_suffix(encoded_data, secret_type or '')}"
 
@@ -10723,10 +10745,10 @@ def restart(kind, name, namespace="default", **kwargs):
         _cleanup(**cfg)
 
 
-def rollback(name, namespace="default", to_revision=None, **kwargs):
+def rollback(name, namespace="default", kind="Deployment", to_revision=None, **kwargs):
     """
-    Roll a Deployment back to a previous revision (kubectl-rollout-undo
-    equivalent for Deployments).
+    Roll a Deployment or DaemonSet back to a previous revision
+    (kubectl-rollout-undo equivalent).
 
     .. versionadded:: 2.1.0
 
@@ -10740,14 +10762,18 @@ def rollback(name, namespace="default", to_revision=None, **kwargs):
     K8s 1.16+) and matches the modern kubectl behaviour.
 
     name
-        Deployment name.
+        Deployment or DaemonSet name.
+
+    kind
+        ``Deployment`` (default) or ``DaemonSet``.
 
     namespace
         Namespace. Default: ``default``.
 
     to_revision
         Revision number to roll back to. If ``None``, picks the
-        immediately preceding revision.
+        preceding revision. For DaemonSets this is the ControllerRevision
+        generation annotation; for Deployments it is the ReplicaSet revision.
 
     Returns the patched Deployment.
 
@@ -10756,72 +10782,100 @@ def rollback(name, namespace="default", to_revision=None, **kwargs):
     .. code-block:: bash
 
         salt '*' kubernetes.rollback nginx
+        salt '*' kubernetes.rollback nginx kind=DaemonSet
         salt '*' kubernetes.rollback nginx to_revision=3
     """
     cfg = _setup_conn(**kwargs)
     try:
         apps_api = kubernetes.client.AppsV1Api()
-        deployment = apps_api.read_namespaced_deployment(name, namespace)
-        current_rev = (deployment.metadata.annotations or {}).get(
-            "deployment.kubernetes.io/revision"
-        )
-
-        # The Deployment owns its ReplicaSets via ownerReferences; we
-        # filter on that rather than on label selector so we get exactly
-        # the right revision lineage.
-        all_rs = apps_api.list_namespaced_replica_set(namespace).items
-        owned = [
-            rs
-            for rs in all_rs
-            if any(
-                ref.kind == "Deployment" and ref.uid == deployment.metadata.uid
-                for ref in (rs.metadata.owner_references or [])
+        if kind == "Deployment":
+            resource = apps_api.read_namespaced_deployment(name, namespace)
+            current_rev = (resource.metadata.annotations or {}).get(
+                "deployment.kubernetes.io/revision", "0"
             )
-        ]
-        if not owned:
-            raise CommandExecutionError(f"Deployment {name} has no ReplicaSets to roll back to")
-
-        def _rev(rs):
-            try:
-                return int(
-                    (rs.metadata.annotations or {}).get("deployment.kubernetes.io/revision", "0")
+            history = apps_api.list_namespaced_replica_set(namespace).items
+            owned = [
+                item
+                for item in history
+                if any(
+                    ref.kind == "Deployment" and ref.uid == resource.metadata.uid
+                    for ref in (item.metadata.owner_references or [])
                 )
-            except ValueError:
-                return 0
+            ]
 
-        owned.sort(key=_rev, reverse=True)
+            def revision(item):
+                value = (item.metadata.annotations or {}).get(
+                    "deployment.kubernetes.io/revision", "0"
+                )
+                try:
+                    return int(value)
+                except (TypeError, ValueError):
+                    return 0
 
-        if to_revision is None:
-            # Skip the current revision; take the next one down.
             target = next(
-                (rs for rs in owned if str(_rev(rs)) != str(current_rev)),
+                (
+                    item
+                    for item in owned
+                    if revision(item)
+                    == (int(to_revision) if to_revision is not None else int(current_rev) - 1)
+                ),
                 None,
             )
+            if target is None:
+                raise CommandExecutionError(
+                    f"No suitable rollback target for Deployment {name} "
+                    f"(to_revision={to_revision}, current={current_rev})"
+                )
+            target_template = ApiClient().sanitize_for_serialization(target.spec.template)
+            labels = (target_template.get("metadata", {}) or {}).get("labels", {})
+            labels.pop("pod-template-hash", None)
+            patch_body = {"spec": {"template": target_template}}
+            result = apps_api.patch_namespaced_deployment(name, namespace, patch_body)
+        elif kind == "DaemonSet":
+            resource = apps_api.read_namespaced_daemon_set(name, namespace)
+            current_rev = resource.metadata.generation or 0
+            selector = ",".join(
+                f"{key}={value}"
+                for key, value in sorted((resource.spec.selector.match_labels or {}).items())
+            )
+            history = apps_api.list_namespaced_controller_revision(
+                namespace, label_selector=selector or None
+            ).items
+            owned = [
+                item
+                for item in history
+                if any(
+                    ref.kind == "DaemonSet" and ref.uid == resource.metadata.uid
+                    for ref in (item.metadata.owner_references or [])
+                )
+            ]
+            target_revision = int(to_revision) if to_revision is not None else int(current_rev) - 1
+            target = next(
+                (
+                    item
+                    for item in owned
+                    if int(
+                        (item.metadata.annotations or {}).get(
+                            "deprecated.daemonset.template.generation", "0"
+                        )
+                    )
+                    == target_revision
+                ),
+                None,
+            )
+            if target is None:
+                raise CommandExecutionError(
+                    f"No suitable rollback target for DaemonSet {name} "
+                    f"(to_revision={to_revision}, current={current_rev})"
+                )
+            patch_body = ApiClient().sanitize_for_serialization(target.data)
+            result = apps_api.patch_namespaced_daemon_set(name, namespace, patch_body)
         else:
-            target = next(
-                (rs for rs in owned if _rev(rs) == int(to_revision)),
-                None,
-            )
-
-        if target is None:
-            raise CommandExecutionError(
-                f"No suitable rollback target for Deployment {name} "
-                f"(to_revision={to_revision}, current={current_rev})"
-            )
-
-        # Patch the deployment's pod template with the target RS's
-        # template. We strip the pod-template-hash that the controller
-        # owns; the deployment controller will re-add it.
-        target_template = ApiClient().sanitize_for_serialization(target.spec.template)
-        labels = (target_template.get("metadata", {}) or {}).get("labels", {})
-        labels.pop("pod-template-hash", None)
-
-        patch_body = {"spec": {"template": target_template}}
-        result = apps_api.patch_namespaced_deployment(name, namespace, patch_body)
+            raise CommandExecutionError("kind must be either 'Deployment' or 'DaemonSet'")
         return ApiClient().sanitize_for_serialization(result)
     except (ApiException, HTTPError) as exc:
         if isinstance(exc, ApiException) and exc.status == 404:
-            raise CommandExecutionError(f"Deployment {name} not found in {namespace}") from exc
+            raise CommandExecutionError(f"{kind} {name} not found in {namespace}") from exc
         raise CommandExecutionError(exc) from exc
     finally:
         _cleanup(**cfg)
@@ -11042,12 +11096,15 @@ def wait_for(
     **kwargs,
 ):
     """
-    Block until a live resource matches a user-supplied condition or jsonpath.
+    Block until a live resource matches a user-supplied condition or jsonpath,
+    or reaches the registered readiness state for its kind.
 
     .. versionadded:: 2.1.0
 
-    Mirrors ``kubectl wait`` ergonomics. Pass exactly one of ``condition``
-    or ``jsonpath``.
+    Mirrors ``kubectl wait`` ergonomics. Pass at most one of ``condition``
+    or ``jsonpath``. When neither is supplied, use the kind registry's
+    readiness predicate (the behavior used by ``k8s.present`` with
+    ``wait=True``).
 
     name
         Object name.
@@ -11091,9 +11148,11 @@ def wait_for(
 
         salt '*' kubernetes.wait_for nginx kind=deployment condition=Available
     """
-    predicate = _kinds.build_predicate(
-        condition=condition, status=status, jsonpath=jsonpath, value=value, regex=regex
-    )
+    predicate = None
+    if condition or jsonpath:
+        predicate = _kinds.build_predicate(
+            condition=condition, status=status, jsonpath=jsonpath, value=value, regex=regex
+        )
     kind_ops = _kinds.get_kind(kind)
     cfg = _setup_conn(**kwargs)
     try:
@@ -11103,7 +11162,11 @@ def wait_for(
             api_instance, kind, name, namespace, "ready", timeout=timeout, predicate=predicate
         )
         if not ok:
-            criterion = f"condition={condition}={status}" if condition else f"jsonpath={jsonpath}"
+            criterion = (
+                f"condition={condition}={status}"
+                if condition
+                else f"jsonpath={jsonpath}" if jsonpath else "registered readiness"
+            )
             raise CommandExecutionError(
                 f"Timeout waiting for {kind}/{name} to match {criterion} after {timeout}s"
             )
@@ -11383,6 +11446,8 @@ def drain(
     force=False,
     grace_period_seconds=None,
     timeout=300,
+    pod_selectors=None,
+    label_selectors=None,
     **kwargs,
 ):
     """
@@ -11422,6 +11487,10 @@ def drain(
         Wall-clock cap in seconds for the entire drain (cordon + eviction
         + waiting for terminations). Default: 300.
 
+    pod_selectors, label_selectors
+        Optional list of Kubernetes label selectors used to limit which
+        pods are drained. ``label_selectors`` is an alias for compatibility.
+
     Returns a dict::
 
         {"node": <name>,
@@ -11450,7 +11519,11 @@ def drain(
         api.patch_node(name, {"spec": {"unschedulable": True}})
 
         # Step 2: list every pod on the node.
-        pods = api.list_pod_for_all_namespaces(field_selector=f"spec.nodeName={name}").items
+        selectors = pod_selectors if pod_selectors is not None else label_selectors
+        label_selector = ",".join(selectors or []) or None
+        pods = api.list_pod_for_all_namespaces(
+            field_selector=f"spec.nodeName={name}", label_selector=label_selector
+        ).items
 
         evicted = []
         skipped = []
@@ -11905,6 +11978,46 @@ def get_object(api_version, kind, name, namespace=None, **kwargs):
     cfg = _setup_conn(**kwargs)
     try:
         return _dynamic.get_object(api_version, kind, name=name, namespace=namespace)
+    finally:
+        _cleanup(**cfg)
+
+
+def list_objects(
+    api_version, kind, namespace=None, label_selector=None, field_selector=None, **kwargs
+):
+    """List Kubernetes objects by API version and kind.
+
+    This generic read-only counterpart to :func:`get_object` supports built-in
+    resources and custom resources discovered from the active cluster. It is
+    and is also exposed by the ``k8s.info`` facade.
+
+    api_version
+        Group/version such as ``v1`` or ``apps/v1``.
+
+    kind
+        Kubernetes Kind such as ``Pod`` or ``Deployment``.
+
+    namespace
+        Optional namespace. Cluster-scoped kinds ignore this argument.
+
+    label_selector, field_selector
+        Kubernetes API selectors.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kubernetes.list_objects api_version=v1 kind=Pod namespace=default
+    """
+    cfg = _setup_conn(**kwargs)
+    try:
+        return _dynamic.list_resource(
+            api_version,
+            kind,
+            namespace=namespace,
+            label_selector=label_selector,
+            field_selector=field_selector,
+        )
     finally:
         _cleanup(**cfg)
 
