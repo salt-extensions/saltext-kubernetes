@@ -18,7 +18,6 @@ dict in :py:func:`_wait_for_resource_status` (twice — once for the
 path's ``list_*`` lookup).
 """
 
-import re
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -147,6 +146,8 @@ def _resolve_jsonpath(obj, path):
     Tries snake_case (Python model attr) then the camelCase form spelled in
     the path. Returns ``None`` if any segment is missing.
     """
+    import re as _re  # pylint: disable=import-outside-toplevel
+
     if path.startswith("{") and path.endswith("}"):
         path = path[1:-1]
     if not path.startswith("."):
@@ -170,8 +171,8 @@ def _resolve_jsonpath(obj, path):
         # ``clusterIPs`` becomes ``cluster_i_ps`` (naive split). We try
         # both so callers can use the natural kubectl-style camelCase
         # spelling without knowing which form happens to match.
-        smart = re.sub(r"(?<=[a-z])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])", "_", key).lower()
-        naive = re.sub(r"(?<!^)(?=[A-Z])", "_", key).lower()
+        smart = _re.sub(r"(?<=[a-z])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])", "_", key).lower()
+        naive = _re.sub(r"(?<!^)(?=[A-Z])", "_", key).lower()
         candidates = []
         for cand in (key, smart, naive):
             if cand not in candidates:
@@ -217,13 +218,15 @@ def match_jsonpath(obj, path, value=None, regex=None):
 
     Returns ``False`` if the path does not resolve.
     """
+    import re as _re  # pylint: disable=import-outside-toplevel
+
     resolved = _resolve_jsonpath(obj, path)
     if resolved is None:
         return False
     if value is not None:
         return resolved == value
     if regex is not None:
-        return bool(re.search(regex, str(resolved)))
+        return bool(_re.search(regex, str(resolved)))
     return bool(resolved)
 
 
@@ -516,19 +519,8 @@ def get_kind(resource_type: str) -> KindOps:
     ``CommandExecutionError("Unsupported resource type for wait operation: ...")``
     behaviour so existing callers and tests are not surprised.
     """
-    key = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", str(resource_type)).lower()
-    compact_key = key.replace("_", "")
-    if key not in _KIND_REGISTRY:
-        key = next(
-            (
-                registered_key
-                for registered_key in _KIND_REGISTRY
-                if registered_key.replace("_", "") == compact_key
-            ),
-            key,
-        )
     try:
-        return _KIND_REGISTRY[key]
+        return _KIND_REGISTRY[resource_type]
     except KeyError as exc:
         raise CommandExecutionError(
             f"Unsupported resource type for wait operation: {resource_type}"

@@ -1,1 +1,0 @@
-Add the `kubernetes.manifest_patched` state for strategic-merge or JSON merge patches of existing Kubernetes objects. It supports multi-document manifests and Salt test mode, skips absent objects, and avoids returning resource contents in state changes.
