@@ -78,7 +78,7 @@ jobs:
         run: if git rev-parse "refs/tags/v$VERSION" 2>/dev/null; then exit 1; fi
 
       - name: Create tag for release
-        uses: mathieudutour/github-tag-action@a22cf08638b34d5badda920f9daf6e72c477b07b  # v6.2
+        uses: mathieudutour/github-tag-action@af99e60ce8132224b8e6ebab5023449fe256ed46  # v7.0.0
         with:
           github_token: ${{ github.token }}
           custom_tag: ${{ steps.get_version_pr.outputs.version }}
