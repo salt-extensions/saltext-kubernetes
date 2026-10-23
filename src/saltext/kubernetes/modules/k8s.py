@@ -1,8 +1,7 @@
-"""Salt execution facade for the Kubernetes API portion of kubernetes.core.
+"""Salt execution facade for common Kubernetes API operations.
 
 These functions delegate to the extension's established ``kubernetes``
-execution module. They provide direct Salt counterparts to common Ansible
-``k8s_*`` modules without copying Ansible's controller/module runtime.
+execution module and provide concise entry points for common Kubernetes tasks.
 """
 
 import hashlib
@@ -172,7 +171,7 @@ def execute(
     timeout=60,
     **kwargs,
 ):
-    """Execute a command in a pod (Ansible ``k8s_exec`` equivalent).
+    """Execute a command in a pod.
 
     ``command`` is an argv list; ``container`` selects a container, ``stdin``
     supplies input, ``tty`` enables a TTY, and ``timeout`` bounds the request
@@ -336,8 +335,8 @@ def untaint(name, key, effect=None, **kwargs):
 def config_resource_name(resource):
     """Return a content-derived ConfigMap or Secret name.
 
-    This mirrors the useful behavior of Ansible's
-    ``k8s_config_resource_name`` filter and does not mutate ``resource``.
+    The generated name follows content-derived Kubernetes naming conventions
+    and does not mutate ``resource``.
     """
     if not isinstance(resource, dict) or not isinstance(resource.get("metadata"), dict):
         raise CommandExecutionError("resource must include metadata.name or metadata.generateName")
@@ -370,8 +369,7 @@ def kustomize_build(path, binary_path=None, **kwargs):
     ``path`` is a local directory or file path available to the executing
     minion. ``binary_path`` optionally selects the executable; otherwise
     ``kustomize`` must be on ``PATH``. Returns rendered YAML text. This is a
-    read-only helper; Ansible's controller lookup maps to a Salt execution
-    call on a minion with the source files available.
+    read-only helper. Source files must be available on the minion.
     """
     executable = binary_path or shutil.which("kustomize")
     if not executable:

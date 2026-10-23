@@ -3819,8 +3819,8 @@ def manifest_patched(
     included in state output. Live runs patch each existing resource and
     report whether the server-side object changed.
 
-    This function does not implement Ansible's ``force`` replacement,
-    ``delete_all``, ``append_hash``, or readiness waiting options. For
+    This function does not implement replacement semantics, multi-resource
+    deletion, content-hash naming, or readiness polling. For
     declarative create/update use :py:func:`manifest_present`; for
     deletion use :py:func:`manifest_absent`.
 

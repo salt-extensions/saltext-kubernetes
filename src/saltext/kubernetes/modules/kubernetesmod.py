@@ -14,8 +14,7 @@ Module for handling kubernetes calls.
     For other auth modes — in-cluster ServiceAccount, bearer token, basic
     auth, or explicit client certificates with optional proxy support — see
     the dedicated :doc:`/topics/auth` guide. All settings can also be
-    supplied via ``K8S_AUTH_*`` environment variables (compatible with
-    Ansible's ``kubernetes.core`` collection) or as per-call kwargs that
+    supplied via ``K8S_AUTH_*`` environment variables or as per-call kwargs that
     take precedence over both env and config.
 
 The data format for `kubernetes.kubeconfig-data` value is the content of
@@ -2185,7 +2184,7 @@ def create_secret(
     # ``append_hash`` makes the resulting object effectively immutable:
     # any change to data produces a new name, so consumers (Deployments
     # mounting the secret) trigger a rollout on data drift instead of
-    # silently picking up new values. Mirrors kubectl/Ansible behaviour.
+    # silently picking up new values. Mirrors kubectl naming behaviour.
     if append_hash:
         name = f"{name}-{_hash_suffix(encoded_data, secret_type or '')}"
 
@@ -11992,7 +11991,7 @@ def list_objects(
 
     This generic read-only counterpart to :func:`get_object` supports built-in
     resources and custom resources discovered from the active cluster. It is
-    also the Salt equivalent used by the Ansible ``k8s_info`` module.
+    and is also exposed by the ``k8s.info`` facade.
 
     api_version
         Group/version such as ``v1`` or ``apps/v1``.

@@ -1,12 +1,12 @@
 """
-Unit tests for the ansible-parity additions:
+Unit tests for Kubernetes API compatibility behavior:
 
   * ``append_hash`` on ``create_configmap`` / ``create_secret``
   * ``patch_object`` with alternate patch types
   * ``validate=True`` pre-flight on ``apply``
 
 The functional behaviour against a real cluster is exercised in
-``tests/functional/modules/test_kubernetesmod_ansible_parity.py``; this
+``tests/functional/modules/test_kubernetesmod_compatibility.py``; this
 file covers pure-Python invariants (determinism, error messages, GVK
 inference) without touching the kubernetes API.
 """

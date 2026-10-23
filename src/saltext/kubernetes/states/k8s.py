@@ -1,4 +1,4 @@
-"""Ansible-style Kubernetes manifest state aliases for Salt SLS files."""
+"""Kubernetes manifest state aliases for Salt SLS files."""
 
 from saltext.kubernetes.states import kubernetes as _states
 
