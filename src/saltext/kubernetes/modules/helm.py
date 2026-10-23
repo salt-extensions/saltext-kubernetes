@@ -431,7 +431,7 @@ def repository_present(
 
     CLI Example:
 
-        salt-call helm.repository_present stable https://charts.example.test
+        salt-call helm.repository_present stable "$HELM_REPO_URL"
     """
     username = kwargs.pop("repo_username", kwargs.pop("username", None))
     password = kwargs.pop("repo_password", kwargs.pop("password", None))

@@ -52,9 +52,8 @@ def info(
 
         Example: ``salt-call k8s.info v1 ConfigMap namespace=default``.
 
-    CLI Example:
-
-        salt-call k8s.info v1 Pod name=web namespace=default
+        CLI Example:
+            salt-call k8s.info v1 Pod name=web namespace=default
     """
     if name:
         if wait:
