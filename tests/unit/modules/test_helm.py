@@ -16,7 +16,8 @@ def test_release_present_passes_values_through_private_temp_file():
 
     def run(args, **kwargs):
         values_path = args[args.index("--values") + 1]
-        seen["values"] = open(values_path, encoding="utf-8").read()
+        with open(values_path, encoding="utf-8") as values_file:
+            seen["values"] = values_file.read()
         seen["mode"] = __import__("stat").S_IMODE(__import__("os").stat(values_path).st_mode)
         seen["args"] = args
         return _proc("ok")

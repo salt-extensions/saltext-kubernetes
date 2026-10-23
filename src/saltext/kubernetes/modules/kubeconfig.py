@@ -80,14 +80,18 @@ def merge(
 ):
     """Merge named cluster, user, and context entries into a kubeconfig.
 
-    ``path`` is read when it exists; otherwise a new standard kubeconfig is
-    started. Entries accept ``merge`` (default), ``replace``, ``keep``, and
-    ``remove`` behavior. Test mode computes changes without writing. The
-    returned data contains names and paths only, never credential material.
+        ``path`` is read when it exists; otherwise a new standard kubeconfig is
+        started. Entries accept ``merge`` (default), ``replace``, ``keep``, and
+        ``remove`` behavior. Test mode computes changes without writing. The
+        returned data contains names and paths only, never credential material.
 
-    The output is written atomically with restrictive permissions (0600 by
-    default). This function does not test whether the credentials can connect
-    to a Kubernetes API server.
+        The output is written atomically with restrictive permissions (0600 by
+        default). This function does not test whether the credentials can connect
+        to a Kubernetes API server.
+
+    CLI Example:
+
+        salt-call kubeconfig.merge /etc/salt/kube/config
     """
     source = os.path.abspath(os.path.expanduser(path))
     target = os.path.abspath(os.path.expanduser(dest or path))

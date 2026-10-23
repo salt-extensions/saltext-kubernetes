@@ -18,9 +18,9 @@ dict in :py:func:`_wait_for_resource_status` (twice — once for the
 path's ``list_*`` lookup).
 """
 
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
-import re
 
 from salt.exceptions import CommandExecutionError
 
@@ -147,8 +147,6 @@ def _resolve_jsonpath(obj, path):
     Tries snake_case (Python model attr) then the camelCase form spelled in
     the path. Returns ``None`` if any segment is missing.
     """
-    import re as _re  # pylint: disable=import-outside-toplevel
-
     if path.startswith("{") and path.endswith("}"):
         path = path[1:-1]
     if not path.startswith("."):
@@ -172,8 +170,8 @@ def _resolve_jsonpath(obj, path):
         # ``clusterIPs`` becomes ``cluster_i_ps`` (naive split). We try
         # both so callers can use the natural kubectl-style camelCase
         # spelling without knowing which form happens to match.
-        smart = _re.sub(r"(?<=[a-z])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])", "_", key).lower()
-        naive = _re.sub(r"(?<!^)(?=[A-Z])", "_", key).lower()
+        smart = re.sub(r"(?<=[a-z])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])", "_", key).lower()
+        naive = re.sub(r"(?<!^)(?=[A-Z])", "_", key).lower()
         candidates = []
         for cand in (key, smart, naive):
             if cand not in candidates:
@@ -219,15 +217,13 @@ def match_jsonpath(obj, path, value=None, regex=None):
 
     Returns ``False`` if the path does not resolve.
     """
-    import re as _re  # pylint: disable=import-outside-toplevel
-
     resolved = _resolve_jsonpath(obj, path)
     if resolved is None:
         return False
     if value is not None:
         return resolved == value
     if regex is not None:
-        return bool(_re.search(regex, str(resolved)))
+        return bool(re.search(regex, str(resolved)))
     return bool(resolved)
 
 

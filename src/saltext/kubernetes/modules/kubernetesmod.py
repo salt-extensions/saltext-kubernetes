@@ -11165,9 +11165,7 @@ def wait_for(
             criterion = (
                 f"condition={condition}={status}"
                 if condition
-                else f"jsonpath={jsonpath}"
-                if jsonpath
-                else "registered readiness"
+                else f"jsonpath={jsonpath}" if jsonpath else "registered readiness"
             )
             raise CommandExecutionError(
                 f"Timeout waiting for {kind}/{name} to match {criterion} after {timeout}s"

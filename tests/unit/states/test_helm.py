@@ -23,9 +23,7 @@ def test_release_present_test_mode_reports_without_running_upgrade():
 
 
 def test_release_present_forwards_typed_values_and_new_helm_options():
-    status = MagicMock(
-        return_value={"chart": "web-1.2.3", "info": {"status": "deployed"}}
-    )
+    status = MagicMock(return_value={"chart": "web-1.2.3", "info": {"status": "deployed"}})
     upgrade = MagicMock()
     set_values = [{"value": "replicaCount=3", "value_type": "raw"}]
     with patch.object(
@@ -61,7 +59,7 @@ def test_release_absent_is_idempotent():
         with patch.object(helm, "__opts__", {"test": False}, create=True):
             ret = helm.release_absent("web")
     assert ret["result"] is True
-    assert ret["changes"] == {}
+    assert not ret["changes"]
     uninstall.assert_not_called()
 
 
@@ -84,7 +82,7 @@ def test_release_state_uses_chart_metadata_for_arbitrarily_named_archive():
                 "web", "/tmp/arbitrary.tgz", version="1.2.3", binary_path="helm"
             )
     assert ret["result"] is True
-    assert ret["changes"] == {}
+    assert not ret["changes"]
     metadata.assert_called_once()
     upgrade.assert_not_called()
 
@@ -115,7 +113,7 @@ def test_repository_state_is_idempotent_and_test_mode_does_not_mutate():
     ):
         ret = helm_repo.present("stable", "https://charts.example")
     assert ret["result"] is True
-    assert ret["changes"] == {}
+    assert not ret["changes"]
 
 
 def test_plugin_absent_test_mode_does_not_uninstall():

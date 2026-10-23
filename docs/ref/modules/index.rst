@@ -13,9 +13,9 @@ _________________
     helm_info
     helm_template
     k8s
-    kubeconfig
     kube_bench_cache
     kubeadm
+    kubeconfig
     kuberesource_cmd
     kuberesource_cp
     kuberesource_logs
