@@ -34,26 +34,27 @@ def info(
 ):
     """Read Kubernetes resources using their API version and kind.
 
-        Args:
-            api_version: API group/version, such as ``v1`` or ``apps/v1``.
-            kind: Kubernetes kind, such as ``Pod`` or ``Deployment``.
-            name: Optional object name. Omit to list matching resources.
-            namespace: Optional namespace for namespaced resources.
-            label_selector: Optional Kubernetes label selector for lists.
-            field_selector: Optional Kubernetes field selector for lists.
-            wait: Poll for a named object to appear before returning it. Waiting
-                requires ``name`` and is ignored for list queries.
-            wait_sleep: Seconds between polls when waiting (default 5).
-            wait_timeout: Maximum seconds to wait for a named object (default 120).
+    Args:
+        api_version: API group/version, such as ``v1`` or ``apps/v1``.
+        kind: Kubernetes kind, such as ``Pod`` or ``Deployment``.
+        name: Optional object name. Omit to list matching resources.
+        namespace: Optional namespace for namespaced resources.
+        label_selector: Optional Kubernetes label selector for lists.
+        field_selector: Optional Kubernetes field selector for lists.
+        wait: Poll for a named object to appear before returning it. Waiting
+            requires ``name`` and is ignored for list queries.
+        wait_sleep: Seconds between polls when waiting (default 5).
+        wait_timeout: Maximum seconds to wait for a named object (default 120).
 
-        Returns one serialized resource, ``None`` if a named resource is absent,
-        or a list of serialized resources. API errors raise
-        :class:`salt.exceptions.CommandExecutionError`.
+    Returns one serialized resource, ``None`` if a named resource is absent,
+    or a list of serialized resources. API errors raise
+    :class:`salt.exceptions.CommandExecutionError`.
 
-        Example: ``salt-call k8s.info v1 ConfigMap namespace=default``.
+    Example: ``salt-call k8s.info v1 ConfigMap namespace=default``.
 
-        CLI Example:
-            salt-call k8s.info v1 Pod name=web namespace=default
+    CLI Example:
+
+        salt-call k8s.info v1 Pod name=web namespace=default
     """
     if name:
         if wait:
