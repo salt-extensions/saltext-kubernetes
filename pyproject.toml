@@ -83,7 +83,7 @@ docs = [
 ]
 docsauto = ["sphinx-autobuild"]
 lint = [
-    "pylint==4.0.4",
+    "pylint==4.1.3",
 ]
 tests = [
     "pytest>=7.2.0",
