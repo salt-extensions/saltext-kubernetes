@@ -196,3 +196,42 @@ def test_call_api_no_response_type_kwarg_at_all():
     kubernetesmod._api_client_call_api(fake, "/x", "GET")
     assert "response_type" not in captured
     assert "response_types_map" not in captured
+
+
+def test_call_api_routes_through_param_serialize_on_transport_signature():
+    """On kubernetes 37+, ``call_api`` is a thin ``(method, url, ...)``
+    transport; the shim serializes params (incl. auth), reads the raw
+    response, and deserializes it."""
+    import inspect  # pylint: disable=import-outside-toplevel
+
+    raw_response = MagicMock()
+    captured = {}
+
+    # Simulate the kubernetes-37 signature: positional (method, url).
+    def _k8s37_call_api(
+        self, method, url, header_params=None, body=None, post_params=None, _request_timeout=None
+    ):
+        del self, _request_timeout
+        captured["call"] = (method, url, header_params, body, post_params)
+        return raw_response
+
+    fake = MagicMock()
+    fake.call_api = lambda *args, **kwargs: _k8s37_call_api(None, *args, **kwargs)
+    fake.call_api.__signature__ = inspect.signature(_k8s37_call_api)
+    fake.param_serialize.return_value = ("GET", "https://host/healthz", {"k": "v"}, None, [])
+    fake.response_deserialize.return_value.data = "ok"
+
+    result = kubernetesmod._api_client_call_api(
+        fake,
+        "/healthz",
+        "GET",
+        response_type="str",
+        _preload_content=True,
+        auth_settings=["BearerToken"],
+    )
+
+    fake.param_serialize.assert_called_once_with("GET", "/healthz", auth_settings=["BearerToken"])
+    assert captured["call"] == ("GET", "https://host/healthz", {"k": "v"}, None, [])
+    raw_response.read.assert_called_once_with()
+    fake.response_deserialize.assert_called_once_with(raw_response, {"2XX": "str"})
+    assert result == "ok"

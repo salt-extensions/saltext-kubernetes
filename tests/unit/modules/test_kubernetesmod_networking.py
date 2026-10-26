@@ -141,4 +141,8 @@ def test_pdb_spec_selector_accepts_camelcase_match_expressions():
             },
         }
     )
-    assert out["selector"].match_expressions[0]["key"] == "tier"
+    # kubernetes<37 stores the raw dict, >=37 coerces it into a
+    # V1LabelSelectorRequirement — accept both.
+    expr = out["selector"].match_expressions[0]
+    key = expr["key"] if isinstance(expr, dict) else expr.key
+    assert key == "tier"

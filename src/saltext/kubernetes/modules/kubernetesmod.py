@@ -218,21 +218,36 @@ def _v1_policy_rule_non_resource_urls(rule):
     return getattr(rule, "non_resource_ur_ls", None)
 
 
-def _api_client_call_api(api_client, *args, response_type=None, **kwargs):
-    """Call ``ApiClient.call_api`` with the kwarg name the installed client expects.
+def _api_client_call_api(api_client, resource_path, method, *, response_type=None, **kwargs):
+    """Call a raw (untyped) endpoint with whichever ``ApiClient`` API the installed client has.
 
-    kubernetes 36 renamed ``response_type`` → ``response_types_map``.
-    Inspect the signature once and route through whichever the active
-    client supports.
+    kubernetes 36 renamed ``call_api(response_type=)`` → ``response_types_map=``.
+    kubernetes 37 (pydantic rewrite) changed ``call_api`` to a thin
+    ``(method, url, ...)`` transport returning a raw ``RESTResponse``,
+    moving auth into ``param_serialize`` and deserialization into
+    ``response_deserialize``. Inspect the signature once and route
+    through whichever shape the active client supports.
     """
-    sig = inspect.signature(api_client.call_api)
-    if response_type is not None:
-        if "response_types_map" in sig.parameters and "response_type" not in sig.parameters:
-            # kubernetes >= 36: dict form, keyed by HTTP status code.
-            kwargs["response_types_map"] = {"*": response_type}
-        else:
-            kwargs["response_type"] = response_type
-    return api_client.call_api(*args, **kwargs)
+    params = inspect.signature(api_client.call_api).parameters
+    if "url" not in params:
+        # kubernetes <= 36: call_api handles auth and deserialization itself.
+        if response_type is not None:
+            if "response_types_map" in params and "response_type" not in params:
+                # kubernetes 36: dict form, keyed by HTTP status code.
+                kwargs["response_types_map"] = {"*": response_type}
+            else:
+                kwargs["response_type"] = response_type
+        return api_client.call_api(resource_path, method, **kwargs)
+    # kubernetes >= 37 (only call_api(method, url, ...) has a ``url`` param)
+    kwargs.pop("_preload_content", None)
+    serialized = api_client.param_serialize(
+        method, resource_path, auth_settings=kwargs.pop("auth_settings", None)
+    )
+    resp = api_client.call_api(*serialized)
+    resp.read()
+    types_map = {"2XX": response_type} if response_type is not None else {}
+    # Raises ApiException on non-2xx, like the old call_api did.
+    return api_client.response_deserialize(resp, types_map).data
 
 
 log = logging.getLogger(__name__)
@@ -10697,7 +10712,7 @@ def restart(kind, name, namespace="default", **kwargs):
         )
 
     _, patch_method = parent_methods
-    now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    now = datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     patch_body = {
         "spec": {
             "template": {

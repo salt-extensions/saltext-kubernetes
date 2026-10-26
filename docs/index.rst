@@ -22,7 +22,14 @@ Salt Extension for interacting with Kubernetes
   ref/modules/index
   ref/states/index
   ref/utils/index
-  ref/resources/index
+
+.. toctree::
+  :maxdepth: 3
+  :caption: Provided Resources
+  :hidden:
+  :glob:
+
+  ref/resources/*
 
 .. toctree::
   :maxdepth: 2
