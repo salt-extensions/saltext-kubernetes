@@ -46,8 +46,12 @@ def test_label_selector_snake_case_match_labels():
 def test_label_selector_matchexpressions_passes_through():
     expr = [{"key": "tier", "operator": "In", "values": ["frontend"]}]
     sel = kubernetesmod._label_selector_from_dict({"matchExpressions": expr})
-    # match_expressions accepts list-of-dicts; the client serializes at request time.
-    assert sel.match_expressions == expr
+    # kubernetes<37 stores the raw dicts, >=37 coerces them into
+    # V1LabelSelectorRequirement objects — accept both.
+    got = sel.match_expressions[0]
+    if not isinstance(got, dict):
+        got = {"key": got.key, "operator": got.operator, "values": got.values}
+    assert got == expr[0]
 
 
 def test_label_selector_none_returns_none():
@@ -225,7 +229,11 @@ def test_resource_quota_spec_camelcase_scope_selector():
     out = kubernetesmod.__dict_to_resource_quota_spec(
         {
             "hard": {"pods": "10"},
-            "scopeSelector": {"matchExpressions": [{"operator": "Exists"}]},
+            # scopeName is required by the API spec; kubernetes>=37
+            # validates this client-side.
+            "scopeSelector": {
+                "matchExpressions": [{"scopeName": "PriorityClass", "operator": "Exists"}]
+            },
         }
     )
     # Top-level scopeSelector key normalised; nested dict left alone (it's
