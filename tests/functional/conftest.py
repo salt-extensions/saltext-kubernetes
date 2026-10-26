@@ -13,7 +13,8 @@ log = logging.getLogger(__name__)
 
 @pytest.fixture(scope="package")
 def minion_id():  # pragma: no cover
-    return "func-tests-minion-opts"
+    # Random to avoid factory directory collisions, e.g. with pytest-xdist
+    return random_string("func-tests-minion-")
 
 
 @pytest.fixture(scope="module")

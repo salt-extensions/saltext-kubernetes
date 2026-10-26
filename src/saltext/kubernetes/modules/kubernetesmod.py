@@ -10697,7 +10697,7 @@ def restart(kind, name, namespace="default", **kwargs):
         )
 
     _, patch_method = parent_methods
-    now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    now = datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     patch_body = {
         "spec": {
             "template": {

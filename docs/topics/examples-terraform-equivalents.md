@@ -21,7 +21,6 @@ The "hello world" of every Terraform Kubernetes tutorial. Five
 resources, declared in one config, applied as a unit.
 
 :::{tab} Terraform
-
 ```hcl
 resource "kubernetes_namespace" "app" {
   metadata { name = "myapp" }
@@ -90,7 +89,6 @@ resource "kubernetes_service" "app" {
 :::
 
 :::{tab} Salt SLS
-
 ```yaml
 myapp-namespace:
   kubernetes.namespace_present:
@@ -103,7 +101,7 @@ app-config:
         LOG_LEVEL: INFO
         REGION: us-east-1
     - require:
-      - kubernetes: myapp-namespace
+        - kubernetes: myapp-namespace
 
 app-secret:
   kubernetes.secret_present:
@@ -111,7 +109,7 @@ app-secret:
     - data:
         API_TOKEN: deadbeef
     - require:
-      - kubernetes: myapp-namespace
+        - kubernetes: myapp-namespace
 
 app-deployment:
   kubernetes.deployment_present:
@@ -134,8 +132,8 @@ app-deployment:
                 ports:
                   - containerPort: 8080
     - require:
-      - kubernetes: app-config
-      - kubernetes: app-secret
+        - kubernetes: app-config
+        - kubernetes: app-secret
 
 app-service:
   kubernetes.service_present:
@@ -147,7 +145,7 @@ app-service:
           - port: 80
             targetPort: 8080
     - require:
-      - kubernetes: app-deployment
+        - kubernetes: app-deployment
 ```
 :::
 
@@ -160,8 +158,8 @@ app-service:
   `containerPort`, `targetPort`) directly. Terraform requires
   snake_case (`match_labels`, `container_port`, `target_port`).
 - For larger manifests, use `kubernetes.manifest_present` with a
-  `source: salt://...yaml` pointing at a vanilla Kubernetes YAML
-  file — the same YAML you'd `kubectl apply -f`.
+  `source: salt://...yaml` pointing at a vanilla Kubernetes YAML file
+  — the same YAML you'd `kubectl apply -f`.
 
 ## 2. RBAC: ServiceAccount + Role + RoleBinding
 
@@ -170,7 +168,6 @@ modules: `gruntwork-io/terraform-kubernetes-namespace`,
 `aidanmelen/rbac/kubernetes`.
 
 :::{tab} Terraform
-
 ```hcl
 resource "kubernetes_service_account" "reader" {
   metadata {
@@ -211,7 +208,6 @@ resource "kubernetes_role_binding" "reader" {
 :::
 
 :::{tab} Salt SLS
-
 ```yaml
 pod-reader-sa:
   kubernetes.service_account_present:
@@ -224,7 +220,7 @@ pod-reader-role:
     - namespace: production
     - spec:
         rules:
-          - apiGroups: [""]
+          - apiGroups: ['']
             resources: [pods]
             verbs: [get, list, watch]
 
@@ -242,8 +238,8 @@ pod-reader-binding:
           kind: Role
           name: pod-reader
     - require:
-      - kubernetes: pod-reader-sa
-      - kubernetes: pod-reader-role
+        - kubernetes: pod-reader-sa
+        - kubernetes: pod-reader-role
 ```
 :::
 
@@ -259,7 +255,6 @@ Terraform modules: `terraform-iaac/cert-manager/kubernetes`,
 `sculley/terraform-kubernetes-cert-manager`.
 
 :::{tab} Terraform
-
 ```hcl
 resource "kubernetes_ingress_v1" "site" {
   metadata {
@@ -296,7 +291,6 @@ resource "kubernetes_ingress_v1" "site" {
 :::
 
 :::{tab} Salt SLS
-
 ```yaml
 site-ingress:
   kubernetes.ingress_present:
@@ -347,7 +341,7 @@ letsencrypt-prod-issuer:
               - http01:
                   ingress: {class: nginx}
     - require:
-      - kubernetes: cert-manager-crds
+        - kubernetes: cert-manager-crds
 ```
 
 ## 4. Stateful workload with PVC + StorageClass
@@ -356,7 +350,6 @@ Postgres-style: a StatefulSet with a `volumeClaimTemplates` block that
 provisions a fresh PVC per replica.
 
 :::{tab} Terraform
-
 ```hcl
 resource "kubernetes_storage_class" "fast" {
   metadata { name = "fast-ssd" }
@@ -404,7 +397,6 @@ resource "kubernetes_stateful_set_v1" "pg" {
 :::
 
 :::{tab} Salt SLS
-
 ```yaml
 fast-ssd-sc:
   kubernetes.storageclass_present:
@@ -416,7 +408,7 @@ fast-ssd-sc:
         allowVolumeExpansion: true
         parameters:
           type: gp3
-          encrypted: "true"
+          encrypted: 'true'
 
 postgres-statefulset:
   kubernetes.statefulset_present:
@@ -447,7 +439,7 @@ postgres-statefulset:
               resources:
                 requests: {storage: 20Gi}
     - require:
-      - kubernetes: fast-ssd-sc
+        - kubernetes: fast-ssd-sc
 ```
 :::
 
@@ -458,16 +450,15 @@ state — same arg shape.
 ## 5. Multi-tenant namespace: Quota + LimitRange + NetworkPolicy + RBAC
 
 The pattern teams use when carving up a shared cluster for multiple
-teams or environments. Every namespace gets the same scaffolding:
-hard resource ceilings, default container limits, default-deny
-network isolation, and a baseline RBAC binding.
+teams or environments. Every namespace gets the same scaffolding: hard
+resource ceilings, default container limits, default-deny network
+isolation, and a baseline RBAC binding.
 
-The Terraform community standardises this as a reusable module
-(see `gruntwork-io/terraform-kubernetes-namespace`). Salt's
-equivalent is one SLS file you `include:` or `extend:` per namespace.
+The Terraform community standardises this as a reusable module (see
+`gruntwork-io/terraform-kubernetes-namespace`). Salt's equivalent is
+one SLS file you `include:` or `extend:` per namespace.
 
 :::{tab} Terraform module call
-
 ```hcl
 module "team_a" {
   source        = "gruntwork-io/namespace/kubernetes"
@@ -483,7 +474,6 @@ module "team_a" {
 :::
 
 :::{tab} Salt SLS template
-
 ```jinja
 {% set ns = pillar['team_namespace']['name'] %}
 {% set admin_group = pillar['team_namespace']['admin_group'] %}
@@ -555,8 +545,8 @@ parameterise via pillar, and `state.apply` per team:
 team_namespace:
   name: team-a
   admin_group: team-a-admins
-  cpu_limit: "10"
-  memory_limit: "16Gi"
+  cpu_limit: '10'
+  memory_limit: 16Gi
   pod_limit: 100
 ```
 
@@ -571,7 +561,6 @@ pressure, PDB guarantees a minimum during voluntary disruption
 (rolling updates, node drains).
 
 :::{tab} Terraform
-
 ```hcl
 resource "kubernetes_horizontal_pod_autoscaler_v2" "web" {
   metadata {
@@ -615,7 +604,6 @@ resource "kubernetes_pod_disruption_budget_v1" "web" {
 :::
 
 :::{tab} Salt SLS
-
 ```yaml
 web-hpa:
   kubernetes.horizontal_pod_autoscaler_present:
@@ -641,7 +629,7 @@ web-pdb:
     - name: web
     - namespace: production
     - spec:
-        minAvailable: "50%"
+        minAvailable: 50%
         selector:
           matchLabels: {app: web}
 ```
@@ -653,7 +641,6 @@ For operator-style workflows: install a CRD, then declare an instance
 of the custom type.
 
 :::{tab} Terraform
-
 Terraform's `kubernetes_manifest` resource is the usual choice for
 CRDs because the typed provider doesn't ship custom types:
 
@@ -675,7 +662,6 @@ resource "kubernetes_manifest" "widget_demo" {
 :::
 
 :::{tab} Salt SLS
-
 ```yaml
 widget-crd:
   kubernetes.custom_resource_definition_present:
@@ -710,7 +696,7 @@ widget-demo:
         metadata: {name: demo, namespace: production}
         spec: {size: large, color: blue}
     - require:
-      - kubernetes: widget-crd
+        - kubernetes: widget-crd
 ```
 :::
 
@@ -742,13 +728,14 @@ catches what apply would.
 ## What doesn't translate yet
 
 - **Helm releases.** Terraform's `helm_release` resource is the
-  canonical way to install third-party charts. Salt's
-  `saltext-helm` (separate extension) is the equivalent and is
-  recommended for chart-driven deployments.
+  canonical way to install third-party charts. Salt's `saltext-helm`
+  (separate extension) is the equivalent and is recommended for
+  chart-driven deployments.
 - **Cloud-managed cluster provisioning** (EKS, GKE, AKS). Use Salt's
   cloud-provider modules (`saltext-vmware`, `boto3`-backed states, …)
   alongside this extension. Cluster provisioning is out of scope for
   the K8s API surface.
-- **Provider-side authentication via exec plugins** (`aws-iam-authenticator`,
-  `gke-gcloud-auth-plugin`, …) is supported via the `kubernetes.exec:`
-  pillar key — see [Authentication](auth.md).
+- **Provider-side authentication via exec plugins**
+  (`aws-iam-authenticator`, `gke-gcloud-auth-plugin`, …) is supported
+  via the `kubernetes.exec:` pillar key — see
+  [Authentication](auth.md).

@@ -9,12 +9,12 @@ CRUD wrappers. The recommended way to manage them is through
 
 The current apply-only kinds are:
 
-| Kind | Why apply-only |
-| --- | --- |
+| Kind            | Why apply-only                                                                                                    |
+| --------------- | ----------------------------------------------------------------------------------------------------------------- |
 | `NetworkPolicy` | The spec is essentially configuration with no field-by-field churn — operators write it once and barely touch it. |
-| `ResourceQuota` | Same — namespace-scoped quotas are written and forgotten, occasionally edited wholesale. |
-| `LimitRange` | Same. |
-| `PriorityClass` | Cluster-scoped, set once at install time. |
+| `ResourceQuota` | Same — namespace-scoped quotas are written and forgotten, occasionally edited wholesale.                          |
+| `LimitRange`    | Same.                                                                                                             |
+| `PriorityClass` | Cluster-scoped, set once at install time.                                                                         |
 
 These kinds have a single design pattern in production: write the
 manifest, apply it, and let it sit. Typed wrappers would impose a
@@ -53,8 +53,8 @@ backend-network-policy:
 Even without typed CRUD, these kinds participate in:
 
 - **The kind registry** — `kubernetes.apply` knows about them, the
-  wait subsystem can wait on them being created/deleted, and they
-  show up in resource discovery.
+  wait subsystem can wait on them being created/deleted, and they show
+  up in resource discovery.
 - **`manifest_present` / `manifest_absent`** — full SSA semantics,
   diff reporting, dry-run, all the same as the typed kinds.
 - **The deletion path** — `kubernetes.delete_manifest` with the same

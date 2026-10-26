@@ -11,10 +11,4 @@ _________________
 
     kube_bench_cache
     kubeadm
-    kuberesource_cmd
-    kuberesource_cp
-    kuberesource_logs
-    kuberesource_node
-    kuberesource_state
-    kuberesource_workload
     kubernetesmod
