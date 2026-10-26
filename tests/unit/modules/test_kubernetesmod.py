@@ -76,6 +76,10 @@ def mock_api():
     """
     Mock kubernetes API connection for testing error handling paths.
     Patches _setup_conn, _cleanup, and the kubernetes client module.
+
+    Also patches ``ApiClient`` with a passthrough serializer: the real
+    ``sanitize_for_serialization`` (kubernetes>=37) calls ``to_dict()`` on
+    model objects, which recurses forever on MagicMock responses.
     """
     with patch(
         "saltext.kubernetes.modules.kubernetesmod._setup_conn",
@@ -83,8 +87,12 @@ def mock_api():
         return_value={},
     ):
         with patch("saltext.kubernetes.modules.kubernetesmod._cleanup", autospec=True):
-            with patch("saltext.kubernetes.modules.kubernetesmod.kubernetes") as mock_k8s:
-                yield mock_k8s
+            with patch("saltext.kubernetes.modules.kubernetesmod.ApiClient") as mock_api_client:
+                mock_api_client.return_value.sanitize_for_serialization.side_effect = (
+                    lambda obj: obj
+                )
+                with patch("saltext.kubernetes.modules.kubernetesmod.kubernetes") as mock_k8s:
+                    yield mock_k8s
 
 
 def test_setup_kubeconfig_file(mock_kubernetes_lib):

@@ -500,7 +500,7 @@ def test_delete_nonexistent_secret(kubernetes, secret):
     """
     Test deleting a secret that doesn't exist returns None
     """
-    res = kubernetes.delete_secret(secret)
+    res = kubernetes.delete_secret(secret["name"], secret["namespace"])
     assert res is None
 
 

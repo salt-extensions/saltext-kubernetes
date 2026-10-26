@@ -58,6 +58,9 @@ def test_node_add_annotation_patches_with_string_value():
         patch.object(kubernetesmod, "kubernetes") as mock_k8s,
         patch.object(kubernetesmod, "_setup_conn", return_value={}),
         patch.object(kubernetesmod, "_cleanup"),
+        # The real sanitize_for_serialization (kubernetes>=37) calls
+        # to_dict() on the response, which recurses forever on MagicMocks.
+        patch.object(kubernetesmod, "ApiClient"),
     ):
         mock_k8s.client.CoreV1Api.return_value = fake_api
         kubernetesmod.node_add_annotation("worker-1", "example.com/owner", 42)
@@ -88,6 +91,7 @@ def test_node_remove_annotation_patches_with_null():
         patch.object(kubernetesmod, "kubernetes") as mock_k8s,
         patch.object(kubernetesmod, "_setup_conn", return_value={}),
         patch.object(kubernetesmod, "_cleanup"),
+        patch.object(kubernetesmod, "ApiClient"),
     ):
         mock_k8s.client.CoreV1Api.return_value = fake_api
         kubernetesmod.node_remove_annotation("worker-1", "example.com/owner")
